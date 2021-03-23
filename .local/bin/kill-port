@@ -1,0 +1,16 @@
+#!/bin/sh
+
+port=$1
+process=$( lsof -i :$port | grep $port | awk '{ print $2 }' )
+
+if [ "$process" != "" ]; then
+
+	printf "killing process %s on port %s\n" $process $port
+	kill $process > /dev/null
+
+else
+
+	printf "no process on port %s\n" $1
+
+fi
+
