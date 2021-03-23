@@ -1,0 +1,165 @@
+
+# change directory
+
+alias ..="cd .."
+alias ...="cd ../.."
+alias ....="cd ../../.."
+alias .....="cd ../../../.."
+
+# dotfiles
+
+alias dotfiles='/usr/bin/git --git-dir=$HOME/.dotfiles/ --work-tree=$HOME'
+
+# docker-compose
+
+alias dcb="docker-compose build"
+alias dcconf="docker-compose config"
+alias dcc="docker-compose create"
+alias dcd="docker-compose down"
+alias dce="docker-compose events"
+alias dcx="docker-compose exec"
+alias dcgo="dchelper go"
+alias dch="docker-compose help"
+alias dco="dchelper ip"
+alias dco="dchelper overlay"
+alias dcp="docker-compose pause"
+alias dcport="docker-compose port"
+alias dcps="docker-compose ps"
+alias dcpull="docker-compose pull"
+alias dcpush="docker-compose push"
+alias dcr="docker-compose restart"
+alias dcrm="docker-compose rm"
+alias dcrun="docker-compose run"
+alias dcsc="docker-compose scale"
+alias dcs="docker-compose start"
+alias dcst="docker-compose stop"
+alias dct="docker-compose top"
+alias dcu="docker-compose up"
+alias dcunp="docker-compose unpause"
+alias dcv="docker-compose version"
+
+dcsock() {
+    curl -sS --unix-socket /run/docker.sock http://localhost/$1 | jq "$2"
+}
+
+dcnetwork() {
+    
+    template="%-10s %-15s %-10s %-14s %-14s %s\n"
+    qry="
+        [.[] | {
+            id: .Id,
+            name: .Name,
+            gateway: .IPAM.Config[0].Gateway,
+            scope: .Scope,
+            stack: .Labels.\"com.docker.compose.project\",
+            subnet: .IPAM.Config[0].Subnet
+        }]
+    "
+
+    printf "$template" id name stack scope subnet gateway
+    
+    dcsock networks "$qry" | jq -c ".[] | sort_by(.id)" | while read -r net
+    do
+        
+        id=$(echo "$net" | jq -r .id | cut -c1-10)
+        name=$(echo $net | jq -r .name)
+        gateway=$(echo $net | jq -r .gateway)
+        scope=$(echo $net | jq -r .scope)
+        stack=$(echo $net | jq -r .stack)
+        subnet=$(echo $net | jq -r .subnet)
+        
+        printf "$template" $id $name $stack $scope $subnet $gateway
+    
+    done    
+
+}
+
+# git
+
+alias g='git'
+alias gaa="git add -A ."
+alias gac='git add . && git commit'
+alias ga='git add'
+alias gb='git branch'
+alias gc='git commit'
+alias gch='git checkout'
+alias gcl='git clone'
+alias gcm="git commit -m "$1""
+alias gcp="git cherry-pick $1"
+alias gd="git diff"
+alias gdh="git diff HEAD"
+alias gf='git fetch'
+alias gi="git init"
+alias gl="git log --color --graph --pretty=format:'%Cred%h%Creset -%C(yellow)%d%Creset %s %Cgreen(%cr) %C(bold blue)<%an>%Creset' --abbrev-commit"
+alias glg="git log --graph --abbrev-commit --decorate --format=format:'%C(bold green)%h%C(reset) - %C(bold cyan)%aD%C(reset) %C(bold yellow)(%ar)%C(reset)%C(auto)%d%C(reset)%n''          %C(white)%s%C(reset) %C(dim white)- %an%C(reset)' --all"
+alias glo="git log --oneline"
+alias gm='git merge'
+alias gnb='git checkout -b'
+alias gpl='git pull'
+alias gpo="git push origin $1"
+alias gpom='git pull origin master'
+alias gpu='git push'
+alias gpuom='git push origin master'
+alias gre='git restore'
+alias gr='git remote'
+alias grhh="git reset --hard HEAD"
+alias grs='git restore --staged .'
+alias gs="git status"
+alias gt='git ls-tree -r master --name-only'
+
+# grep
+
+alias grep='grep --color=auto'
+alias fgrep='fgrep --color=auto'
+alias egrep='egrep --color=auto'
+
+# interactive
+
+alias cp='cp -i'
+alias mv='mv -i'
+alias rm='rm -i'
+
+# ls
+
+alias l="ls -o -hX --group-directories-first"
+alias la="ls -o -AhX --group-directories-first"
+alias ll='ls -Flha'
+
+# npm
+
+alias ni="npm install";
+alias nis="npm i -S "
+alias nid="npm i -D "
+alias nig="npm i -g "
+alias nr="npm run $1";
+alias nrs="npm run start";
+alias nrb="npm run build";
+alias nrt="npm run test";
+alias nrc="npm run commit";
+
+# systemctl
+
+alias scc="sudo systemctl clean"
+alias sce="sudo systemctl enable"
+alias scf="sudo systemctl freeze"
+alias sck="sudo systemctl kill"
+alias scactive="sudo systemctl is-active"
+alias scfailed="sudo systemctl is-failed"
+alias scsockets="sudo systemctl list-sockets"
+alias sctimers="sudo systemctl list-timers"
+alias scunits="sudo systemctl list-units"
+alias scr="sudo systemctl restart"
+alias scre="sudo systemctl reload"
+alias scrr="sudo systemctl reload-or-restart"
+alias sci="sudo systemctl isolate"
+alias sck="sudo systemctl kill"
+alias scs="sudo systemctl start"
+alias scstatus="sudo systemctl status"
+alias scst="sudo systemctl stop"
+alias sct="sudo systemctl thaw"
+
+# xclip
+
+alias setclip='xclip -selection c'
+alias getclip='xclip -selection clipboard -o'
+
