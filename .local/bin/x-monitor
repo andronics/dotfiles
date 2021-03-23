@@ -1,0 +1,37 @@
+#!/usr/bin/python
+
+import Xlib
+import Xlib.display
+
+disp = Xlib.display.Display()
+Xroot = disp.screen().root
+NET_ACTIVE_WINDOW = disp.intern_atom('_NET_ACTIVE_WINDOW')
+Xroot.change_attributes(event_mask=Xlib.X.PropertyChangeMask)
+
+print("Socket File No: ", Xroot)
+
+while True:
+	# loop until an event happens that we care about
+	# we care about a change to which window is active
+	# (NET_ACTIVE_WINDOW property changes on the root)
+	# or about the currently active window changing
+	# in size or position (don't know how to do this)
+
+	event = disp.next_event()
+	print( "window: {}, event: {}".format( event.window, disp.get_atom_name(event.atom) ) )
+	# for i in event.window.list_properties():
+	# 	print("--- property {}: {}".format( disp.get_atom_name(i), event.window.get_property(i) ) )
+	
+	if (event.type == Xlib.X.PropertyNotify and event.atom == NET_ACTIVE_WINDOW):
+		
+		active = disp.get_input_focus().focus
+		
+		try:
+			name = active.get_wm_class()
+		except TypeError:
+			name = "unknown"
+		
+		print("The active window has changed! It is now", name)
+		
+		for i in event.window.list_properties():
+			print("event", disp.get_atom_name(i) )
