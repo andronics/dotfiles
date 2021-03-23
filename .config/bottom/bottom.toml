@@ -1,0 +1,109 @@
+[flags]
+#basic = false
+hide_avg_cpu = true
+dot_marker = true
+#rate = 1000
+left_legend = true
+current_usage = true
+group_processes = true
+#case_sensitive = false
+#whole_word = false
+#regex = false
+
+# Defaults to Celsius.  Temperature is one of:
+#temperature_type = "k"
+#temperature_type = "f"
+#temperature_type = "c"
+#temperature_type = "kelvin"
+#temperature_type = "fahrenheit"
+#temperature_type = "celsius"
+
+#default_time_value = 60000
+#time_delta = 15000
+#default_widget_type = "proc"
+#default_widget_count = 2
+#use_old_network_legend = false
+hide_table_gap = true
+
+##########################################################
+
+[colors]
+
+#table_header_color="LightBlue"
+#widget_title_color="Gray"
+#avg_cpu_color="Red"
+#cpu_core_colors=["LightMagenta", "LightYellow", "LightCyan", "LightGreen", "LightBlue", "LightRed", "Cyan", "Green", "Blue", "Red"]
+#ram_color="LightMagenta"
+#swap_color="LightYellow"
+#rx_color="LightCyan"
+#tx_color="LightGreen"
+#border_color="Gray"
+#highlighted_border_color="LightBlue"
+#text_color="Gray"
+#selected_text_color="Black"
+#selected_bg_color="LightBlue"
+#graph_color="Gray"
+#battery_colors = ["red", "yellow", "yellow", "green", "green", "green"]
+
+[disk_filter]
+is_list_ignored = true
+list = []
+regex = true
+
+[temp_filter]
+is_list_ignored = true
+list = []
+case_sensitive = true
+
+##########################################################
+# Layout - layouts follow a pattern like this:
+# [[row]] represents a row in the application.
+# [[row.child]] represents either a widget or a column.
+# [[row.child.child]] represents a widget.
+#
+# All widgets must have the type value set to one of ["cpu", "mem", "proc", "net", "temp", "disk", "empty"].
+# All layout components have a ratio value - if this is not set, then it defaults to 1. 
+##########################################################
+
+# The default widget layout:
+[[row]]
+    ratio=1
+
+    [[row.child]]
+        ratio=1
+        type="proc"
+        default=true
+    
+    [[row.child]]
+        ratio=2
+    
+        [[row.child.child]]
+            ratio=1
+            type="cpu"
+    
+        [[row.child.child]]
+            ratio=1
+            type="mem"
+
+        [[row.child.child]]
+            ratio=1
+            type="net"
+    
+    
+    [[row.child]]
+        ratio=1
+    
+        [[row.child.child]]
+            ratio=1
+            type="disk"
+    
+        [[row.child.child]]
+            ratio=1
+            type="temp"
+    
+
+
+
+
+
+
