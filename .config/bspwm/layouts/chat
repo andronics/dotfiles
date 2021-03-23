@@ -18,17 +18,13 @@ if [[ ! $(bspc query --desktops --desktop "$DESKTOP".occupied) || $FORCE -eq 1 ]
     # recepticles
 
     bspc node @$DESKTOP:/ -i
-    bspc node @$DESKTOP:/ -o 0.25 -p east -i
-    bspc node @$DESKTOP:/2 -o 0.66 -p east -i
 
     # rules
 
-    bspc rule --add "android-messages" -o node=@$DESKTOP:/1
-    bspc rule --add "slack:Slack" -o node=@$DESKTOP:/2/1
-    bspc rule --add "whatsapp" -o node=@$DESKTOP:/2/2
+    bspc rule --add Termite:slack -o node=@$DESKTOP:/
 
     # programs
     
-    t-loop slack &
+    t-loop slack slack-term &
     
 fi

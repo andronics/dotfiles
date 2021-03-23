@@ -1,7 +1,5 @@
 #!/bin/sh
 
-# authentication agents
-polkit-gnome-authentication-agent-1 &
 
 # compositor
 picom -b --experimental-backends &
@@ -35,5 +33,5 @@ xfce4-power-manager &
 LD_PRELOAD=/usr/lib/libcurl.so.3:/usr/lib/spotifywm.so spotify-tray -m &
 
 # polybar
-polybar-launch top &
-polybar-launch bottom &
+pb-launch top &
+pb-launch bottom &

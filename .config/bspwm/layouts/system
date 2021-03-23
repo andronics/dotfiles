@@ -3,12 +3,6 @@
 DESKTOP=${DESKTOP:-"system"}
 FORCE=${FORCE:-"0"}
 
-_termite_loop() {
-    NAME=$1 && shift
-    COMMAND=$@
-    termite --name $NAME -e "sh -c 'while true; do $COMMAND; done'" &
-}
-
 if [[ ! $(bspc query --desktops --desktop "$DESKTOP".occupied) || $FORCE -eq 1 ]]; then
 
     # clean
@@ -18,15 +12,12 @@ if [[ ! $(bspc query --desktops --desktop "$DESKTOP".occupied) || $FORCE -eq 1 ]
     # recepticles
 
     bspc node @$DESKTOP:/ -i
-    # bspc node @$DESKTOP:/ -o 0.80 -p east -i
 
     # rules
 
-    bspc rule --add Termite:btmTerm -o node=@$DESKTOP:/
-    # bspc rule --add Termite:nvtopTerm -o node=@$DESKTOP:/2
+    bspc rule --add Termite:btm -o node=@$DESKTOP:/
     
     # programs
-    _termite_loop btmTerm "btm"
-    # _termite_loop nvtopTerm "nvtop"
+    termite-loop btm "btm"
     
 fi
