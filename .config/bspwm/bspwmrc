@@ -1,0 +1,46 @@
+#!/bin/sh
+
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
+# Trap : make sure everything started below is
+# signalled when this script exits or dies. Also clean up $state_path.
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+
+on_exit() {        
+
+        for child in $(jobs -p); do
+                jobs -p | grep -q $child && kill $child
+        done
+
+        # Extra paranoia
+        [[ -d "${state_path}" && -w "${state_path}" ]] && rm -rf -- "${state_path}"
+
+}
+
+trap on_exit EXIT QUIT INT 30
+
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
+# Host Configuration
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+
+
+case $(hostname) in
+    desktop)
+        ;;
+    laptop)
+        HOST_RESOLUTION=${HOST_RESOULTION:-"1600x900"}
+        WINDOW_GAP=${WINDOWN_GAP:-"10"}
+        WINDOW_PADDING=${WINDOW_PADDING:-"24"}
+        ;;
+    *) ;;
+esac
+
+nvidia-settings --assign CurrentMetaMode="${HOST_RESOLUTION} +0+0 { ForceCompositionPipeline = On, ForceFullCompositionPipeline = On }"
+
+$HOME/.config/bspwm/monitor
+$HOME/.config/bspwm/config
+$HOME/.config/bspwm/rules
+
+ls -1 $HOME/.config/bspwm/layouts | while read doc; do
+    echo $doc
+    $HOME/.config/bspwm/layouts/$doc
+done

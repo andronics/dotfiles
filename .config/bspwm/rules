@@ -1,0 +1,4 @@
+#!/bin/sh
+
+bspc rule -r "*"
+bspc rule -a Termite border=off

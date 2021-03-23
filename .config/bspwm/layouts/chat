@@ -1,0 +1,34 @@
+#!/usr/bin/bash
+
+DESKTOP=${DESKTOP:-"chat"}
+FORCE=${FORCE:-"0"}
+
+_termite_loop() {
+    NAME=$1 && shift
+    COMMAND=$@
+    termite --name $NAME -e "sh -c 'while true; do $COMMAND; done'" &
+}
+
+if [[ ! $(bspc query --desktops --desktop "$DESKTOP".occupied) || $FORCE -eq 1 ]]; then
+
+    # clean
+    
+    bspc node @$DESKTOP:/ -k
+
+    # recepticles
+
+    bspc node @$DESKTOP:/ -i
+    bspc node @$DESKTOP:/ -o 0.25 -p east -i
+    bspc node @$DESKTOP:/2 -o 0.66 -p east -i
+
+    # rules
+
+    bspc rule --add "android-messages" -o node=@$DESKTOP:/1
+    bspc rule --add "slack:Slack" -o node=@$DESKTOP:/2/1
+    bspc rule --add "whatsapp" -o node=@$DESKTOP:/2/2
+
+    # programs
+    
+    t-loop slack &
+    
+fi

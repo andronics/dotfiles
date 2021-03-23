@@ -1,0 +1,39 @@
+#!/bin/sh
+
+# authentication agents
+polkit-gnome-authentication-agent-1 &
+
+# compositor
+picom -b --experimental-backends &
+
+# notifications
+dunst &
+
+# xorg
+xsetroot -cursor_name left_ptr &
+xmodmap ~/.Xmodmap &
+xset s off &
+xset s -dpms &
+xrdb ~/.Xresources &
+
+# wallpaper
+nitrogen --set-scaled --head=0 ~/.config/wall.png &
+
+# tray applets
+acpi-monitor &
+blueman-tray &
+copyq &
+deluge &
+flameshot &
+nm-applet &
+slack -u &
+steam -silent &
+ulauncher --hide-window &
+xfce4-power-manager &
+
+# patch - spotify with WM_NAME
+LD_PRELOAD=/usr/lib/libcurl.so.3:/usr/lib/spotifywm.so spotify-tray -m &
+
+# polybar
+polybar-launch top &
+polybar-launch bottom &

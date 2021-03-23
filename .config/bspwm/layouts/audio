@@ -1,0 +1,25 @@
+#!/usr/bin/bash
+
+DESKTOP=${DESKTOP:-"audio"}
+FORCE=${FORCE:-"0"}
+
+
+if [[ ! $(bspc query --desktops --desktop "$DESKTOP".occupied) || $FORCE -eq 1 ]]; then
+
+    # clean
+    
+    bspc node @$DESKTOP:/ -k
+
+    # recepticles
+
+    bspc node @$DESKTOP:/ -i
+
+    # rules
+
+    bspc rule --add Termite:ncspot -o node=@$DESKTOP:/
+    
+    # programs
+
+    t-loop ncspot "ncspot"
+    
+fi
