@@ -1,0 +1,27 @@
+#! /bin/sh
+
+name=`basename $0`
+dir=$(readlink -f $(dirname $0))
+
+wid=$1
+class=$2
+instance=$3
+tags=$4
+
+printf "wid: %s, class: %s, instance: %s, tags: %s" "$wid" "$class" "$instance" "$tags" | systemd-cat -t "$name"
+
+if [ "$instance" = fontforge ] ; then
+	title=$(xtitle "$wid")
+	case "$title" in
+		Layers|Tools|Warning)
+			echo "focus=off"
+			;;
+	esac
+fi
+
+case "$class" in
+	Lutris|Liferea)
+		eval "$tags"
+		[ "$state" ] || echo "state=pseudo_tiled"
+		;;
+esac

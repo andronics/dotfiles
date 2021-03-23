@@ -1,0 +1,21 @@
+#!/usr/bin/bash
+
+state() {
+
+    root_folder="$HOME/toolbox/state"
+    
+    if [ ! -d "$root_folder" ]; then
+        printf "folder does not exist - %s\n" $root_folder
+    else
+        pushd $root_folder 1>/dev/null
+        case "$1" in
+            "dump")
+                bspc wm --dump-state > $(data +%y%m%d%h%M%S)
+                ;;
+            "load")
+                bspc wm --load-state "$2"
+                ;;
+        esac
+        popd 1>/dev/null
+    fi
+}
