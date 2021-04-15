@@ -1,0 +1,284 @@
+
+# Chords Mnemonics:
+#   Audio           : SUPER + A
+#   Composite       : SUPER + C
+#   Desktop         : SUPER + D
+#   Environment     : SUPER + E
+#   Executables     : SUPER + X
+#   Flags           : SUPER + F
+#   Focus           : SUPER + ARROWS
+#   Function        : SUPER + <F1..F12>
+#   Layers          : SUPER + L
+#   Monitor         : SUPER + M
+#   Node            : SUPER + N
+#   ... To Desktop  : SUPER + NUMBER
+#   Preselect       : SUPER + ALT
+#   Receptacles     : SUPER + R
+#   Screen Capture  : SUPER + PRINT
+#   Session         : SUPER + S
+#   Terminals       : SUPER + RETURN
+#   Window States   : SUPER + W
+
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
+# Audio
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
+
+# audio - launch control panal
+super + a; c
+  pavucontrol
+
+# audio - restart pulse service
+super + a; r
+  pkill volctl; pulseaudio --kill; pulseaudio --start; volctl
+
+# audio - set levels
+XF86Audio{Mute,LowerVolume,RaiseVolume}
+  polybar-audio {toggle-mute, vol-down, vol-up}
+
+# audio - play / pause / previous / next
+XF86Audio{Play,Prev,Next}
+  playerctl {play-pause,previous,next}
+
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
+# Composite
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
+
+# composite - increment / decrement value
+super + c: {Up,Down}
+  picom-trans -c {+20,-20}
+
+# composite - set fixed value
+super + c: {1-9,0}
+  picom-trans -c -o {1-9,10}0
+
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
+# Desktop
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
+
+# desktop - change layout mode
+super + d: {m,t,Up,Down}
+  bspc desktop -l {monocle,tiled,prev,next}
+
+# desktop - cycle direction
+super + d: {Left,Right}
+  bspc desktop -f { prev, next }
+
+# desktop - switch to specific
+super + d: {0-9}
+	bspc desktop -f $(bspc query -D | sed -n {0-9}p)
+
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
+# Environment
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
+
+# environment - reload bspwm
+super + e; b
+  bspc wm -r && notify-send -i $HOME/.config/dunst/normal.png "BSPWM" "Window Manager Reloaded"
+
+# environment - reload compositor
+super + e; c
+  pkill -SIGUSR1 picom && notify-send -i $HOME/.config/dunst/normal.png "PICOM" "Compositor Reloaded"
+
+# environment - reload notications
+super + e; n
+  pkill -SIGUSR1 dunst && notify-send -i $HOME/.config/dunst/normal.png "DUNST" "Notification Manager Reloaded"
+
+# environment - reload polybar
+super + e; p; {t,b,a}
+  bar={top,bottom,all}; \
+  pbar reload $bar && notify-send -i $HOME/.config/dunst/normal.png "POLYBAR" "Reloaded $bar Polybar"
+
+# environment - reload sxhkd
+super + e; s
+  pkill -SIGUSR1 sxhkd && notify-send -i $HOME/.config/dunst/normal.png "SXHKD" "Reloaded SXHKD Bindings"
+
+# enviroment - switch tempus theme
+super + e; t
+  pkill -SIGUSR1 sxhkd && notify-send -i $HOME/.config/dunst/normal.png "Tempus" "Theme Reloaded / Changed"
+
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
+# Executables
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+
+# execute - [a]uthy [b]rowser [c]ode [d]eluge [e]books [g]ames [m]usic [n]emo [p]roccess [s]lack [v]irtualbox
+super + x; {a, b, c, d, e, g, m, n, p, s, v }
+  { authy, $BROWSER, code, deluge, calibre, steam -silent, spotify, nemo, $TERMINAL -e htop, slack, virtualbox }
+
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
+# Flags
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+
+# flag - toogle [h]idden [l]ocked [m]arked [p]rivate [s]ticky [u]rgent
+super + f; { h, l, m, p, s, u }
+  bspc node -g { hidden, locked, marked, private, sticky, urgent }
+
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
+# Focus
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+
+# focus - direction 
+super + { Up, Down, Left, Right }
+  bspc node -f { north, south, west, east }
+
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
+# Functions
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+
+# functions - display sxhkd key bindings
+super + F1
+  dmenu-sxhkd
+
+# functions - select previous command from history
+super + F2
+  dmenu-history
+
+# functions - select man page
+super + F3
+  dmenu-man
+
+# functions - perform calculation
+super + F4
+  dmenu-calc
+
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
+# Layers
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+
+# layer - stack above
+super + l; Up
+  bspc node -l above
+
+# layer - statck normal
+super + l; {Left,Right}
+  bspc node -l normal
+
+# layer - stack below
+super + l; Down
+  bspc node -l below
+
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
+# Monitor
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
+
+# monitor - increment / decrement brightness
+super + m; {Up, Down}
+  polybar-brightness {+,-}
+
+# monitor - reset brightness
+super + m; r
+  polybar-brightness reset
+
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
+# Node
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
+
+# node - send to desktop
+super + {0-9} + {_,shift}
+  bspc node -d $(bspc query -D | sed -n {0-9}p) {--follow,""}
+
+# node - flip tree
+super + {_, shift} + n; {h,v}
+  bspc node {@parent, @/} -F {horizontal,vertical}
+
+# node - fullscreen
+super + n; f
+  bspc-fullscreen
+
+# node - move
+super + n; m: {Up,Down,Left,Right}
+  bspc node --swap {north,south,west,east}
+
+# node - rotate tree
+super + {_, shift} + n; r: {Left,Right}
+  bspc node {@parent, @/} -C { backward, forward }
+
+# node - split ratio
+super + n; {_, shift} + {b,e}
+  bspc node {@parent, @/} {--balance,--equalize}
+
+# node - close / kill
+super + {_, shift} + q
+  ACTION={close,kill}; \
+  WID=$(xdotool getactivewindow); \
+  bspc node --$ACTION; \
+  notify-send -i $HOME/.config/dunst/normal.png "Window" "Window $WID: $ACTION" }
+
+# node - hide / unhide
+super + {_, shift} + t
+  { bspc-hide, bspc-unhide }
+
+# shift floating node
+control + shift + { Up, Down, Left, Right }
+   xdo move { -y -20, -y +20, -x -20, -x +20 }
+
+# expand node via direction
+control + alt + { Up, Down, Left, Right }
+  bspc node -z { top 0 20, bottom 0 -20, left -20 0, right 20 0 }
+
+# contract node via direction
+control + shift + alt + { Up, Down, Left, Right }
+   bspc node -z { top 0 -20, bottom 0 20, left 20 0, right -20 0 }
+
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
+# Preselect
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+
+# preselect - split ratio - 10%, 20%, 30%, etc
+super + alt + {_, shift} + {1-9,0}
+  bspc node {@parent, @/} -r {0.9,0.8,0.7,0.6,0.5,0.4,0.3,0.2,0.1,1.0}
+
+# preselect - split direction 
+super + alt + {Up,Down,Left,Right}
+  bspc node -p { ~north,  ~south, ~west, ~east }
+
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
+# Receptacles
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+
+# receptacles - clear empty
+super + r; c
+  for win in `bspc query -N -n ".leaf.\!window"`; do bspc node $win -k ; done;
+
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
+# Screen Capture
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
+
+# screen capture - [c]onfig [f]ull [g]ui [s]creen
+super + Print; {c,f,g,s}
+  flameshot {config,full,gui,screen} --path "$HOME/pictures/screenshots"
+
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
+# Session
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
+
+# session - exit
+super + s; x
+  prompt "Are you sure you wish to exit session?" "bspc quit"
+
+# session - lock
+super + s; l
+  betterlockscreen -l dim
+
+# session - poweroff
+super + s; p
+  prompt "Are you sure you wish to poweroff computer?" "sudo shutdown now"
+
+# session - reboot
+super + s; r
+  prompt "Are you sure you wish to reboot computer?" "sudo reboot now"
+
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
+# Terminals
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+
+# terminals - launch
+super + Return + {_, alt, shift, ctrl }
+  { $TERMINAL, t-draw, st, t-scratch }
+
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
+# Window States
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
+
+# window state - toggle [f]loating [p]seudo_tiled [t]iled
+super + w; { f, p, t }
+  bspc node -t ~{floating,pseudo_tiled,tiled}
