@@ -6,9 +6,6 @@ alias ...="cd ../.."
 alias ....="cd ../../.."
 alias .....="cd ../../../.."
 
-# dotfiles
-
-alias dotfiles='/usr/bin/git --git-dir=$HOME/.dotfiles/ --work-tree=$HOME'
 
 # docker-compose
 
@@ -107,6 +104,18 @@ alias grs='git restore --staged .'
 alias gs="git status"
 alias gt='git ls-tree -r master --name-only'
 
+# gitify
+
+gitify() {
+    export GIT_WORK_TREE="${1:-"$HOME"}"
+    export GIT_DIR="/srv/git/${2:-"default@$HOSTNAME"}"
+    shift 2
+    /usr/bin/git $*
+}
+
+alias dotfiles='gitify "$HOME" "$USER@$HOSTNAME"'
+alias etcfiles='gitify "/etc" "etc@$HOSTNAME"'
+
 # grep
 
 alias grep='grep --color=auto'
@@ -136,6 +145,7 @@ alias nrs="npm run start";
 alias nrb="npm run build";
 alias nrt="npm run test";
 alias nrc="npm run commit";
+alias nk="find . -name 'node_modules' -type d -prune -exec rm -rf '{}' +"
 
 # systemctl
 
