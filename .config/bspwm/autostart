@@ -18,7 +18,7 @@ xrdb ~/.Xresources &
 
 # wallpaper
 # nitrogen --set-scaled --head=0 ~/.config/wall.jpg &
-wal -qi ~/.config/wall.jpg
+# wal -qi ~/.config/wall.jpg
 
 # tray applets
 acpi-monitor &
