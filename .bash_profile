@@ -12,8 +12,9 @@ export TERMINAL="termite"
 export VISUAL="nano"
 export WM="bspwm"
 
+# wallpaper colors
+(wal -r &)
+
 if [[ "$(tty)" = "/dev/tty1" ]]; then
 	pgrep i3 || startx
 fi
-
-

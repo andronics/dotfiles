@@ -22,6 +22,8 @@ HISTCONTROL=ignoreboth
 
 eval "$(jump shell --bind=j)"
 
-# aliases
+# wallpaper colors
+(wal -r &)
 
+# aliases
 source $HOME/.aliases

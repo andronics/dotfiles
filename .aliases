@@ -6,6 +6,14 @@ alias ...="cd ../.."
 alias ....="cd ../../.."
 alias .....="cd ../../../.."
 
+# docker
+dstart() {
+    docker start $(docker ps -aq)
+}
+
+dstop() {
+    docker stop $(docker ps -aq)
+}
 
 # docker-compose
 
@@ -167,6 +175,9 @@ alias scs="sudo systemctl start"
 alias scstatus="sudo systemctl status"
 alias scst="sudo systemctl stop"
 alias sct="sudo systemctl thaw"
+
+# ts-node
+alias ts-node="ts-node -O '{\"target\":\"es2015\"}'"
 
 # xclip
 
