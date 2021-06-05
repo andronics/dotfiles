@@ -1,0 +1,23 @@
+[module/fs]
+type = internal/fs
+bar-used-empty = "—"
+bar-used-fill = "—"
+bar-used-indicator = "⏽"
+bar-used-indicator-foreground = ${colors.yellow}
+bar-used-width = 5
+bar-used-gradient = false
+format-mounted = <label-mounted> <bar-used>
+fixed-values = true
+interval = 60
+label-mounted-foreground = ${colors.yellow}
+spacing = 4
+
+[module/fs-root]
+inherit = module/fs
+mount-0 = /
+label-mounted = "root"
+
+[module/fs-storage]
+inherit = module/fs
+mount-0 = /storage
+label-mounted = "storage"

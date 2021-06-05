@@ -1,0 +1,51 @@
+[module/weather-beaufort]
+inherit = module/base-label
+exec = pb-template -t "label" -i "\uF050" -l "$(weather beaufort)" -f 5
+interval = 300
+
+[module/weather-condition]
+inherit = module/base-label
+exec = pb-template -t "label" -i "\uF00C" -l "$(weather condition)" -f 5
+interval = 300
+
+[module/weather-humidity]
+inherit = module/base-label
+exec = pb-template -t "label" -i "\uFA8D" -l "$(weather humidity)"
+interval = 300
+
+[module/weather-pressure]
+inherit = module/base-label
+exec = pb-template -t "label" -i "\uF079" -l "$(weather pressure)" -f 5
+interval = 300 
+
+[module/weather-sunrise]
+inherit = module/base-label
+exec = pb-template -t "label" -i "\uF051" -l "$(weather sunrise)" -f 5
+interval = 300
+
+[module/weather-sunset]
+inherit = module/base-label
+exec = pb-template -t "label" -i "\uF052" -l "$(weather sunset)" -f 5
+interval = 300 
+
+[module/weather-temp]
+inherit = module/base-label
+exec = pb-template -t "label" -i "\uF055" -l "$(weather temp)" -f 5
+interval = 300
+
+[module/weather-visibility]
+inherit = module/base-label
+exec = pb-template -t "label" -i "\uF9DF" -l "$(weather visibility)"
+interval = 300
+
+[module/weather-wind-degree]
+inherit = module/base-label
+exec = pb-template -t "label" -i "\uF14E" -l "$(weather wind_degree)" -f 5
+interval = 300
+format-suffix = " °"
+
+[module/weather-wind-speed]
+inherit = module/base-label
+exec = pb-template -t "label" -i "\uF056" -l "$(weather wind_speed)" -f 5
+interval = 300
+format-suffix = " m/s"

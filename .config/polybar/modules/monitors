@@ -1,0 +1,18 @@
+[module/mon-packages]
+inherit = module/base-label
+exec = pb-template -t label -i "\uFBDF" -l 25
+click-left = sys-trash --clean
+interval = 10
+format-offset = 20
+
+[module/mon-stacks]
+inherit = module/base-label
+exec = pb-template -t label -i "\uF1B3" -l 3
+click-left = sys-stack --clean
+interval = 10
+
+[module/mon-trash]
+inherit = module/base-label
+exec = pb-template -t label -i "\uF014" -l "$(sys-trash)"
+click-left = sys-trash --clean
+interval = 10

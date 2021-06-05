@@ -1,0 +1,35 @@
+
+[module/net-ip]
+inherit = module/base-label
+exec = pb-template -t "label" -i "\uF817" -l "$(net ip)"
+interval = 60
+
+[module/net-speed-down]
+inherit = module/base-label
+exec = pb-template -t "label" -i "\uF545" -l "$(net down-speed)"
+interval = 3600
+format-offset = 20
+
+[module/net-speed-up]
+inherit = module/base-label
+exec = pb-template -t "label" -i "\uF55D" -l "$(net up-speed)"
+interval = 3600
+
+[module/net-vpn]
+inherit = module/base-label
+exec = pb-template -t "label" -i "$(vpn status_icon)" -l "$(vpn status)"
+interval = 0.25
+click-left = vpn connect
+click-middle = vpn connect
+click-right = vpn disconnect
+
+[module/net-wifi-power]
+inherit = module/base-label
+exec = pb-template -t "label" -i "\uF012" -l "$(net wifi-power wlp3s0)"
+interval = 30
+
+[module/net-wifi-ssid]
+inherit = module/base-label
+exec = pb-template -t "label" -i "\uF424" -l "$(net wifi-ssid wlp4s0)"
+exec-if = net wifi-login 
+interval = 30

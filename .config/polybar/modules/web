@@ -1,0 +1,31 @@
+
+[module/web-iplayer]
+inherit = module/base-icon
+exec = polybar-template -t icon -i "\uF7AA"
+click-left = $BROWSER --app="https://bbc.com/iplayer"
+
+[module/web-gmail]
+inherit = module/base-icon
+exec = polybar-template -t icon -i "\uF7AA"
+click-left = $BROWSER --app="https://www.gmail.com"
+format-offset = 20
+
+[module/web-deluge]
+inherit = module/base-icon
+exec = polybar-template -t icon -i "\uF7AA"
+click-left = $BROWSER --app="http://0.0.0.0:8112"
+
+[module/web-jackett]
+inherit = module/base-icon
+exec = polybar-template -t icon -i "\uF7AA"
+click-left = $BROWSER --app="http://0.0.0.0:9117"
+
+[module/web-sonarr]
+inherit = module/base-icon
+exec = polybar-template -t icon -i "\uF7AA"
+click-left = $BROWSER --app="http://0.0.0.0:8090"
+
+[module/web-youtube]
+inherit = module/base-icon
+exec = polybar-template -t icon -i "\uF431" -f 6
+click-left = $BROWSER --app="https://youtube.com"

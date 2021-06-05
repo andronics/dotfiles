@@ -1,0 +1,34 @@
+include-file = /home/andronics/.config/polybar/colors
+include-file = /home/andronics/.config/polybar/global
+include-file = /home/andronics/.config/polybar/settings
+; include-file = /home/andronics/.config/polybar/templates
+
+; ================================================================================
+
+include-file = /home/andronics/.config/polybar/bars/base
+include-file = /home/andronics/.config/polybar/bars/bottom
+include-file = /home/andronics/.config/polybar/bars/top
+
+; ================================================================================
+
+include-file = /home/andronics/.config/polybar/modules/apps
+include-file = /home/andronics/.config/polybar/modules/audio
+include-file = /home/andronics/.config/polybar/modules/base
+include-file = /home/andronics/.config/polybar/modules/bspwm
+include-file = /home/andronics/.config/polybar/modules/device
+include-file = /home/andronics/.config/polybar/modules/fs
+include-file = /home/andronics/.config/polybar/modules/monitors
+include-file = /home/andronics/.config/polybar/modules/net
+include-file = /home/andronics/.config/polybar/modules/packages
+include-file = /home/andronics/.config/polybar/modules/player
+include-file = /home/andronics/.config/polybar/modules/session
+include-file = /home/andronics/.config/polybar/modules/sys
+include-file = /home/andronics/.config/polybar/modules/torrents
+include-file = /home/andronics/.config/polybar/modules/weather
+include-file = /home/andronics/.config/polybar/modules/web
+include-file = /home/andronics/.config/polybar/modules/xbacklight
+include-file = /home/andronics/.config/polybar/modules/xkeyboard
+include-file = /home/andronics/.config/polybar/modules/xwindow
+include-file = /home/andronics/.config/polybar/modules/xworkspaces
+
+; ================================================================================

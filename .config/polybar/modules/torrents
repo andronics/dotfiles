@@ -1,0 +1,28 @@
+[module/tor-downloading]
+inherit = module/base-label
+exec = pb-template -t "label" -i "\uF019" -l "$(torrents downloading)"
+interval = 30
+click-left = deluge
+click-right = torrents clear
+format-offset = 20
+
+[module/tor-paused]
+inherit = module/base-label
+exec = pb-template -t "label" -i "\uF110" -l "$(torrents paused)"
+interval = 30
+click-left = deluge
+click-right = torrents clear
+
+[module/tor-queued]
+inherit = module/base-label
+exec = pb-template -t "label" -i "\uE710" -l "$(torrents queued)"
+interval = 30
+click-left = deluge
+click-right = torrents clear
+
+[module/tor-seeding]
+inherit = module/base-label
+exec = pb-template -t "label" -i "\uF093" -l "$(torrents seeding)"
+interval = 30
+click-left = deluge
+click-right = torrents clear

@@ -1,0 +1,61 @@
+; https://github.com/altdesktop/playerctl
+
+[module/player-instance]
+inherit = module/base-icon
+exec = player instance
+
+[module/player-loop]
+inherit = module/base-icon
+exec = pb-template -t icon -i "\uF021"
+click-left = player loop
+
+[module/player-metadata]
+inherit = module/base-icon
+exec = player metadata
+click-left = player loop
+
+[module/player-next]
+inherit = module/base-icon
+exec = pb-template -t icon -i "\uF04E"
+click-left = player next
+click-middle = player toggle
+click-right = player seek 10+
+
+[module/player-play-pause]
+inherit = module/base-icon
+exec = player state
+click-left = player playpause
+click-middle = player toggle
+interval = 0.25
+tail = true
+
+[module/player-previous]
+inherit = module/base-icon
+exec = pb-template -t icon -i "\uF04A"
+click-left = player previous
+click-middle = player toggle
+click-right = player seek 10-
+format-offset = 20
+
+[module/player-seek-backward]
+inherit = module/base-icon
+exec = pb-template -t icon -i "\uF9AD"
+click-left = player seek 10+
+format-offset = 20
+
+[module/player-seek-forward]
+inherit = module/base-icon
+exec = pb-template -t icon -i "\uF9AC"
+click-left = player seek 10-
+
+[module/player-shuffle]
+inherit = module/base-icon
+exec = pb-template -t icon -i "\uF99E"
+click-left = player shuffle
+
+[module/player-stop]
+inherit = module/base-icon
+exec = pb-template -t icon -i "\uF04D"
+click-left = player stop
+
+

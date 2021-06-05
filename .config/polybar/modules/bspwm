@@ -1,0 +1,105 @@
+
+[module/bspwm]
+type = internal/bspwm
+enable-click = true
+enable-scroll = true
+fuzzy-match = true
+inline-mode = true
+pin-workspaces = false
+reverse-scroll = true
+
+format = <label-state> %{O100}<label-mode>%{O}
+format-offset = 20
+
+; =========================
+; scrolling
+; =========================
+
+scroll-up = bspc desktop -f prev.local
+scroll-down = bspc desktop -f next.local
+
+; =========================
+; modes
+; =========================
+
+; floating = cannot be killed by bspwm
+label-floating = F
+label-floating-background = ${colors.color11}
+label-floating-foreground = ${colors.background}
+label-floating-padding = 1.5
+
+; fullscreen = cannot be killed by bspwm
+label-fullscreen = FS
+label-fullscreen-background = ${colors.background}
+label-fullscreen-foreground = ${colors.color11}
+label-fullscreen-padding = 1.5
+
+; locked = cannot be killed by bspwm
+label-locked = L
+label-locked-background = ${colors.background}
+label-locked-foreground = ${colors.color11}
+label-locked-padding = 1.5
+
+; monocle = node single view
+label-monocle = M
+label-monocle-background = ${colors.background}
+label-monocle-foreground = ${colors.color6}
+label-monocle-padding = 1.5
+
+; private = tries to retain its position and geometry
+label-private = P
+label-private-background = ${colors.background}
+label-private-foreground = ${colors.color9}
+label-private-padding = 1.5
+
+; pseudo-tiled = tiled but using its own geometry
+label-pseudotiled = PT
+label-pseudotiled-background = ${colors.background}
+label-pseudotiled-foreground = ${colors.color5}
+label-pseudotiled-padding = 1.5
+
+; sticky = stays in the current desktop
+label-sticky = S
+;label-sticky-background = ${colors.background}
+label-sticky-foreground = ${colors.color13}
+label-sticky-padding = 1.5
+
+; =========================
+; states
+; =========================
+
+label-empty = %icon%
+label-empty-background = ${colors.background}
+; label-empty-underline = ${colors.alert}
+label-empty-padding = 1.5
+
+label-focused = %icon%
+label-focused-background = ${colors.background}
+label-focused-underline = ${colors.alert}
+label-focused-padding = 1.5
+
+label-occupied = %icon%
+label-occupied-background = ${colors.background}
+; label-occupied-underline = ${colors.primary}
+label-occupied-padding = 1.5
+
+label-urgent = %icon%
+label-urgent-background = ${colors.background}
+; label-urgent-underline = ${colors.alert}
+label-urgent-padding = 1.5
+
+; =========================
+; workspaces
+; =========================
+
+ws-icon-0 = system;%{F#B3B4D0}勤%{F-}
+ws-icon-1 = 1;%{F#B3B4D0}1%{F-}
+ws-icon-2 = 2;%{F#B3B4D0}2%{F-}
+ws-icon-3 = 3;%{F#B3B4D0}3%{F-}
+; ws-icon-4 = 4;%{F#B3B4D0}4%{F-}
+; ws-icon-5 = 5;%{F#B3B4D0}5%{F-}
+; ws-icon-6 = 6;%{F#B3B4D0}6%{F-}
+; ws-icon-7 = 7;%{F#B3B4D0}7%{F-}
+; ws-icon-8 = 8;%{F#B3B4D0}8%{F-}
+
+; ws-icon-default = %{F#B3B4D0}%{F-}

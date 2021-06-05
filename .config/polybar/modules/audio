@@ -1,0 +1,20 @@
+[module/audio]
+inherit = module/base-icon
+interval = 1
+click-right = pavucontrol &
+click-left = audio toggle-mute
+click-middle = audio next-sink
+scroll-up = audio vol-up
+scroll-down = audio vol-down
+
+[module/audio-device]
+inherit = module/audio
+exec = pb-template -t label -i "$(audio device-icon)" -l "$(audio device)"
+format-offset = 20
+
+[module/audio-level]
+inherit = module/audio
+exec = pb-template -t label -i "$(audio level-icon)" -l "$(audio level)"
+
+
+

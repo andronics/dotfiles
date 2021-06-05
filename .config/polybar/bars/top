@@ -1,0 +1,16 @@
+[bar/top]
+inherits = bar/base
+
+; border-bottom-size = 1
+; border-color = #ff0000
+
+width = 100%
+height = 24
+offset-x = 0
+offset-y = 0
+radius = 0
+bottom = false
+
+modules-left =  net-wifi-ssid net-wifi-power net-ip net-vpn
+; modules-center = weather-beaufort weather-condition weather-wind-degree weather-wind-speed weather-sunrise weather-sunset weather-temp weather-visibility weather-pressure weather-humidity 
+modules-right = sys-cpu-temp sys-cpu-freq sys-mem audio-device audio-level sys-battery sys-date sys-time sys-uptime

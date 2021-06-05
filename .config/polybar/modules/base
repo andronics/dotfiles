@@ -1,0 +1,20 @@
+[module/base-icon]
+type = custom/script
+format-font = 1
+format-foreground = ${colors.foreground-alt}
+tail = true
+
+[module/base-label]
+type = custom/script
+format-font = 1
+format-foreground = ${colors.foreground-alt}
+tail = true
+
+[module/base-bar]
+bar-volume-empty = "—"
+bar-volume-fill = "—"
+bar-volume-indicator = "⏽"
+bar-volume-indicator-foreground = ${colors.yellow}
+bar-volume-width = 5
+bar-volume-gradient = false
+

@@ -1,0 +1,94 @@
+[module/sys-battery]
+type = internal/battery
+adapter = AC
+battery = BAT0
+full-at = 99
+poll-interval = 5
+override-redirect = true
+format-charging = <animation-charging> <label-charging>
+format-charging-offset = 40
+format-discharging = <animation-discharging> <label-discharging>
+format-discharging-offset = 40
+format-full = <ramp-capacity> <label-full>
+format-full-offset = 40
+label-charging = "%{A:xfce4-power-manager-settings:}%percentage%%%{A}"
+label-discharging = "%{A:xfce4-power-manager-settings:}%percentage%%%{A}"
+label-full = "%{A:xfce4-power-manager-settings:}%percentage%%%{A}"
+animation-charging-0 = 
+animation-charging-1 = 
+animation-charging-2 = 
+animation-charging-3 = 
+animation-charging-4 = 
+animation-charging-framerate = 1500
+animation-charging-foreground = ${colors.color7}
+animation-discharging-0 = 
+animation-discharging-1 = 
+animation-discharging-2 = 
+animation-discharging-3 = 
+animation-discharging-4 = 
+animation-discharging-framerate = 1500
+animation-discharging-foreground = ${colors.color7}
+ramp-capacity-0 = 
+ramp-capacity-1 = 
+ramp-capacity-2 = 
+ramp-capacity-3 = 
+ramp-capacity-4 = 
+ramp-capacity-foreground = ${colors.color7}
+click-left = xfce4-power-manager-settings &
+
+[module/sys-cpu-freq]
+inherit = module/base-label
+exec = pb-template -t label -i "\uF85A" -l "$(sys cpu)"
+click-left = $TERMINAL -e htop &
+interval = 1
+
+[module/sys-cpu-temp]
+type = internal/temperature
+base-temperature = 20
+warn-temperature = 80
+format = <ramp> <label>
+format-warn = <ramp> <label-warn>
+interval = 1
+label = %temperature-c%
+label-warn = %temperature-c%
+label-warn-foreground = ${colors.color7}
+ramp-0 = 
+ramp-1 = 
+ramp-2 = 
+ramp-3 = 
+ramp-4 = 
+ramp-foreground = ${colors.color7}
+ramp-font = 2
+hwmon-path =  /sys/devices/platform/coretemp.0/hwmon/hwmon4/temp1_input
+;thermal-zone = 0
+
+[module/sys-date]
+inherit = module/base-icon
+exec = pb-template -t label -i "\uF5EC" -l $(date '+%d/%m/%Y')
+interval = 300
+format-offset = 20
+
+[module/sys-time]
+inherit = module/base-icon
+exec = pb-template -t label -i "\uE385" -l $(date '+%H:%M')
+interval = 10
+
+[module/sys-mem]
+inherit = module/base-label
+exec = pb-template -t label -i "\uE266" -l "$(sys mem)"
+click-left = $TERMINAL -e htop &
+interval = 30
+
+[module/sys-uptime]
+inherit = module/base-icon
+exec = pb-template -t label -i "\uF062" -l "$(sys uptime)"
+interval = 30
+
+
+
+
+
+
+
+
+

@@ -1,0 +1,14 @@
+[module/device-printer]
+inherit = module/base-icon
+exec = pb-template -t icon -i "\uF02F"
+click-left = system-config-printer &
+format-offset = 20
+
+[module/device-scanner]
+inherit = module/base-icon
+exec = pb-template -t icon -i "\uF92A"
+click-left = simple-scan &
+
+
+
+

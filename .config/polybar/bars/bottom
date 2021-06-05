@@ -1,0 +1,23 @@
+[bar/bottom]
+inherits = bar/base
+
+width = 100%
+height = 24  
+offset-x = 0
+offset-y = 0
+radius = 0
+bottom = true
+
+modules-center =
+modules-right =
+modules-left = session-power session-logout session-lock device-printer device-scanner bspwm 
+
+tray-background = ${colors.background}
+tray-detached = false
+tray-maxsize = 10
+tray-offset-x = 0
+tray-offset-y = 0
+tray-padding = 10
+tray-position = right
+tray-scale = 1.0
+

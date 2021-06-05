@@ -1,0 +1,6 @@
+[module/packages]
+type = custom/ipc
+hook-0 = pacman -Qu | wc -l
+format-prefix = "ﯟ "
+click-left = updatepackages
+initial = 1

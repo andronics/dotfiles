@@ -1,0 +1,15 @@
+[module/session-lock]
+inherit = module/base-icon
+exec = pb-template -t icon -i "\uF023"
+click-left = betterlockscreen -l dim
+
+[module/session-logout]
+inherit = module/base-icon
+exec = pb-template -t icon -i "\uF842"
+click-left = prompt "Are you sure you wish to exit session?" "bspc quit" &
+
+[module/session-power]
+inherit = module/base-icon
+exec = pb-template -t icon -i "\uF011"
+click-left = prompt "Are you sure you wish to poweroff?" "poweroff" &
+

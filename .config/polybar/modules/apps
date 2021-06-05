@@ -1,0 +1,59 @@
+[module/app-browser]
+inherit = module/base-icon
+exec = pb-template -t icon -i "\uE743"
+click-left = $BROWSER
+click-right = $BROWSER --incognito
+
+[module/app-code]
+inherit = module/base-icon
+exec = pb-template -t icon -i "\uE70C"
+click-left = $CODEEDITOR
+
+[module/app-games]
+inherit = module/base-icon
+exec = pb-template -t icon -i "\uF1B7"
+click-left = steam
+
+[module/app-gmail]
+inherit = module/base-icon
+exec = pb-template -t icon -i "\uF7AA"
+click-left = $BROWSER --app="https://www.gmail.com"
+format-offset = 20
+
+[module/app-netflix]
+inherit = module/base-icon
+exec = pb-template -t icon -i "\u004E"
+click-left = $BROWSER --app="https://netflix.com/browse"
+
+[module/app-reddit]
+inherit = module/base-icon
+exec = pb-template -t icon -i "\uF281"
+click-left = $BROWSER --app="https://www.reddit.com"
+
+[module/app-slack]
+inherit = module/base-icon
+exec = pb-template -t icon -i "\uF198"
+click-left = $BROWSER --app="https://www.slack.com"
+
+[module/app-spotify]
+inherit = module/base-icon
+exec = pb-template -t icon -i "\uF1BC"
+click-left = spotify-tray --toggle
+
+[module/app-term]
+inherit = module/base-icon
+exec = pb-template -t icon -i "\uF120"
+click-left = $TERMINAL
+format-offset = 20
+
+[module/app-tor]
+inherit = module/base-icon
+exec = pb-template -t icon -i "\uFA29"
+click-left = tor-browser
+
+[module/app-youtube]
+inherit = module/base-icon
+exec = pb-template -t icon -i "\uF167"
+click-left = $BROWSER --app="https://www.youtube.com"
+
+
