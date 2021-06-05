@@ -1,2 +1,2 @@
 #!/bin/sh
-bspc monitor LVDS1 -d 1 2 3 system
+bspc monitor $MONITOR -d 1 2 3 system
