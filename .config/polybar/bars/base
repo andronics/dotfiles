@@ -1,6 +1,6 @@
 [bar/base]
 monitor = ${env:MONITOR:LVDS1}
-monitor-fallback =
+monitor-fallback = DP-2
 monitor-strict = false 
 monitor-exact = true
 override-redirect = false
