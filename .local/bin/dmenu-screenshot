@@ -1,0 +1,15 @@
+#!/bin/sh
+# Simple script that uses maim to take a screenshot
+output=$HOME/pictures/screenshots/"$(date +%s_%h%d_%H:%M:%S).png"
+
+method=$(echo "full\ngui\nlauncher\nscreen" | dmenu -i -l 10 -p "Screenshot Method?")
+
+case $(echo "full\nsel") in
+    "full") maim "$output" || exit;;
+    "select") maim -s "$output" || exit ;;
+    "fulltime") menu && maim "$output" || exit ;;
+    "selecttime") menu && maim -s "$output" || exit ;;
+
+esac
+
+notify-send "Maim" "Screenshot Taken"

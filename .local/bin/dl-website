@@ -1,0 +1,28 @@
+#!/bin/sh
+
+# https://www.linuxjournal.com/content/downloading-entire-web-site-wget
+
+if [[ -z $1 ]]; then
+    echo "Please specifiy a valid url"
+    exit 1
+fi
+
+url=$1
+domain=$(echo "$1" | sed -e 's|^[^/]*//||' -e 's|/.*$||')
+
+
+echo Downloading website: $domain
+
+wget --recursive \
+    --quiet \
+    --no-clobber \
+    --progress=bar \
+    --show-progress \
+    --page-requisites \
+    --html-extension \
+    --convert-links \
+    --restrict-file-names=windows \
+    --domains "$domain" \
+    --no-parent \
+   "$url"
+

@@ -1,0 +1,5 @@
+#!/usr/bin/bash
+docsRoot=/usr/share/doc
+docsCat=$(ls -1 "$docsRoot" | dmenu -p "Document Category" -i -l 10)
+docsName=$(ls -1 "$docsRoot/$docsCat" | dmenu -p "Document Selection" -i -l 10)
+preview "$docsRoot/$docsCat/$docName"

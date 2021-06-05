@@ -1,0 +1,43 @@
+#!/bin/sh
+# Opens a basic yes/no prompt with dmenu
+# This is useful for confirming whether an action should be taken
+
+
+_prompt () {
+    
+    PKG_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
+
+    local OPTIND
+
+    fn='JetBrains Mono:bold:pixelsize=14'
+    
+    nb='#1d1f21'
+    nf='#d8dee9'
+    sb='#b58900'
+    sf='#fdf6e3'
+
+    # process global flags
+    for arg in "$@"; do
+        case "$arg" in
+            -fn) nb=$2 && shift 2 ;;
+            -nb) nb=$2 && shift 2 ;;
+            -nf) nf=$2 && shift 2 ;;
+            -sb) sb=$2 && shift 2 ;;
+            -sf) sf=$2 && shift 2 ;;
+        esac
+    done
+
+   alias dmenu="dmenu -b -f -i -fn '$fn' -nb '$nb' -nf '$nf' -sb '$sb' -sf '$sf'"
+
+   if [ "$(printf "No\nYes" | dmenu -p "$1")" = "Yes" ]; then
+       $2
+   fi
+    
+
+
+}
+
+_prompt "$@" 
+
+
+

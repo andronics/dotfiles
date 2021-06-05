@@ -1,0 +1,97 @@
+#!/bin/sh
+
+
+# Prevent termination at startup
+sleep 3
+
+# Replace if already running
+pid_running=$(pidof -x $0)
+
+
+while [ "$(echo $pid_running | wc -w)" -gt "2" ]; do
+	
+	oldprocess=$(echo $pid_running| rev| cut -d' ' -f1| rev)
+	
+	kill $oldprocess
+	sleep 1
+	
+	pid_running=$(pidof -x $0)
+	
+	dunstify -r "991059" "Script" "bspc-swallow has been reloaded"
+
+done
+
+cfg_dir="$HOME/.config/bspwm"
+cfg_swallow=$cfg_dir/.swallow
+cfg_terminals=$cfg_dir/.terminals
+tmp_ids=/tmp/bspc_swallow_ids
+
+[[ ! -f "$cfg_swallow" ]] && touch "$cfg_swallow"
+[[ ! -f "$cfg_terminals" ]] && touch "$cfg_terminals"
+[[ ! -f "$tmp_ids" ]] && touch "$tmp_ids"
+
+# Get class of a wid
+get_class() {
+	id=$1
+  if [ -z "$id" ]; then
+    echo ""
+  else
+	  xprop -id "$id" | sed -n '/WM_CLASS\|WM_COMMAND/s/.*"\(.*\)".*/\1/p'
+  fi
+}
+
+swallow() {
+	
+	desktop_current=$2
+	desktop_last=$(bspc query -D -n last)
+
+	swallower_id=$1
+	swallowed_id=$(bspc query -N -n last)
+	
+	if [ "$desktop_current" = "$desktop_last" ]; then
+
+		echo swallower: $swallower_id $(get_class "$swallower_id")
+		[[ -z "$(cat $cfg_swallow $cfg_terminals | grep "^$(get_class "$swallower_id")$")" ]] && return
+		
+		echo swallowed: $swallowed_id $(get_class "$swallowed_id")
+		[[ -z "$(grep "^$(get_class "$swallowed_id")$" $cfg_terminals)" ]] || return
+		
+		echo swallowing...
+		echo "$swallower_id $swallowed_id" >> $tmp_ids
+		bspc node "$swallowed_id" --flag hidden=on
+	
+	fi
+}
+
+spit() {
+	spitter_id=$1
+	spitter_desktop=$2
+
+	echo spitter: $spitter_id
+	grep "^$spitter_id" $tmp_ids || return
+
+	spitting_id=$(grep "^$spitter_id" $tmp_ids | head -n1 | awk '{print $2}')
+	echo spitting: $spitting_id $(get_class "$spitting_id")
+
+	bspc node "$spitting_id" --flag hidden=off
+
+	desktop_current=$(bspc query -D -n "$spitting_id")
+	[ "$desktop_current" = "$spitter_desktop" ] || bspc node "$spitting_id" -d "$spitter_desktop"
+
+	bspc node "$spitting_id" -f
+	sed -i "/^$spitter_id/d" $tmp_ids
+}
+
+bspc subscribe node_add node_remove | while read -r event
+do
+	case $(echo "$event" | awk '{ print $1 }') in
+		node_add)
+			echo node_add: $(echo "$event" | awk '{print $5 " " $3}')
+            swallow $(echo "$event" | awk '{print $5 " " $3}')
+			;;
+		node_remove)
+			echo node_remove: $(echo "$event" | awk '{print $4 " " $3}')
+			spit $(echo "$event" | awk '{print $4 " " $3}')
+			;;
+	esac
+done

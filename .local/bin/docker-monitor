@@ -1,0 +1,33 @@
+#!/bin/bash
+
+# on_exit() {
+#         for child in $(jobs -p); do
+#                 jobs -p | grep -q $child && kill $child
+#         done
+#         # Extra paranoia
+#         [[ -d "${state_path}" && -w "${state_path}" ]] && rm -rf -- "${state_path}"
+# }
+
+# trap on_exit EXIT QUIT INT 30
+
+curl -sN --unix-socket /var/run/docker.sock http://system/events | while read event; do
+    
+    type=$(echo "$event" | jq -r .Type)
+    action=$(echo "$event" | jq -r .Action)
+    
+    case "${type}::${action}" in
+        "builder")  ;;
+        "config")  ;;
+        "container")  ;;
+        "daemom") ;;
+        "image")  ;;
+        "network")  ;;
+        "node")  ;;
+        "secreyt")  ;;
+        "service")  ;;
+        "volume")  ;;
+        *) echo "${type}::${action}" ;;
+    esac
+
+done
+

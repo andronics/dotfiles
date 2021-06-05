@@ -1,0 +1,179 @@
+#!/bin/sh
+
+ROFI_WIDTH=${ROFI_WIDTH:-"250"}
+ROFI_X_OFFSET=${ROFI_X_OFFSET:-"200"}
+ROFI_Y_OFFSET=${ROFI_Y_OFFSET:-"40"}
+
+# ==============================
+
+STATUS_IDS='{
+    "Connected":{ "icon": "\uF023" },
+    "Connecting":{ "icon": "\uF110" },
+    "Disconnected": { "icon": "\uF09C" },
+    "Reconnecting":{ "icon": "\uF110" }
+}'
+
+# ==============================
+# utilities
+# ==============================
+
+_get_cities() {
+    nordvpn cities "$1" | _strip_update | sed "s|\W|\n|g" | sort -n | awk NF
+}
+
+_get_countries() {
+    nordvpn countries | _strip_update | sed "s|\W|\n|g" | sort -n | awk NF
+}
+
+_get_status() {
+    echo $(nordvpn status | grep "$1" | cut -d ':' -f2)
+}
+
+_get_status_icon() {
+    echo "$STATUS_IDS" | jq -r ".\"$1\".icon"
+}
+
+_rofi() {
+    rofi -dmenu \
+        -theme c64 \
+        -location 1 \
+        -width $ROFI_WIDTH \
+        -xoffset $ROFI_X_OFFSET \
+        -yoffset $ROFI_Y_OFFSET \
+        -p "$1"
+}
+
+_strip_update() {
+    sed "s|A new version of NordVPN is available! Please update the application.||" $1
+}
+
+# ==============================
+# connection
+# ==============================
+
+_connect() {
+    LOCATION=
+    COUNTRY=$(_get_countries | _rofi "Country")
+    if [ $? -eq 0 ]; then
+        LOCATION=$COUNTRY
+        CITY=$(_get_cities $COUNTRY | _rofi "City")
+        if [ $? -eq 0 ]; then
+            LOCATION=$CITY
+        fi
+    fi
+    _disconnect > /dev/null
+    nordvpn c $LOCATION
+}
+
+_disconnect() {
+    nordvpn d
+}
+
+# ==============================
+# status
+# ==============================
+
+_city() {
+    echo $( _get_status "City" )
+}
+
+_country() {
+    echo $( _get_status "Country" )
+}
+
+_ip() {
+    echo $( _get_status "Your new IP" )
+}
+
+_protocol() {
+    echo $( _get_status "Current protocol" )
+}
+
+_received() {
+    echo $( _get_status "Transfer" | awk '{ print $1 " " $2 }')
+}
+
+_sent() {
+    echo $( _get_status "Transfer" | awk '{ print $4 " " $5 }')
+}
+
+_server() {
+    echo $( _get_status "Current server" )
+}
+
+_status() {
+    STATUS=$( _get_status "Status" )
+    ICON=$(_get_status_icon $STATUS)
+    if [ "$STATUS" = "Connected" ]; then
+        echo "$(_city) - $(_country)"
+    else
+        echo "$STATUS"        
+    fi
+}
+
+_status_icon() {
+    STATUS=$( _get_status "Status" )
+    ICON=$(_get_status_icon $STATUS)
+    echo $ICON
+}
+
+_technology() {
+    echo $( _get_status "Current technology" )
+}
+
+
+_uptime() {
+    echo $( _get_status "Uptime" )
+}
+
+# ==============================
+# instance
+# ==============================
+
+_instance() {
+    INSTANCE=$(playerctl metadata | awk '/xesam:title/{ print $1 }')
+    ICON=$(echo $INSTANCE_IDS | jq -r ".\"$INSTANCE\".icon")
+    echo $ICON
+}
+
+_instance_icon() {
+    echo $(playerctl metadata | awk '/xesam:title/{ print $1 }' )
+}
+
+# ==============================
+
+# process global flags
+while getopts "ihqv" opt; do
+    case ${opt} in
+        i) __help "$PKG_DIR" && return 0 ;;
+        h) __help "$PKG_DIR" && return 0 ;;
+        v) __version "$PKG_DIR" && return 0 ;;
+        \?) __usage "$PKG_DIR" && return 1 ;;
+    esac
+done
+shift $((OPTIND -1))
+
+# ==============================
+
+# start initiation
+
+subcommand=$1
+shift 2>/dev/null
+
+case "$subcommand" in
+    cities) _get_cities $* ;;
+    city) _city $* ;;
+    countries) _get_countries $* ;;
+    connect) _connect $* ;;
+    country) _country $* ;;
+    disconnect) _disconnect $* ;;
+    ip) _ip $* ;;
+    protocol) _protocol $* ;;
+    received) _received $* ;;
+    sent) _sent $* ;;
+    server) _server $* ;;
+    status) _status $* ;;
+    status_icon) _status_icon $* ;;
+    technology) _technology $* ;;
+    uptime) _uptime $* ;;
+esac

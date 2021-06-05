@@ -1,0 +1,85 @@
+#!/bin/sh
+
+profile_dir=${HOME:-/home/andronics}
+
+file_name=`basename $0`
+file_dir=$(readlink -f $(dirname $0))
+jobs_dir=$(readlink -f $profile_dir/toolbox/cron/jobs/$file_name)
+
+debug=${DEBUG:-0}
+
+say() {
+   echo $(printf "%s\n" "$*") 
+}
+
+write() {
+	timestamp=$(date +"%Y-%m-%d %H:%M:%S:%N")
+    echo $(printf "%s - %s\n" "$timestamp" "$*") >> "$file_dir/$file_name.log"
+}
+
+log() {
+    say $*
+    write $*
+}
+
+debug() {
+    if [ $debug -ne 0 ]; then 
+        log "$*"
+    fi
+}
+
+usage() {
+    say file_name: $file_name
+    say file_dir: $file_dir
+    say jobs_dir: $jobs_dir
+    say profile_dir: $profile_dir
+    say debug: $debug
+}
+
+
+case $1 in
+
+    install)
+        if [ -f "$file_dir/crontab" ]; then
+            cat "$file_dir/crontab" | crontab -
+        fi
+        ;;
+    
+    links)
+
+        for period in reboot minute hourly daily weekday weekend weekly monthly quarterly yearly
+        do
+            if [ -f $file_dir/$period ]
+			then
+			    say "symbolic link already exists: $file_dir/$period"
+			else
+			    say "creating symbolic link: $period"
+			    ln $file_dir/$file_name $file_dir/$period
+			fi
+        done
+
+        say "all done"
+
+        ;;
+    
+    usage)
+        usage
+        ;;
+
+    *)
+
+        if [ ! -d $jobs_dir ]
+        then
+        	log "jobs folder $jobs_dir does not exist"
+    	else
+    		debug "searching for jobs in $jobs_dir"
+	        for job in $(find $jobs_dir -executable -type f)
+	        do
+	        	debug "... found $job"
+	            exec $job
+	        done
+	    fi
+        ;;
+
+esac
+

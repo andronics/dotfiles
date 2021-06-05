@@ -1,0 +1,4 @@
+#!/bin/sh
+NAME=$1 && shift
+COMMAND=$@
+termite --name $NAME -e "sh -c '(wal -r &);while true; do $COMMAND; done'" &

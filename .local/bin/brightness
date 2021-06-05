@@ -1,0 +1,48 @@
+#!/usr/bin/bash
+
+# ==========================================
+
+MONITOR="DP-2"      # Discover monitor name with: xrandr | grep " connected"
+STEP=5              # Step Up/Down brightnes by: 5 = ".05", 10 = ".10", etc.
+MAX=155             # Max Brightness 999 = "9.99"
+
+# ==========================================
+
+CurrBright=$( xrandr --verbose --current | grep ^"$MONITOR" -A5 | tail -n1 )
+CurrBright="${CurrBright##* }"  # Get brightness level with decimal place
+
+Left=${CurrBright%%"."*}
+Right=${CurrBright#*"."}
+
+# ==========================================
+
+MathBright="0"
+
+[[ "$Left" != 0 && "$STEP" -lt 10 ]] && STEP=10     # > 1.0, only .1 works
+[[ "$Left" != 0 ]] && MathBright="$Left"00          # 1.0 becomes "100"
+[[ "${#Right}" -eq 1 ]] && Right="$Right"0          # 0.5 becomes "50"
+
+MathBright=$(( MathBright + Right ))
+
+# ==========================================
+
+case "$1" in
+    up|+) MathBright=$(( MathBright + STEP )) ;;
+    down|-) MathBright=$(( MathBright - STEP ));;
+    reset|-) MathBright=100;;
+esac
+
+[[ "${MathBright:0:1}" == "-" ]] && MathBright=0
+[[ "$MathBright" -gt $MAX  ]] && MathBright=$MAX
+
+if [[ "${#MathBright}" -eq 3 ]] ; then
+    MathBright="$MathBright"000
+    CurrBright="${MathBright:0:1}.${MathBright:1:2}"
+else
+    MathBright="$MathBright"000
+    CurrBright=".${MathBright:0:2}"
+fi
+
+# ==========================================
+
+xrandr --output "$MONITOR" --brightness "$CurrBright"

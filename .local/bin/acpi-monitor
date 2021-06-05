@@ -1,0 +1,27 @@
+#!/bin/bash
+
+# on_exit() {
+#         for child in $(jobs -p); do
+#                 jobs -p | grep -q $child && kill $child
+#         done
+#         # Extra paranoia
+#         [[ -d "${state_path}" && -w "${state_path}" ]] && rm -rf -- "${state_path}"
+# }
+
+# trap on_exit EXIT QUIT INT 30
+
+nc -U /var/run/acpid.socket | while read -a action; do
+    echo ${action[0]}
+    echo ${action[1]}
+    echo ${action[2]}
+    echo ${action[3]}
+    case ${action[0]} in
+        "button/f20")  ;;
+        "button/mute") audio toggle-mute ;;
+        "button/prog1") betterlockscreen -l blur;;
+        "button/volumedown") audio vol-down ;;
+        "button/volumeup") audio vol-up ;;
+    esac
+
+done
+

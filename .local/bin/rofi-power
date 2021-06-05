@@ -1,0 +1,37 @@
+#!/usr/bin/env sh
+
+prompt=${2:-"Power Menu"}
+theme=${1:-"card"}
+
+# Options
+shutdown=""
+reboot=""
+lock=""
+suspend=""
+logout=""
+
+options="$shutdown\n$reboot\n$lock\n$suspend\n$logout"
+
+choice=$(echo -e $options | rofi -dmenu -location 7 -selected-row 1 -theme "themes/$theme.rasi" -p "$prompt")
+
+_notify() {
+    notify-send "$prompt" "$choice $*"
+}
+
+case $choice in
+    $shutdown)
+        _notify systemctl poweroff
+        ;;
+    $reboot)
+		_notify systemctl reboot
+        ;;
+    $lock)
+		_notify betterlockscreen -l
+        ;;
+    $suspend)
+        _notify systemctl suspend
+        ;;
+    $logout)
+        _notify bspc quit
+        ;;
+esac

@@ -1,0 +1,98 @@
+#!/usr/bin/bash
+
+ds() {
+
+    PKG_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
+    SVC_DIR=/storage/services
+
+    local OPTIND
+
+    # process global flags
+    while getopts "hqv" opt; do
+        case ${opt} in
+            h) __help "$PKG_DIR" && return 0 ;;
+            v) __version "$PKG_DIR" && return 0 ;;
+            \?) __usage "$PKG_DIR" && return 1 ;;
+        esac
+    done
+
+    shift $((OPTIND -1))
+
+    local subcommand=$1
+    shift
+
+    case "$subcommand" in
+        exec) ds_exec $* ;;
+        ip) ds_ip $* ;;
+        remove) ds_remove $* ;;
+        up|down|start|stop|restart) ds_state $subcommand $* && return 1 ;;
+    esac
+
+}
+
+# ==============================
+
+ds_exec() {
+    cmd=${2:="/sh"}
+    printf "executing %s on host %s\n" $cmd $1
+    docker exec -it $1 $cmd
+}
+
+
+# ==============================
+
+ds_ip() {
+
+    for container in $(docker ps -aq | egrep ^$1 | sort); do
+        name=$(docker inspect -f '{{.Name}}' $container | sed 's|/||g')
+        image=$(docker inspect -f '{{.Config.Image}}' $container)
+        address=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' $container)
+        printf "%s - %s - %s - %s\n" $container $name $image $address
+    done
+}
+
+# ==============================
+
+ds_remove() {
+    for container in $(docker ps -aq | egrep ^$1); do
+        printf "removing container: %s\n" $container
+        docker rm -f $container
+    done
+}
+
+# ==============================
+
+ds_state() {
+    root_folder="${SVC_DIR}/$2"
+    
+    if [ ! -d "$root_folder" ]; then
+        printf "folder does not exist - %s\n" $root_folder
+    else
+        pushd $root_folder 1>/dev/null
+        case "$1" in
+            "down" | "stop")
+                docker-compose down
+                ;;
+            "up" | "start")
+                docker-compose up -d
+                ;;
+            "restart")
+                docker-compose down
+                docker-compose up -d
+                ;;
+        esac
+        popd 1>/dev/null
+    fi
+}
+
+# ==============================
+
+command=$1
+shift
+
+case "$command" in
+    exec) ds_exec $* ;;
+    ip) ds_ip $* ;;
+    remove) ds_remove $* ;;
+    up|down|start|stop|restart) ds_state $command $* && return 1 ;;
+esac

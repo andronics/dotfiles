@@ -1,0 +1,7 @@
+#!/bin/sh
+
+# Easily search bash history and paste to current window
+
+tac $HOME/.bash_history | awk '!x[$0]++' | dmenu -p "History" -i -l 25 | xclip -selection clipboard
+xdotool type "$(xclip -o -selection clipboard)" 2>&1 
+

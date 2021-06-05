@@ -1,0 +1,13 @@
+#!/bin/bash
+
+# draw a rectangle using slop then read the geometry value
+read -r X Y W H < <(slop -f "%x %y %w %h" -b 4 -t 0 -q)
+
+# create a variable to be used for termite name option
+r=$(tr -dc A-Za-z0-9 </dev/urandom | head -c 10)
+
+# add bspc rule for geometry
+bspc rule -a "Termite:$r" -o rectangle="${W}x${H}+${X}+${Y}" state="floating"
+
+# launch termite
+termite --name "$r"

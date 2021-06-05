@@ -1,0 +1,10 @@
+#!/bin/sh
+session=${1:-"scratch"}
+case $session in 
+    scratch)
+        tdrop -ma -s $session --name "scratch" -h 30% st
+        ;;
+    *)
+        tdrop -ma -s $session -h 40% -w 40% -x 30% -y 30% st
+        ;;
+esac

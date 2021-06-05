@@ -1,0 +1,201 @@
+#!/bin/sh
+
+# ==============================
+
+VOLUME_MAX="${VOLUME_MAX:-150}"
+VOLUME_STEP="${VOLUME_STEP:-5}"
+
+# ==============================
+
+DEVICE_IDS='{
+    "alsa_output.pci-0000_0a_00.1.hdmi-stereo-extra1": {
+        "name": "Speakers",
+        "icon": "\uF9C2"
+    },
+    "bluez_sink.94_DB_56_F5_8F_9E.a2dp_sink": {
+        "name": "Headphones",
+        "icon": "\uF7CA"
+    },
+    "alsa_output.pci-0000_00_1b.0.analog-stereo": {
+        "name": "Speakers",
+        "icon": "\uF9C2"
+    }
+}'
+
+LEVEL_IDS='{
+    "lowest": "\uF026",
+    "low": "\uF027",
+    "medium": "\uFA7F",
+    "high": "\uFA7D",
+    "highest": "\uF028",
+    "mute": "\uFC5D"
+}'
+
+# ==============================
+# controls
+# ==============================
+
+
+_next_sink() {
+    SINK_CURRENT=$(_sink_current)
+    SINK_IDXS=()
+
+    local i=0
+    while read -r line; do
+        SINK_IDXS[$i]=$(echo "$line" | cut -f1)
+        i=$((i + 1))
+    done <<< $(pactl list short sinks)
+
+    if [ ${#SINK_IDXS[@]} -eq 0 ]; then
+        return
+    fi
+
+
+    local SINK_NEXT
+    if [ "$SINK_CURRENT" -ge "${SINK_IDXS[-1]}" ]; then
+        SINK_NEXT=${SINK_IDXS[0]}
+    else
+        for IDX in "${SINK_IDXS[@]}"; do
+            if [ "$SINK_CURRENT" -lt "$IDX" ]; then
+                SINK_NEXT=$IDX
+                break
+            fi
+        done
+    fi
+
+    pacmd set-default-sink "$SINK_NEXT"
+
+    local inputs
+    inputs="$(pactl list short sink-inputs | cut -f 1)"
+    for i in $inputs; do
+        pacmd move-sink-input "$i" "$SINK_NEXT"
+    done
+}
+
+_toggle_mute() {
+    SINK=$(_sink_current)
+    pactl set-sink-mute "$SINK" "toggle"
+}
+
+_vol() {
+    SINK=$(_sink_current)
+    echo $(_sink_volume "$SINK")%
+}
+
+_vol_down() {
+    SINK=$(_sink_current)
+    pactl set-sink-volume "$SINK" "-$VOLUME_STEP%"
+}
+
+_vol_up() {
+    SINK=$(_sink_current)
+    VOLUME_CURRENT=$(_sink_volume "$SINK")
+    local VOLUME_MAX_LIMIT=$((VOLUME_MAX - VOLUME_STEP))
+    if [ "$VOLUME_CURRENT" -le "$VOLUME_MAX" ] && [ "$VOLUME_CURRENT" -ge "$VOLUME_MAX_LIMIT" ]; then
+        pactl set-sink-volume "$SINK" "$VOLUME_MAX%"
+    elif [ "$VOLUME_CURRENT" -lt "$VOLUME_MAX_LIMIT" ]; then
+        pactl set-sink-volume "$SINK" "+$VOLUME_STEP%"
+    fi
+}
+
+# ==============================
+# icons
+# ==============================
+
+_device() {
+    SINK=$(_sink_current)
+    SINK_NAME=$(_sink_name "$SINK")
+    echo $DEVICE_IDS | jq -r ".\"$SINK_NAME\".name"
+}
+
+_device_icon() {
+    SINK=$(_sink_current)
+    SINK_NAME=$(_sink_name "$SINK")
+    echo $DEVICE_IDS | jq -r ".\"$SINK_NAME\".icon"
+}
+
+_level() {
+    SINK=$(_sink_current)
+    if [[ "$(_sink_muted $SINK)" = "yes" ]]; then
+        echo Muted
+    else
+        echo $(_sink_volume "$SINK")%
+    fi
+}
+
+_level_icon() {
+    SINK=$(_sink_current)
+    if [[ "$(_sink_muted $SINK)" = "yes" ]]; then
+        LEVEL="mute"
+    else
+        LEVEL=$(_level_from_vol "$SINK")
+    fi
+    echo $LEVEL_IDS | jq -r ".\"$LEVEL\""
+}
+
+_level_from_vol() {
+    VOLUME=$(_sink_volume $1)
+    case $VOLUME in
+        [0-9]|1[0-9]) echo "lowest" ;;
+        [2-3][0-9]) echo "low" ;;
+        [4-5][0-9]) echo "medium" ;;
+        [6-7][0-9]) echo "high" ;;
+        [8-9][0-9]|1[0-4][0-9]|150) echo "highest" ;;
+        *) echo "fucked" ;;
+    esac
+}
+
+# ==============================
+# sinks
+# ==============================
+
+_sink_current() {
+    if ! pulseaudio --check; then
+        return 1
+    fi
+    pacmd list-sinks | awk '/\* index:/{print $3}'
+}
+
+_sink_muted() {
+    pacmd list-sinks | grep -A 15 "index: $1" | awk '/muted/ {print $2; exit}'
+}
+
+_sink_name() {
+    pactl list sinks short | awk -v sink="$1" '{ if ($1 == sink) {print $2} }'
+}
+
+_sink_volume() {
+    pacmd list-sinks | grep -A 15 'index: '"$1"'' | grep 'volume:' | grep -E -v 'base volume:' | awk -F : '{print $3; exit}' | grep -o -P '.{0,3}%' | sed 's/.$//' | tr -d ' '
+}
+
+
+# ==============================
+
+# process global flags
+while getopts "ihqv" opt; do
+    case ${opt} in
+        i) __help "$PKG_DIR" && return 0 ;;
+        h) __help "$PKG_DIR" && return 0 ;;
+        v) __version "$PKG_DIR" && return 0 ;;
+        \?) __usage "$PKG_DIR" && return 1 ;;
+    esac
+done
+shift $((OPTIND -1))
+
+# ==============================
+
+# start initiation
+
+subcommand=$1
+shift
+
+case "$subcommand" in
+    device) _device $* ;;
+    device-icon) _device_icon $* ;;
+    level) _level $* ;;
+    level-icon) _level_icon $* ;;
+    next-sink) _next_sink $* ;;
+    toggle-mute) _toggle_mute $* ;;
+    vol-down) _vol_down $* ;;
+    vol-up) _vol_up $* ;;
+esac

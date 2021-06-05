@@ -1,0 +1,293 @@
+#!/usr/bin/bash
+
+# ==============================
+
+project_archive() {
+    
+    local folder=$(project_root)
+
+    if [[ "$folder" == "" ]]; then
+    
+        info "no project root\n"
+    
+    else
+        
+        local name=$(project get -i name)
+        local version=$(project get -i version)
+        local archive="/storage/archive/project/$(echo $name | sed -e "s/^@//g" -e "s/\//-/g")-v$version.tar.gz"
+        local archive_folder=$(dirname "$archive")
+
+        if [ ! -d "$archive_folder" ]; then
+            mkdir -p "$archive_folder"
+        fi
+            
+        tar -zcpf "$archive" \
+            --warning="no-file-changed" \
+            --exclude-vcs-ignores \
+            --exclude="$folder/.git" \
+            --exclude="$folder/*.log" \
+            --exclude="$folder/node_modules" \
+            "$folder" &>/dev/null
+    
+        local size=$(du -h "$archive" | awk '{ print $1; }')
+        
+        info "    name    : %s\n" $name
+        printf "    version : %s\n" $version
+        printf "    root    : %s\n" $folder
+        printf "    archive : %s\n" $archive
+        printf "    size    : %s\n" $size
+    
+     fi
+}
+
+# ==============================
+
+project_clone() {
+    printf "cloning project\n"
+}
+
+# ==============================
+
+project_commit() {
+    printf "committing project\n"
+}
+
+# ==============================
+
+project_init() {
+    
+    printf "initiating project\n"
+
+    mkdir /storage/
+    pushd /storage/projects
+
+    git init
+    git add .
+    git commit -m "project initiation"
+
+    repo_name=${2:="default repo desc"}
+    repo_org=${2:="default repo desc"}
+    repo_desc=${2:="default repo desc"}
+    repo_homepage=${2:="default repo desc"}
+
+    repo_url=$(hub create -p -d $repo_desc -h $repo_homepage  )
+
+    git push -u 
+}
+
+# ==============================
+
+project_get() {
+
+    local dir=$(project root)
+    local file="package.json"
+    local identity="name"
+
+    while [ "${1:0:1}" == "-" ]; do
+        case "$1" in
+            "-d"|"--dir")
+                dir=$(project root -d "$2")
+                shift
+                ;;
+            "-f"|"--file")
+                file="$2"
+                shift
+                ;;
+            "-i"|"--identity")
+                identity="$2"
+                shift
+                ;;
+            "--")
+                shift
+                break
+                ;;
+            *)
+                printf "unsupported flag: %s\n" "$1"
+                shift
+                ;;
+        esac
+        shift
+    done
+
+    local result=$(jq -r ".$identity" "$dir/$file")
+    echo $result
+
+}
+
+# ==============================
+
+project_increment() {
+    
+    # https://stackoverflow.com/questions/8653126/how-to-increment-version-number-in-a-shell-script
+    
+    local usage=" USAGE: $FUNCNAME [-l] [-t] <version> [<position>] [<leftmost>]
+        
+        -l          : remove leading zeros
+        -t          : drop trailing zeros
+        
+        <version>   : The version string.
+        <position>  : Optional. The position (starting with one) of the number 
+                      within <version> to increment.  If the position does not 
+                      exist, it will be created.  Defaults to last position.
+        <leftmost>  : The leftmost position that can be incremented.  If does not
+                      exist, position will be created.  This right-padding will
+                      occur even to right of <position>, unless passed the -t flag."
+
+    # Get flags
+    
+    local flag_remove_leading_zeros=0
+    local flag_drop_trailing_zeros=0
+    
+    while [ "${1:0:1}" == "-" ]; do
+        if [ "$1" == "--" ]; then
+            shift
+            break
+        elif [ "$1" == "-l" ]; then
+            flag_remove_leading_zeros=1
+        elif [ "$1" == "-t" ]; then
+            flag_drop_trailing_zeros=1
+        else
+            echo -e "unsupported flag: ${1}\n$usage"
+            return 1
+        fi
+        shift
+    done
+
+    # Get arguments.
+    if [ ${#@} -lt 1 ]; then
+        echo "$usage"
+        return 1
+    fi
+    
+    local v="${1}"             # version string
+    local targetPos=${2-last}  # target position
+    local minPos=${3-${2-0}}   # minimum position
+
+    # Split version string into array using its periods. 
+    
+    local IFSbak; IFSbak=IFS; IFS='.' # IFS restored at end of func to                     
+    read -ra v <<< "$v"               #  avoid breaking other scripts.
+
+    # Determine target position.
+    if [ "${targetPos}" == "last" ]; then 
+        if [ "${minPos}" == "last" ]; then
+            minPos=0
+        fi
+        targetPos=$((${#v[@]}>${minPos}?${#v[@]}:$minPos))
+    fi
+
+    #debug info 
+    # printf "v = %s | tp = %s | mp = %s\n" "$v" "$targetPos" "$minPos"
+
+    if [[ ! ${targetPos} -gt 0 ]]; then
+        echo -e "Invalid position: '$targetPos'\n$usage"
+        return 1
+    fi
+    (( targetPos--  )) || true # offset to match array index
+
+    # Make sure minPosition exists.
+    while [ ${#v[@]} -lt ${minPos} ]; do
+        v+=("0")
+    done
+
+    # Increment target position.
+    v[$targetPos]=`printf %0${#v[$targetPos]}d $((10#${v[$targetPos]}+1))`;
+
+    # Remove leading zeros, if -l flag passed.
+    if [ $flag_remove_leading_zeros == 1 ]; then
+        for (( pos=0; $pos<${#v[@]}; pos++ )); do
+            v[$pos]=$((${v[$pos]}*1))
+        done
+    fi
+
+    # If targetPosition was not at end of array, reset following positions to
+    #   zero (or remove them if -t flag was passed).
+    if [[ ${flag_drop_trailing_zeros} -eq "1" ]]; then
+        for (( p=$((${#v[@]}-1)); $p>$targetPos; p-- )); do
+            unset v[$p]
+        done
+    else
+        for (( p=$((${#v[@]}-1)); $p>$targetPos; p-- )); do
+            v[$p]=0
+        done
+    fi
+
+    echo "${v[*]}"
+    IFS=IFSbak
+    return 0
+
+}
+
+# ==============================
+
+project_root() { 
+
+    local dir="$(pwd)"
+    local file="package.json"
+
+    while [ "${1:0:1}" == "-" ]; do
+        printf "arg1 : %s | arg2: %s\n" "$1" "$2"
+        if [ "$1" == "--" ]; then
+            shift
+            break
+        elif [[ "$1" == "-d" || "$1" == "--dir" ]]; then
+            dir=$(readlink -f "$2")
+            shift
+        elif [[ "$1" == "-f"  || "$1" == "--file" ]]; then
+            file=$2
+            shift
+        else
+            echo -e "invalid flag: ${1}\n"
+            return 1
+        fi
+        shift
+    done
+
+    while [[ "$dir" != "/" ]]; do
+        local path=$(find "$dir" -maxdepth 1 -mindepth 1 -iname "$file")
+        if [[ "$path" != "" ]]; then
+            echo $(dirname "$path")
+            return 0
+        else
+            dir=$(readlink -f "$dir/..")
+        fi
+    done
+    
+    return 1
+
+}
+
+# ==============================
+
+project_restore() {
+    printf "restoring project\n"
+}
+
+# ==============================
+
+project_set() {
+    local filter=${1:-"."}
+    local value=${2:-""}
+    local file=${3:-"package.json"}
+    local root=$(project_root . $file)
+    local result=$(jq -r "'.$filter |= '$value'" "$root/$file")
+    echo $result
+    # echo $result > "$root/$file"
+}
+
+# ==============================
+
+command=$1
+shift 
+
+case "$command" in
+    "archive") project_archive "$*" ;;
+    "clone") project_clone "$*" ;;
+    "commit") project_commit "$*" ;;
+    "get") project_get $* ;;
+    "increment") project_increment "$*" ;;
+    "init") project_init "$*" ;;
+    "root") project_root "$*" ;;
+    "restore") project_restore "$*" ;;
+    "set") project_set "$*" ;;
+esac

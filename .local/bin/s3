@@ -1,0 +1,45 @@
+#!/usr/bin/bash
+
+# ==============================
+
+s3_mount() {
+
+    printf "Attempting to mounting s3://%s/ to %s\n" $1 $2
+    
+    if [ ! -d $2 ]; then
+        printf "Mountpoint does not exists. creating %s\n\n" $2
+        mkdir -p $2
+    fi
+
+    count=$(`df -t fuse.s3fs | grep $2 | wc -l`)
+
+    if [ count > 0 ]; then
+        printf "folder already contains mountpoint: %s\n" $1
+    else
+        s3fs -o allow_other -o umask=0022 $1 $2
+    fi
+
+} 
+
+# ==============================
+
+s3_umount() {
+    printf "Attempting to unmounting s3://%s/ to %s\n" $1 $2
+}
+
+# ==============================
+
+s3_sync() {
+    printf "Syncing s3://%s/ to %s\n" $1 $2
+}
+
+# ==============================
+
+command=$1
+shift 
+
+case "$command" in
+    mount) s3_mount $* ;;
+    sync) s3_sync $* ;;
+    umount) s3_umount $* ;;
+esac

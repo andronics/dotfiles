@@ -1,0 +1,20 @@
+#!/bin/sh
+# https://pastebin.com/giwNqG33
+
+_retrieve() {
+    URL=$(printf "https://pastebin.com/raw/%s" $1)
+    DATA=$(curl --silent "$(printf "https://pastebin.com/raw/%s" $1)")
+    echo $DATA
+}
+
+
+# ==============================
+
+# start initiation
+
+subcommand=$1
+shift
+
+case "$subcommand" in
+    retrieve) _retrieve "$*" ;;
+esac

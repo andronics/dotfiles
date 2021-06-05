@@ -1,0 +1,29 @@
+#!/usr/bin/bash
+
+# Opens a dmenu prompt for selecting a search engine and providing a search query
+# To avoid issues with spaces and special characters html encoding is applied to the query
+
+history="$HOME/.config/search/history"
+providers="$HOME/.config/search/providers"
+
+_encode() {
+    echo "$1" | sed 's/%/%25/g;s/\s/%20/g;s/!/%21/g;s/"/%22/g;s/#/%22/g;s/\$/%24/g;s/&/%26/g;s/\x27/%27/g;s/)/%29/g;s/(/%28/g;s/\*/%2A/g;s/\+/%2B/g;s/,/%2C/g;s/-/%2D/g;s/\./%2E/g;s/\//%2F/g;s/:/%3A/g;s/;/%3B/g;s/</%3C/g;s/=/%3D/g;s/>/%3E/g;s/\?/%3F/g;s/@/%40/g;s/]/%5D/g;s/\\/%5C/g;s/\[/%5B/g;s/\^/%5E/g;s/_/%5F/g;s/`/%60/g;s/}/%7D/g;s/|/%7C/g;s/{/%7B/g;s/~/%7E/g'
+}
+
+url=$(sort "$providers" | sed 's/:.*//' | dmenu -i -p "Search Engine" | xargs -I % grep "%:" "$providers" | sed 's/.*://')
+search=$(sort "$history" | dmenu -i -p "Search")
+
+# Echo to history file
+if [ ! "$(grep -q "$search" < "$history")" ]; then
+    if [ "$(wc -l < $history)" -gt 500 ]; then
+        sed -i "1s/^/$search\n/;$ d" $history
+    else
+        echo "$search" >> $history
+    fi
+fi
+
+# Open browser if search query provided
+if [ -n "$search" ] && [ "$search" != "" ]; then
+    echo "$url$(_encode "$search")"
+    $BROWSER "$1" "$url$(_encode "$search")" > /dev/null
+fi

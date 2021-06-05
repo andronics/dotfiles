@@ -1,0 +1,170 @@
+#!/bin/sh
+
+# i3block for displaying the current temperature, humidity and precipitation, if wttr.in i unavailable then WEATHER UNAVAILABLE will be displayed
+
+# ==============================
+
+INSTANCE_IDS='{
+    "chrome": { "icon": "\uE743" },
+    "chromium": { "icon": "\uE743" },
+    "facebook": { "icon": "\uF70C" },
+    "firefox": { "icon": "\uF269" },
+    "mpv": { "icon": "\uE743" },
+    "ncspot": { "icon": "\uF1BC" },
+    "reddit": { "icon": "\uF281" },
+    "soundcloud": { "icon": "\uF1BE" },
+    "spotify": { "icon": "\uF1BC" },
+    "steam": { "icon": "\uF1B6" },
+    "whatsapp": { "icon": "\uF232" },
+    "youtube": { "icon": "\uF2B1" }
+}'
+
+STATE_IDS='{
+    "Paused": { "icon": "\uF04C" },
+    "Playing": { "icon": "\uF04B" },
+    "Stopped": { "icon": "\uF04D" }
+}'
+
+# ==============================
+# controls
+# ==============================
+
+_loop() {
+    STATUS=$(playctl loop)
+    case "$STATUS" in
+        None)
+            playerctl loop Track ;;
+        Track)
+            playerctl loop Playlist ;;
+        Playlist)
+            playerctl loop None ;;
+    esac
+}
+
+_next() {
+   playerctl next
+}
+
+_playpause() {
+    playerctl play-pause
+}
+
+_previous() {
+    playerctl previous
+}
+
+_seek() {
+    playerctl position $1
+}
+
+_shuffle() {
+    STATUS=$(playerctl shuffle)
+    case "$STATUS" in
+        On)
+            playerctl shuffle Off ;;
+        Off)
+            playerctl shuffle On ;;
+    esac
+}
+
+_state() {
+    
+    STATE=""
+    STATUS=$(playerctl status 2>/dev/null)
+    
+    case "$STATUS" in
+        Playing) STATE="Paused" ;;
+        Paused|Stopped|"") STATE="Playing" ;;
+    esac
+
+    echo $STATE_IDS | jq -r ".\"$STATE\".icon"
+}
+
+_stop() {
+    playerctl stop
+}
+
+_toggle() {
+    PLAYER="spotify"
+    case $PLAYER in
+        spotify) spotify-tray --toggle ;;
+    esac
+}
+
+
+# ==============================
+# instance
+# ==============================
+
+_instance() {
+    INSTANCE=$(playerctl metadata | awk '/xesam:title/{ print $1 }')
+    ICON=$(echo $INSTANCE_IDS | jq -r ".\"$INSTANCE\".icon")
+    echo $ICON
+}
+
+_instance_icon() {
+    echo $(playerctl metadata | awk '/xesam:title/{ print $1 }' )
+}
+
+
+# ==============================
+# metadata
+# ==============================
+
+_metadata() {
+    printf "%s: %s (%s)" "$(_metadata_artist)" "$(_metadata_title)" "$(_metadata_length)"
+}
+
+_metadata_artist() {
+    echo $(playerctl metadata | awk '/xesam:artist/{for (i=3; i<=NF; i++) print $i}' )
+}
+
+_metadata_length() {
+    LENGTH="00:00:00"
+    MICROSECONDS=$(playerctl metadata mpris:length 2>/dev/null)
+    if [ $? -eq 0 ]; then
+        SECONDS=$(echo "$MICROSECONDS/1000000" | bc)
+        LENGTH="$(date -d "1970-01-01 $SECONDS seconds" +%H:%M:%S)"
+    fi
+    echo "$LENGTH"
+
+}
+
+_metadata_title() {
+    echo $(playerctl metadata | awk '/xesam:title/{for (i=3; i<=NF; i++) print $i}' )
+}
+
+
+# ==============================
+
+# process global flags
+while getopts "ihqv" opt; do
+    case ${opt} in
+        i) __help "$PKG_DIR" && return 0 ;;
+        h) __help "$PKG_DIR" && return 0 ;;
+        v) __version "$PKG_DIR" && return 0 ;;
+        \?) __usage "$PKG_DIR" && return 1 ;;
+    esac
+done
+shift $((OPTIND -1))
+
+# ==============================
+
+# start initiation
+
+subcommand=$1
+shift
+
+case "$subcommand" in
+    instance) _instance $* ;;
+    loop) _loop $* ;;
+    metadata) _metadata $* ;;
+    next) _next $* ;;
+    playpause) _playpause $* ;;
+    previous) _previous $* ;;
+    seek) _seek $* ;;
+    shuffle) _shuffle $* ;;
+    state) _state $* ;;
+    stop) _stop $* ;;
+    toggle) _toggle $* ;;
+esac

@@ -1,0 +1,280 @@
+#!/bin/sh
+
+# i3block for displaying the current temperature, humidity and precipitation, if wttr.in i unavailable then WEATHER UNAVAILABLE will be displayed
+
+# ==============================
+
+OPEN_WEATHER_API_KEY=${OPEN_WEATHER_API_KEY:-"f0bb9a5c81752cc8e88dc16f01a1fed6"}
+OPEN_WEATHER_CITY=${OPEN_WEATHER_CITY:-"2643736"}
+OPEN_WEATHER_LANG=${OPEN_WEATHER_LAND:-"en"}
+OPEN_WEATHER_UNITS=${OPEN_WEATHER_UNITS:-"Metric"}
+
+# ==============================
+
+BEAUFORT_SCALE_IDS='{
+    "0": { "icon": "\uf0B7", "label": "Calm", "speed_min": 0.0 },
+    "1": { "icon": "\uf0B8", "label": "Light Air", "speed_min": 0.5 },
+    "2": { "icon": "\uf0B9", "label": "Light Breeze", "speed_min": 1.6 },
+    "3": { "icon": "\uf0BA", "label": "Gentle Breeze", "speed_min": 3.4 },
+    "4": { "icon": "\uf0BB", "label": "Moderate Breeze", "speed_min": 5.5 },
+    "5": { "icon": "\uf0BC", "label": "Fresh Breeze", "speed_min": 8.0 },
+    "6": { "icon": "\uf0BD", "label": "Strong Breeze", "speed_min": 10.8 },
+    "7": { "icon": "\uf0BE", "label": "High Wind", "speed_min": 13.9 },
+    "8": { "icon": "\uf0BF", "label": "Fresh Gale", "speed_min": 17.2 },
+    "9": { "icon": "\uf0C0", "label": "Strong Gale", "speed_min": 20.8 },
+    "10": { "icon": "\uf0C1", "label": "Storm", "speed_min": 24.5 },
+    "11": { "icon": "\uf0C2", "label": "Violent Storm", "speed_min": 28.5 },
+    "12": { "icon": "\uf0C3", "label": "Hurricane", "speed_min": 32.7  }
+}'
+
+WEATHER_IDS='{
+    "200": { "icon": "\uf01e", "label": "Thunderstorm With Light Rain" },
+    "201": { "icon": "\uf01e", "label": "Thunderstorm With Rain" },
+    "202": { "icon": "\uf01e", "label": "Thunderstorm With Heavy Rain" },
+    "210": { "icon": "\uf01e", "label": "Light Thunderstorm" },
+    "211": { "icon": "\uf016", "label": "Thunderstorm" },
+    "212": { "icon": "\uf01e", "label": "Heavy Thunderstorm" },
+    "221": { "icon": "\uf01e", "label": "Ragged Thunderstorm" },
+    "230": { "icon": "\uf01e", "label": "Thunderstorm With Light Drizzle" },
+    "231": { "icon": "\uf01e", "label": "Thunderstorm With Drizzle" },
+    "232": { "icon": "\uf01e", "label": "Thunderstorm With Heavy Drizzle" },
+    "300": { "icon": "\uf078", "label": "Light Intensity Drizzle" },
+    "301": { "icon": "\uf078", "label": "Drizzle" },
+    "302": { "icon": "\uf078", "label": "Heavy Intensity Drizzle" },
+    "310": { "icon": "\uf078", "label": "Light Intensity Drizzle Rain" },
+    "311": { "icon": "\uf078", "label": "Drizzle Rain" },
+    "312": { "icon": "\uf078", "label": "Heavy Intensity Drizzle Rain" },
+    "313": { "icon": "\uf078", "label": "Shower Rain And Drizzle" },
+    "314": { "icon": "\uf078", "label": "Heavy Shower Rain And Drizzle" },
+    "321": { "icon": "\uf078", "label": "Shower Drizzle" },
+    "500": { "icon": "\uf01a", "label": "Light Rain" },
+    "501": { "icon": "\uf01a", "label": "Moderate Rain" },
+    "502": { "icon": "\uf01a", "label": "Heavy Intensity Rain" },
+    "503": { "icon": "\uf01c", "label": "Very Heavy Rain" },
+    "504": { "icon": "\uf01a", "label": "Extreme Rain" },
+    "511": { "icon": "\uf01a", "label": "Freezing Rain" },
+    "520": { "icon": "\uf01a", "label": "Light Intensity Shower Rain" },
+    "521": { "icon": "\uf01a", "label": "Shower Rain" },
+    "522": { "icon": "\uf01a", "label": "Heavy Intensity Shower Rain" },
+    "531": { "icon": "\uf01a", "label": "Ragged Shower Rain" },
+    "600": { "icon": "\uf062", "label": "Light Snow" },
+    "601": { "icon": "\uf076", "label": "Snow" },
+    "602": { "icon": "\uf062", "label": "Heavy Snow" },
+    "611": { "icon": "\uf062", "label": "Sleet" },
+    "612": { "icon": "\uf062", "label": "Shower Sleet" },
+    "615": { "icon": "\uf062", "label": "Light Rain And Snow" },
+    "616": { "icon": "\uf062", "label": "Rain And Snow" },
+    "620": { "icon": "\uf062", "label": "Light Shower Snow" },
+    "621": { "icon": "\uf062", "label": "Shower Snow" },
+    "622": { "icon": "\uf062", "label": "Heavy Shower Snow" },
+    "701": { "icon": "\uf063", "label": "Mist" },
+    "711": { "icon": "\uf063", "label": "Smoke" },
+    "721": { "icon": "\uf063", "label": "Haze" },
+    "731": { "icon": "\uf063", "label": "Sand, Dust Whirls" },
+    "741": { "icon": "\uf063", "label": "Fog" },
+    "751": { "icon": "\uf063", "label": "Sand" },
+    "761": { "icon": "\uf063", "label": "Dust" },
+    "762": { "icon": "\uf0c8", "label": "Volcanic Ash" },
+    "771": { "icon": "\uf063", "label": "Squalls" },
+    "781": { "icon": "\uf063", "label": "Tornado" },
+    "800": { "icon": "\uf00d", "label": "Clear Sky" },
+    "801": { "icon": "\uf013", "label": "Few Clouds" },
+    "802": { "icon": "\uf013", "label": "Scattered Clouds" },
+    "803": { "icon": "\uf013", "label": "Broken Clouds" },
+    "804": { "icon": "\uf013", "label": "Overcast Clouds" },
+    "900": { "icon": "\uf024", "label": "Tornado" },
+    "901": { "icon": "\uf024", "label": "Tropical Storm" },
+    "902": { "icon": "\uf024", "label": "Hurricane" },
+    "903": { "icon": "\uf024", "label": "Cold" },
+    "904": { "icon": "\uf024", "label": "Hot" },
+    "905": { "icon": "\uf024", "label": "Windy" },
+    "906": { "icon": "\uf024", "label": "Hail" },
+    "951": { "icon": "\uf024", "label": "Calm" },
+    "952": { "icon": "\uf024", "label": "Light Breeze" },
+    "953": { "icon": "\uf024", "label": "Gentle Breeze" },
+    "954": { "icon": "\uf024", "label": "Moderate Breeze" },
+    "955": { "icon": "\uf024", "label": "Fresh Breeze" },
+    "956": { "icon": "\uf024", "label": "Strong Breeze" },
+    "957": { "icon": "\uf024", "label": "High Wind, Near Gale" },
+    "958": { "icon": "\uf024", "label": "Gale" },
+    "959": { "icon": "\uf024", "label": "Severe Gale" },
+    "960": { "icon": "\uf024", "label": "Storm" },
+    "961": { "icon": "\uf024", "label": "Violent Storm" },
+    "962": { "icon": "\uf056", "label": "Hurricane" }
+}'
+
+# ==============================
+# initiation
+# ==============================
+
+_init() {
+    [ ! -d "$CACHE_DIR" ] && mkdir -p "$CACHE_DIR"    
+    if [ ! -f "$CACHE_DATA" ]; then
+        _init_update
+    elif [[ $(_init_verify) -eq 0 ]] && [[ $(_elapsed) -ge $CACHE_EXPIRES ]]; then
+        _init_update
+    fi
+
+}
+
+_init_update() {
+    echo $$ > "$CACHE_PID"
+    URL=$(printf "http://api.openweathermap.org/data/2.5/weather?appid=%s&id=%s&lang=%s&units=%s" \
+        $OPEN_WEATHER_API_KEY \
+        $OPEN_WEATHER_CITY \
+        $OPEN_WEATHER_LANG \
+        $OPEN_WEATHER_UNITS )
+    DATA=$(curl --silent "$URL")
+    if [ $? -eq 0 ]; then
+        echo "$DATA" > "$CACHE_DATA"
+    fi
+    rm "$CACHE_PID"
+}
+
+_init_verify() {
+    if [[ ! -f "$CACHE_PID" ]] || [[ $(cat "$CACHE_PID") -eq $$ ]]; then
+        echo 0
+    else
+        echo 1
+    fi
+}
+
+# ==============================
+# utilities
+# ==============================
+
+_cache_path() {
+    printf "%s/%s_%s_%s" \
+        $CACHE_DIR \
+        $OPEN_WEATHER_CITY \
+        $(_lower $OPEN_WEATHER_LANG) \
+        $(_lower $OPEN_WEATHER_UNITS)
+}
+
+_elapsed() {
+    MODIFIED=$(date +%s -r "$CACHE_DATA")
+    CURRENT=$(date +%s)
+    ELAPSED=$((CURRENT - MODIFIED))
+    echo $ELAPSED
+}
+
+_get_data() {
+    FILTER=${1:-"."}
+    echo $(jq -r "$FILTER" "$CACHE_DATA")
+}
+
+_lower() {
+    echo "$*" | tr '[:upper:]' '[:lower:]'
+}
+
+_speed_to_beaufort() {
+    SPEED=$1
+    declare -a WIND_BEAUFORT
+    while read i; do
+        SPEED_MIN=$(echo $i | jq ".speed_min")
+        if [ $(echo "10*$SPEED/1" | bc) -ge $(echo "10*$SPEED_MIN/1" | bc) ]; then
+            WIND_BEAUFORT=$i
+        fi
+    done <<< "$(echo $BEAUFORT_SCALE_IDS | jq -c ".[]")"
+    echo $WIND_BEAUFORT
+}
+
+# ==============================
+# weather functions
+# ==============================
+
+_beaufort() {
+    SPEED=$(_wind_speed)
+    echo $(_speed_to_beaufort "$SPEED" | jq -r ".label")
+}
+
+_beaufort_icon() {
+    WIND_SPEED=$(_get_wind_speed)
+    echo $(_speed_to_beaufort "$WIND_SPEED" | jq -r ".icon")
+}
+
+_condition() {
+    FILTER=".\"$(_get_data ".weather[0].id")\".label"
+    echo $WEATHER_IDS | jq -r "$FILTER"
+}
+
+_condition_icon() {
+    FILTER=".\"$(_get_data ".weather[0].id")\".icon"
+    echo $WEATHER_IDS | jq -r "$FILTER"
+}
+
+_humidity() {
+    echo $(_get_data ".main.humidity")
+}
+
+_pressure() {
+    echo $(_get_data ".main.pressure")
+}
+
+_sunrise() {
+    echo $(date +%H:%M --date="@$(_get_data ".sys.sunrise")")
+}
+
+_sunset() {
+    echo $(date +%H:%M --date="@$(_get_data ".sys.sunset")")
+}
+
+_temp() {
+    echo $(_get_data ".main.temp")
+}
+
+_visibility() {
+    echo $(_get_data ".visibility")
+}
+
+_wind_degree() {
+    echo $(_get_data ".wind.deg")
+}
+
+_wind_speed() {
+    echo $(_get_data ".wind.speed")
+}
+
+# ==============================
+
+CACHE_DIR=${CACHE_DIR:-"$HOME/.cache/polybar/weather"}
+CACHE_EXPIRES=${CACHE_EXPIRES:-"3600"}
+
+CACHE_DATA="$(_cache_path).json"
+CACHE_PID="$(_cache_path).pid"
+
+# ==============================
+
+# process global flags
+while getopts "ihqv" opt; do
+    case ${opt} in
+        i) __help "$PKG_DIR" && return 0 ;;
+        h) __help "$PKG_DIR" && return 0 ;;
+        v) __version "$PKG_DIR" && return 0 ;;
+        \?) __usage "$PKG_DIR" && return 1 ;;
+    esac
+done
+shift $((OPTIND -1))
+
+# ==============================
+
+# start initiation
+_init
+
+subcommand=$1
+shift
+
+case "$subcommand" in
+    beaufort) _beaufort $* ;;
+    condition) _condition $* ;;
+    humidity) _humidity $* ;;
+    pressure) _pressure $* ;;
+    sunrise) _sunrise $* ;;
+    sunset) _sunset $* ;;
+    temp) _temp $* ;;
+    visibility) _visibility $* ;;
+    wind_degree) _wind_degree $* ;;
+    wind_speed) _wind_speed $* ;;
+    update) _init_update $* ;;
+    data) _get_data $* ;;
+esac

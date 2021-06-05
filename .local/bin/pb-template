@@ -1,0 +1,47 @@
+#!/bin/sh
+
+# ==============================
+
+TEMPLATES='{
+    "icon": { "template": "%%{F%s}%%{T%s}%b%%{T-}%%{F-}" },
+    "label": { "template": "%%{F%s}%%{T%s}%b%%{T-}%%{F-} %%{T1}%s%%{T-}" }
+}'
+
+# ==============================
+
+source ~/.cache/wal/colors.sh
+
+icon="\uE743"
+iconfont="3"
+iconforeground=${color7}
+label="Default"
+template="label"
+
+# ==============================
+
+# process global flags
+while getopts ":c:f:i:l:t:" opt; do
+    case ${opt} in
+        c) iconforeground=$OPTARG ;;
+        f) iconfont=$OPTARG ;;
+        i) icon=$OPTARG ;;
+        l) label=$OPTARG ;; 
+        t) template=$OPTARG ;;
+        \?) echo "Invalid option: $OPTARG" 1>&2 ;;
+        :) echo "Invalid option: $OPTARG requires an argument" 1>&2 ;;
+    esac
+done
+shift $((OPTIND -1))
+
+# ==============================
+
+_get_template() {
+    echo $TEMPLATES | jq -r ".\"$1\".template"
+}
+
+# ==============================
+
+case ${template} in
+    icon) printf "$(_get_template icon)" "$iconforeground" "$iconfont" "$icon" ;;
+    label) printf "$(_get_template label)" "$iconforeground" "$iconfont" "$icon" "$label" ;;
+esac

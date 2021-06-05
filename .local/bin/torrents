@@ -1,0 +1,41 @@
+#!/bin/sh
+# i3block for displaying the number of torrents that are currently downloading, paused and being seeded
+
+DELUGE_USERNAME="andronics"
+DELUGE_PASSWORD="P0pularation"
+
+
+# ======================================================================
+
+_deluge_command() {
+    deluge-console -U $DELUGE_USERNAME -P $DELUGE_PASSWORD $*
+}
+
+# ======================================================================
+
+_clear() {
+    completed=$(_deluge_command info | awk '/100%/ { print $NF }' | paste -sd " " -)
+    _deluge_command rm -c $completed
+}
+
+_status() {
+    STATUS=$1
+    COUNT=$(_deluge_command status | awk "/$STATUS/{print \$2}")
+    echo $COUNT
+}
+
+# ======================================================================
+
+subcommand=$1
+shift 2>/dev/null
+
+case "$subcommand" in
+    clear) _clear $* ;;
+    downloading) _status Downloading ;;
+    paused) _status Paused $* ;;
+    queued) _status Queued $* ;;
+    seeding) _status Seeding $* ;;
+esac
+
+# ======================================================================
+
