@@ -1,4 +1,2 @@
 #!/bin/sh
-bspc monitor LVDS1 -d general dev games media feeds stacks chat audio system
-
-bspc monitor LVDS1 -d system 1 2 3
+bspc monitor LVDS1 -d 1 2 3 system
