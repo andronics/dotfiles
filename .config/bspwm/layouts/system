@@ -15,9 +15,9 @@ if [[ ! $(bspc query --desktops --desktop "$DESKTOP".occupied) || $FORCE -eq 1 ]
 
     # rules
 
-    bspc rule --add Termite:btm -o node=@$DESKTOP:/
+    bspc rule --add Termite:bottom -o node=@$DESKTOP:/
     
     # programs
-    termite-loop btm "btm"
+    t-loop bottom btm &
     
 fi

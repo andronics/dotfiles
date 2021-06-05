@@ -27,9 +27,9 @@ case $(hostname) in
     desktop)
         ;;
     laptop)
-        HOST_RESOLUTION=${HOST_RESOULTION:-"1600x900"}
-        WINDOW_GAP=${WINDOWN_GAP:-"10"}
-        WINDOW_PADDING=${WINDOW_PADDING:-"24"}
+        export HOST_RESOLUTION=${HOST_RESOULTION:-"1600x900"}
+        export WINDOW_GAP=${WINDOWN_GAP:-"20"}
+        export WINDOW_PADDING=${WINDOW_PADDING:-"10"}
         ;;
     *) ;;
 esac

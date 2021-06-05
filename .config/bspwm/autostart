@@ -1,5 +1,7 @@
 #!/bin/sh
 
+# gnome polkit auth agent
+/usr/lib/polkit-gnome/polkit-gnome-authentication-agent-1 &
 
 # compositor
 picom -b --experimental-backends &
@@ -15,23 +17,30 @@ xset s -dpms &
 xrdb ~/.Xresources &
 
 # wallpaper
-nitrogen --set-scaled --head=0 ~/.config/wall.png &
+# nitrogen --set-scaled --head=0 ~/.config/wall.jpg &
+wal -qi ~/.config/wall.jpg
 
 # tray applets
 acpi-monitor &
 blueman-tray &
-copyq &
+### copyq &
 deluge &
 flameshot &
 nm-applet &
-slack -u &
-steam -silent &
-ulauncher --hide-window &
+### slack -u &
+### steam -silent &
+ulauncher --hide-window --no-window-shadow &
 xfce4-power-manager &
 
 # patch - spotify with WM_NAME
-LD_PRELOAD=/usr/lib/libcurl.so.3:/usr/lib/spotifywm.so spotify-tray -m &
+### LD_PRELOAD=/usr/lib/libcurl.so.3:/usr/lib/spotifywm.so spotify-tray -m &
 
 # polybar
 pb-launch top &
 pb-launch bottom &
+
+# mount cloud storage
+gio mount google-drive://andronics@gmail.com &
+gio mount google-drive://scox@maiden.city &
+gio mount google-drive://scox@play.schule &
+

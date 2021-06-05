@@ -2,3 +2,4 @@
 
 bspc rule -r "*"
 bspc rule -a Termite border=off
+bspc rule -a Ulauncher border=off

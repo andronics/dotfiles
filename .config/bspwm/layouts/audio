@@ -16,10 +16,10 @@ if [[ ! $(bspc query --desktops --desktop "$DESKTOP".occupied) || $FORCE -eq 1 ]
 
     # rules
 
-    bspc rule --add Termite:ncspot -o node=@$DESKTOP:/
+    bspc rule --add Termite:spotify -o node=@$DESKTOP:/
     
     # programs
 
-    t-loop ncspot "ncspot"
+    t-loop spotify "ncspot"
     
 fi

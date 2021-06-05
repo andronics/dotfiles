@@ -33,7 +33,7 @@ bspc config pointer_action3 resize_corner
 # Borders
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
 
-bspc config border_width 2s
+bspc config border_width 0s
 bspc config normal_border_color	"#4c566a"
 bspc config active_border_color	"#1e1e1e"
 bspc config focused_border_color "#406ea5"
