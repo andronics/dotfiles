@@ -14,6 +14,7 @@
 #   ... To Desktop  : SUPER + NUMBER
 #   Preselect       : SUPER + ALT
 #   Receptacles     : SUPER + R
+#   Resize          : CONTROL
 #   Screen Capture  : SUPER + PRINT
 #   Session         : SUPER + S
 #   Terminals       : SUPER + RETURN
@@ -100,9 +101,9 @@ super + e; t
 # Executables
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 
-# execute - [a]uthy [b]rowser [c]ode [d]eluge [e]books [g]ames [m]usic [n]emo [p]roccess [s]lack [v]irtualbox
-super + x; {a, b, c, d, e, g, m, n, p, s, v }
-  { authy, $BROWSER, code, deluge, calibre, steam -silent, spotify, nemo, $TERMINAL -e htop, slack, virtualbox }
+super + x; {a, b, c, d, e, g, m, n, p, s, t, v }
+# execute - [a]uthy [b]rowser [c]ode [d]eluge [e]books [g]ames [m]usic [n]emo [p]roccess [s]lack [t]or [v]irtualbox
+  { authy, $BROWSER, code, deluge, calibre, steam -silent, spotify, nemo, $TERMINAL -e htop, slack, tor-browser, virtualbox }
 
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
 # Flags
@@ -186,7 +187,11 @@ super + n; f
 
 # node - move
 super + n; m: {Up,Down,Left,Right}
-  bspc node --swap {north,south,west,east}
+  bspc node --swap {north,soputh,west,east}
+
+# node - postions
+super + n; p: {Up,Down,Left,Right}
+  bspc-side {north,south,west,east}
 
 # node - rotate tree
 super + {_, shift} + n; r: {Left,Right}
@@ -198,26 +203,11 @@ super + n; {_, shift} + {b,e}
 
 # node - close / kill
 super + {_, shift} + q
-  ACTION={close,kill}; \
-  WID=$(xdotool getactivewindow); \
-  bspc node --$ACTION; \
-  notify-send -i $HOME/.config/dunst/normal.png "Window" "Window $WID: $ACTION" }
+  bspc node --{close, kill}
 
 # node - hide / unhide
 super + {_, shift} + t
   { bspc-hide, bspc-unhide }
-
-# shift floating node
-control + shift + { Up, Down, Left, Right }
-   xdo move { -y -20, -y +20, -x -20, -x +20 }
-
-# expand node via direction
-control + alt + { Up, Down, Left, Right }
-  bspc node -z { top 0 20, bottom 0 -20, left -20 0, right 20 0 }
-
-# contract node via direction
-control + shift + alt + { Up, Down, Left, Right }
-   bspc node -z { top 0 -20, bottom 0 20, left 20 0, right -20 0 }
 
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
 # Preselect
@@ -240,12 +230,28 @@ super + r; c
   for win in `bspc query -N -n ".leaf.\!window"`; do bspc node $win -k ; done;
 
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
+# Resize
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+
+# resize - shift position
+control + shift + { Up, Down, Left, Right }
+   xdo move { -y -20, -y +20, -x -20, -x +20 }
+
+# resize - expand node direction
+control + alt + { Up, Down, Left, Right }
+  bspc node -z { top 0 -20, bottom 0 20, left -20 0, right 20 0 }
+
+# resize - contract node direction
+control + shift + alt + { Up, Down, Left, Right }
+   bspc node -z { top 0 20, bottom 0 -20, left 20 0, right -20 0 }
+
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
 # Screen Capture
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
 
 # screen capture - [c]onfig [f]ull [g]ui [s]creen
 super + Print; {c,f,g,s}
-  flameshot {config,full,gui,screen} --path "$HOME/pictures/screenshots"
+  flameshot {config,full,gui,screen} --path "/home/andronics/downloads"
 
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
 # Session
