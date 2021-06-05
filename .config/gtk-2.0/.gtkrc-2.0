@@ -2,7 +2,7 @@
 # Any customization should be done in ~/.gtkrc-2.0.mine instead.
 
 include "/home/andronics/.config/gtk-2.0/.gtkrc-2.0.mine"
-gtk-theme-name="Adwaita-maia-dark"
+gtk-theme-name="Dracula"
 gtk-icon-theme-name="Adwaita"
 gtk-font-name="JetBrainsMonoMedium Nerd Font Medium 11"
 gtk-cursor-theme-name="xcursor-breeze-snow"
