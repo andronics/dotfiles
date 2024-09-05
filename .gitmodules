@@ -1,3 +1,6 @@
 [submodule "gnupg/.gnupg"]
 	path = gnupg/.gnupg
 	url = https://github.com/andronics/gnupg
+[submodule "password-store/.password-store"]
+	path = password-store/.password-store
+	url = https://github.com/andronics/password-store
