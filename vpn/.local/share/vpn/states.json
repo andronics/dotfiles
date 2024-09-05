@@ -1,0 +1,6 @@
+[
+    { "name": "connected", "icon": "\uF023" },
+    { "name": "connecting", "icon": "\uF110" },
+    { "name": "disconnected", "icon": "\uF09C" },
+    { "name": "reconnecting", "icon": "\uF110" }
+]
