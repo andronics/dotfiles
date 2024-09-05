@@ -1,0 +1,43 @@
+[bar/base]
+enable-ipc = true
+fixed-center = true
+monitor = ${env:HOST_MONITOR:LVDS1}
+monitor-exact = true
+monitor-fallback = DP-2
+monitor-strict = false 
+;override-redirect = false
+wm-restack = bspwm
+
+background = ${colors.background}
+foreground = ${colors.foreground}
+
+; border-bottom-size = 2
+; border-top-size = 2
+
+# border-color = ${colors.color3}
+border-size = 0
+
+cursor-click = pointer
+cursor-scroll = pointer
+
+font-0 = "Symbols Nerd Font Mono:style=2048-em:size=9;2"
+font-1 = "Symbols Nerd Font Mono:style=2048-em:size=10;2"
+font-2 = "Symbols Nerd Font Mono:style=2048-em:size=11;3"
+font-3 = "Symbols Nerd Font Mono:style=2048-em:size=12;3"
+font-4 = "Symbols Nerd Font Mono:style=2048-em:size=13;2"
+font-5 = "Symbols Nerd Font Mono:style=2048-em:size=24;4"
+font-6 = "Roboto Mono for Powerline:size=9:weight=medium;2"
+font-7 = "Roboto Mono for Powerline:size=10:weight=medium;2"
+font-8 = "Source Code Pro:style=2048-em:size=12"
+
+height = 30
+width = 100%
+
+line-size = 2
+module-margin-left = 0
+module-margin-right = 0
+offset-x = 0
+offset-y = 0
+padding-left = 0
+padding-right = 0
+radius = 0

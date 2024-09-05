@@ -10,3 +10,6 @@
 [submodule "zsh/.config/zsh/.zplugins/zshrc.d"]
 	path = zsh/.config/zsh/.zplugins/zshrc.d
 	url = https://github.com/mattmc3/zshrc.d
+[submodule "lyrics/.lyrics"]
+	path = lyrics/.lyrics
+	url = https://github.com/andronics/lyrics

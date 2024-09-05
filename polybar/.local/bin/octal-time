@@ -1,0 +1,36 @@
+#!/bin/bash
+
+# Function to calculate the octal time
+calculate_octal_time() {
+    local total_octal_minutes=32768
+    local current_time=$(date +%s)
+    
+    # Calculate seconds since midnight
+    local midnight=$(date -d "00:00:00" +%s)
+    local elapsed_seconds=$((current_time - midnight))
+    
+    # Calculate the octal minute
+    local octal_minute=$(echo "scale=10; $elapsed_seconds / (86400 / $total_octal_minutes)" | bc)
+    
+    # Convert to integer
+    octal_minute=${octal_minute%.*}
+
+    echo $octal_minute
+}
+
+# Initialize variables
+octo_eighth=0.325  # 325 milliseconds in seconds
+counter=0
+
+# Main loop
+while true; do
+    # Wait for 325 milliseconds
+    sleep $octo_eighth
+    
+    # Calculate and print the octal time
+    octal_minute=$(calculate_octal_time)
+    printf "%05o%01d\n" $octal_minute $((counter % 8))
+    
+    # Increment counter
+    counter=$((counter + 1))
+done
