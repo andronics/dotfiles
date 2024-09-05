@@ -1,0 +1,21 @@
+#!/usr/bin/env sh
+
+# ------------------------------
+
+_template_replace() {
+    
+    _template=$1
+    _values=$2
+
+    _keys=$(echo ${_values} | jq -r 'keys[]')
+
+    for _key in ${_keys}; do
+
+        _value=$(echo ${_values} | jq -r --arg k "${_key}" '.[$k]')
+        _template=$(echo $_template | sed "s/{${_key}}/${_value}/g")
+
+    done
+
+    echo ${_template}
+
+}

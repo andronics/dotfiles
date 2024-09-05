@@ -1,0 +1,10 @@
+#!/usr/bin/env sh
+
+_onexit() {
+	for child in $(jobs -p); do
+		jobs -p | grep -q $child && kill $child 2> /dev/null
+	done
+	[[ -d "${state_path}" && -w "${state_path}" ]] && rm -rf -- "${state_path}"
+}
+
+trap _onexit exit quit int 30

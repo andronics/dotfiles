@@ -1,0 +1,70 @@
+#!/usr/bin/env sh
+
+# ------------------------------
+
+source $(which _log)
+
+# ------------------------------
+
+rofi_config="${XDG_CONFIG_HOME}/rofi/config.rasi"
+rofi_format="s"
+rofi_message="Are You Sure"
+rofi_prompt="select"
+rofi_options="No\nYes"
+
+# ------------------------------
+
+_rofi_dmenu() {
+    
+    _prompt=${1:-${rofi_prompt}}
+    _format=${2:-${rofi_format}}
+    _message=${3:-${rofi_message}}
+    
+    _log_info "attempting to listen on tcp port ${_port}..."
+    
+    rofi -config "${rofi_config}" -dmenu -p "${_prompt}" -format "${_format}"
+
+}
+
+_rofi_prompt() {
+
+    _opts=$(getopt --options c:f:l:m:o:w: -l "columns:,format:,lines:,message:,options:,width:" -- "$@")
+
+    [[ $? != 0 ]] && {
+        _log_info "Terminating..."
+        exit 1
+    }
+
+    eval set -- "${_opts}"
+    unset _opts
+
+    _format="s"
+    _message="Are You Sure"
+    _options="No\nYes"
+    
+    _columns="2"
+    _lines="1"
+    _width="250"
+    
+    [[ -p /dev/stdin ]] && read -r _options </dev/stdin
+    
+    while true; do
+        case "$1" in
+            '-f' | '--format')
+                [[ "$2" =~ ^[sidqpfF] ]] && {
+                    _format="$2" && shift 2 && continue
+                } || {
+                    echo "option 'format' has invalid value specified: $2" && exit 1
+                } ;;
+            '-m' | '--message') _message="$2" && shift 2 && continue ;;
+            '-o' | '--options') _options="$2" && shift 2 && continue ;;
+            '--') shift && break ;;
+            *) _log_info "options '$1' is not valid" && exit 1 ;;
+        esac
+    done
+
+    echo -e "${_options}" | rofi -config "${rofi_config}" -dmenu -p "Confirmation" -mesg "${_message}" -format "${_format}" -markup-rows
+
+}
+
+

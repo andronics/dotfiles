@@ -1,0 +1,27 @@
+#!/usr/bin/env sh
+
+# ------------------------------
+
+source "$(which _log)"
+source "$(which _onexit)"
+
+# ------------------------------
+
+acpi_socket="/var/run/acpid.socket"
+
+# ------------------------------
+
+_acpi_listen() {
+
+    _log_info "acpi listening on socket ${acpi_socket}"
+
+    nc -U "${acpi_socket}" | while read -a _action; do
+        printf "%-20s\t%-20s\t%-20s\t%-20s\n" \
+            "${_action[0]}" \
+            "${_action[1]}" \
+            "${_action[2]}" \
+            "${_action[3]}"
+    done
+}
+
+

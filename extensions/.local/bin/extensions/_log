@@ -1,0 +1,68 @@
+#!/usr/bin/env sh
+
+# ------------------------------
+
+log_dir="${XDG_STATE_HOME}/${name}"
+log_path="${log_dir}/${name}.log"
+log_id=$((RANDOM*RANDOM))
+log_level=2
+
+# ------------------------------
+
+# TRACE (5) < DEBUG (4) < INFO (3) < WARNING (2) < ERROR (1) < FATAL (0) 
+
+# ------------------------------
+
+_log_console() {
+    [[ -t 1 ]] && {
+        _log_format=$1 && shift
+        printf "[%10d] %s: ${_log_format}\n" $$ "${name}" $*
+    }
+}
+
+# ------------------------------
+
+_log_fatal() {
+    [[ log_level -ge 0 ]] && {
+        printf "$@" | systemd-cat -t "${name}" -p "crit"
+        _log_console "$@"
+    }
+}
+
+_log_error() {
+    [[ log_level -ge 1 ]] && {
+        printf "$@" | systemd-cat -t "${name}" -p "err"
+        _log_console "$@"
+    }
+}
+
+_log_warning() {
+    [[ log_level -ge 2 ]] && {
+        printf "$@" | systemd-cat -t "${name}" -p "warning"
+        _log_console "$@"
+    }
+}
+
+_log_info(){
+    [[ log_level -ge 3 ]] && {
+        printf "$@" | systemd-cat -t "${name}" -p "info"
+        _log_console "$@"
+    }
+}
+
+_log_debug() {
+    [[ log_level -ge 4 ]] && {
+        printf "$@" | systemd-cat -t "${name}" -p "debug"
+        _log_console "$@"
+    }
+}
+
+_log_trace() {
+    [[ log_level -ge 5 ]] && {
+        printf "$@" | systemd-cat -t "${name}" -p "notice"
+        _log_console "$@"
+    }
+}
+
+
+

@@ -1,0 +1,53 @@
+#!/usr/bin/env sh
+
+# ------------------------------
+
+while [[ $# -gt 0 ]]; do
+
+    _arg="$1"
+
+    # stop processing none positional
+    [[ "${_arg}" != -* ]] && break
+
+    # stop processing if "--" or no positional is encountered
+    [[ "${_arg}" == "--" ]] && shift && break
+
+    # space delimited
+    [[ "${_arg}" == -*  && "${_arg}" != *=* ]] && {
+
+        _name=${_arg}
+
+        [[ "$2" != -* && "$2" != "" ]] && {
+            _value=$2
+            shift 2
+        } || {
+            _value=0
+            shift
+        }
+
+    }
+
+    # sign delimited
+    [[ "${_arg}" == *=* ]] && {
+
+        _name="${_arg%%=*}"
+        _value="${_arg#*=}"
+
+        shift
+
+    }
+
+    _name=$(echo "${_name}" | sed 's/^-\+//;s/-/_/')
+
+    export ${_name}=${_value}
+
+    continue
+
+
+done
+
+set -- $*
+unset _arg
+unset _name
+unset _value
+

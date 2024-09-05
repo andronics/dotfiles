@@ -1,0 +1,78 @@
+#!/usr/bin/sh
+
+# maybe this should be caled CAVA instead
+
+# ------------------------------
+
+spectrum_cava_root="${XDG_CACHE_HOME}/cava"
+
+# ------------------------------
+
+_spectrum() {
+
+    _bar="${bar:-▁▂▃▄▅▆▇█}"
+    _dict="s/\;//g;"
+    _idx=0
+
+    while [ ${_idx} -lt ${#_bar} ]; do
+        _dict="${_dict}s/${_idx}/${_bar:${_idx}:1}/g;"
+        _idx=$(( _idx + 1 ))
+    done
+
+    while read -r _data; do
+        echo ${_data} | sed ${_dict}
+    done
+
+}
+
+_cava() {
+    
+    _id=$1
+    _bars=$2
+
+    _pipe="${spectrum_cava_root}/${_id:-"default"}.fifo"
+    _cfg="${spectrum_cava_root}/${_id:-"default"}.cfg"
+
+    [[ -d "${spectrum_cava_root}" ]] || mkdir -p "${spectrum_cava_root}"
+    [[ -p "${_pipe}" ]] && unlink ${_pipe}
+
+    mkfifo "${_pipe}"
+
+    echo "
+        [general]
+        bars = ${_bars}
+
+        [input]
+        method = pulse
+        source = auto
+
+        [output]
+        method = raw
+        raw_target = ${_pipe}
+        data_format = ascii
+        ascii_max_range = 7
+    " > "${_cfg}"
+
+    cava -p "${_cfg}" &
+
+    _spectrum < ${_pipe}
+
+}
+
+
+# _spectrum() {
+
+#     _bar="${bar:-▁▂▃▄▅▆▇█}"
+#     _dict="s/\d//g;"
+#     _idx=0
+
+#     while [ ${_idx} -lt ${#_bar} ]; do
+#         _dict="${_dict}s/${_idx}/${_bar:${_idx}:1}/g;"
+#         _idx=$((_idx=_idx+1))
+#     done
+
+#     cat | while read -r _data; do
+#         echo ${_data} | sed ${_dict}
+#     done
+
+# }

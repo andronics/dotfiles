@@ -1,0 +1,42 @@
+#!/usr/bin/env sh
+
+# ==============================
+
+source $(which _log)
+source $(which _onexit)
+
+# ==============================
+
+_s3fs_mount() {
+    
+    _log_info "mounting: s3://$1/ to $2"
+    
+    [[ -d $2 ]] || {
+        _log_info "non-existent mountpoint - creating $2"
+        mkdir -p $2
+    }
+    
+    _count=$(`df -t fuse.s3fs | grep $2 | wc -l`)
+    
+    [[ ${_count} -eq 0 ]] || {
+        _log_info "path mounted to other mountpoint: $1\n"
+        exit 1
+    }
+
+    s3fs -o allow_other -o umask=0022 $1 $2
+    
+} 
+
+_s3fs_sync() {
+    
+    _log_info "syncing: s3://$1/ to $2"
+
+}
+
+_s3fs_umount() {
+    
+    _log_info "unmounting: s3://$1/ to $2"
+
+}
+
+# ==============================

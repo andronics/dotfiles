@@ -1,0 +1,82 @@
+#!/usr/bin/env sh
+
+# ------------------------------
+
+source "$(which _log)"
+
+# ------------------------------
+
+xidlehook_socket="${XDG_CACHE_HOME}/${name}/${name}.socket"
+xidlehook_timer=300
+
+# ------------------------------
+
+_xidlehook_delete() {
+
+    _log_info "deleting timer"
+
+    xidlehook-client --socket ${xidlehook_socket} control --action delete >&/dev/null
+
+}
+
+_xidlehook_disable() {
+
+    _log_info "disabling timer"
+
+    xidlehook-client --socket ${xidlehook_socket} control --action disable >&/dev/null
+
+}
+
+_xidlehook_enable() {
+
+    _log_info "enabling timer"
+
+    xidlehook-client --socket ${xidlehook_socket} control --action enable >&/dev/null
+
+}
+
+_xidlehook_idle() {
+    
+    _log_info "monitoring idle time"
+    
+    while true; do
+        
+        _time_ms=$(xprintidle)
+        _time_sec=$(echo  "${_time_ms} 1000 / p" | dc)
+        
+        tput el
+        _log_info "%5d seconds" ${_time_sec}
+        
+        sleep 1
+    
+    done
+}
+
+_xidlehook_init() {
+
+    _command=$1
+    _canceller=$2
+
+    xidlehook \
+        --not-when-fullscreen \
+        --socket "${xidlehook_socket}" \
+        --timer  ${xidlehook_timer} \
+        "${_command}" "${_canceller}"
+
+}
+
+_xidlehook_query() {
+
+    _log_info "querying timer"
+
+    xidlehook-client --socket ${xidlehook_socket} query 1>&2
+
+}
+
+_xidlehook_trigger() {
+
+    _log_info "triggering function"
+
+    xidlehook-client --socket ${xidlehook_socket} control --action trigger >&/dev/null
+
+}

@@ -1,0 +1,41 @@
+#!/usr/bin/env sh
+
+# ------------------------------
+
+source "$(which _log)"
+
+# ------------------------------
+
+_service_install() {
+    _log_info "installing systemd service"
+    systemctl --user enable "${name}"
+}
+
+_service_reload() {
+    _log_info "reloading systemd daemon"
+    systemctl --user stop "${name}"
+}
+
+_service_restart() {
+    _log_info "restarting systemd service"
+    systemctl --user restart "${name}"
+}
+
+_service_start() {
+    _log_info "starting systemd service"
+    systemctl --user start "${name}"
+}
+
+_service_status() {
+    systemctl --user status "${name}" | awk '/Active: /{ print $2 }'
+}
+
+_service_stop() {
+    _log_info "stopping systemd service"
+    systemctl --user stop "${name}"
+}
+
+_service_uninstall() {
+    _log_info "uninstalling systemd service"
+    systemctl --user disable "${name}"
+}

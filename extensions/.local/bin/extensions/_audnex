@@ -1,0 +1,56 @@
+#!/usr/bin/env sh
+
+# ------------------------------
+
+source $(which _template)
+
+# ------------------------------
+
+audnex_host="https://api.audnex.us"
+audnex_region="uk"
+
+# ------------------------------
+
+_audnex_author_by_id() {
+    
+    _query_values="{ \"asin\" : \"$1\" }"
+    _query_template="${audnex_host}/authors/{asin}?region=${audnex_region}"
+    _query_url=$(_template_replace "${_query_template}" "${_query_values}")
+    
+    _audnex_query "${_query_url}"
+
+}
+
+_audnex_author_by_name() {
+    
+    _query_values="{ \"name\" : \"$1\" }"
+    _query_template="${audnex_host}/authors?region=${audnex_region}&name={name}"
+    _query_url=$(_template_replace "${_query_template}" "${_query_values}")
+    
+    _audnex_query "${url}" 
+
+}
+
+_audnex_book() {
+    
+    _query_values="{ \"asin\" : \"$1\" }"
+    _query_template="${audnex_host}/books/{asin}?region=${audnex_region}" 
+    _query_url=$(_template_replace "${_query_template}" "${_query_values}")
+    
+    _audnex_query "${url}"
+
+}
+
+_audnex_chapters() {
+    
+    _query_values="{ \"asin\" : \"$1\" }"
+    _query_template="${audnex_host}/books/{asin}/chapters?region=${audnex_region}" 
+    _query_url=$(_template_replace "${_query_template}" "${_query_values}")
+    
+    _audnex_query "${_query_url}"
+
+}
+
+_audnex_query() {
+    curl --silent "$1"
+}

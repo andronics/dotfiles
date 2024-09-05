@@ -1,0 +1,83 @@
+#!/usr/bin/env sh
+
+# ------------------------------
+
+source $(which _log)
+
+# ------------------------------
+
+kv_dir="$HOME/.kv-${name}"
+
+# ------------------------------
+
+_kv_clear() {
+	_log_info "_kv_clear ${kv_dir}"
+	rm -rf "${kv_dir}"
+}
+
+_kv_del() {
+
+	_key="$1"
+	
+	_kv_validate_key "$_key" || {
+		_log_error "_kv_del invalid param 'key'"
+		return 1
+	}
+	
+	_log_info "_kv_del key ${_key} at ${kv_dir}/${_key}"
+
+	[[ -f "${kv_dir}/${_key}" ]] && \
+		rm -f "${kv_dir}/${_key}"
+
+}
+
+_kv_get() {
+	
+	_key="$1"
+	
+	_kv_validate_key "$_key" || {
+		_log_error "_kv_get - invalid param 'key'"
+		return 1
+	}
+	
+	_log_info "_kv_get key ${_key} at ${kv_dir}/${_key}"
+
+	_value="$([ -f "${kv_dir}/${_key}" ] && \
+		cat "${kv_dir}/${_key}")"
+	
+	echo "${_value}"
+	[ "${_value}" != "" ]
+
+}
+
+_kv_list() {
+	
+	_log_info "_kv_list  at ${kv_dir}"
+	
+	for i in "${kv_dir}/"*; do
+		if [ -f "$i" ]; then
+			_key="$(basename "$i")"
+			echo "${_key}" "$(_kv_get "${_key}")"
+		fi
+	done 
+}
+
+_kv_set() {
+	
+	_key="$1"
+	_value="$2"
+	
+	_kv_validate_key "$_key" || {
+		_log_error "_kv_set() invalid param 'key'"
+		return 1
+	}
+	
+	[[ ! -d "${kv_dir}" ]] && mkdir -p "${kv_dir}"
+
+	echo "${_value}" > "${kv_dir}/${_key}"
+
+}
+
+_kv_validate_key() {
+	[[ "$1" =~ ^[0-9a-zA-Z._:-]+$  ]]
+}

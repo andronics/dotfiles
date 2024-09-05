@@ -1,0 +1,32 @@
+#!/usr/bin/env sh
+
+# ------------------------------
+
+source $(which _log)
+
+# ------------------------------
+
+_jq_query() {
+    
+    _filter=${1}
+    shift   
+    
+    _args=()
+    while [[ $# -gt 0 ]]; do
+        _args+=("--arg" "${1}" "${2}")
+        shift 2
+    done
+
+    _log_debug "applying filter '${_filter}' with arguments: ${_args[*]}"
+    
+    jq -r "${_args[@]}" "${_filter}"
+
+}
+
+_jq_has_value() {
+    _value=${1}
+    _log_debug "has value: ${_value}"
+    jq -r '. | index("'${_value}'") != null'
+}
+
+

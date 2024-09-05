@@ -1,0 +1,49 @@
+#!/usr/bin/env sh
+
+# extract methods from media-upload
+
+
+# ==============================
+
+source "$(which _log)"
+source "$(which _onexit)"
+
+# ==============================
+
+_rclone_transfer() {
+    
+    _log_info "%8s | %-30s" "transfer" "${file}"
+
+    _operations=$(_build_operations "${file}")
+    _options=$(_build_options "${_rclone_subroot}" "${_subroot_name}")
+    
+    rclone rc "options/set" --json "${_options}"
+    rclone rc "sync/move" --json "${_operations}"
+}
+
+_rclone_operation() {
+    _src_fs=$1
+    _dst_fs=$2
+    cat <<EOF
+    {
+        "srcFs": "${_src_fs}",
+        "dstFs": "${_dst_fs}:",
+        "deleteEmptySrcDirs": true
+    }
+EOF
+}
+
+_rclone_options() {
+    _file=$1
+    cat <<EOF
+    {
+        "filter": {
+            "FilterFrom": ["${_file}"] 
+        },
+        "main": {
+            "TPSLimit": 3,
+            "Transfers": 1
+        }
+    }
+EOF
+}

@@ -1,0 +1,50 @@
+#!/usr/bin/env sh
+
+# ------------------------------
+
+shopt -s extglob 
+
+# ------------------------------
+
+source $(which _jq)
+source $(which _log)
+source $(which _onexit)
+
+# ------------------------------
+
+_server_listen() {
+    
+    _port=$1
+    shift
+    
+    _log_info "attempting to listen on tcp port ${_port}..."
+    
+    nc -l -p ${_port} | while read _data; do
+    
+        _log_info "received line: ${_data}"
+        _server_execute "$@"
+    
+        # TODO: Alter to detect other data formats. Assuming the incoming data is already in JSON format.
+        echo "${_data}" | _jq_query '.'
+    
+    done
+
+}
+
+_server_execute() {
+    
+    _func_name=$1
+    shift
+    
+    if declare -f "${_func_name}" > /dev/null; then
+
+        ${_func_name} "$@"
+
+    else
+
+        _log_info "function no found: '${_func_name}'"
+        exit 1
+        
+    fi
+    
+}
