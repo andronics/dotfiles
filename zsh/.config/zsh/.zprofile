@@ -66,7 +66,7 @@ export NPM_CONFIG_PREFIX="${HOME}/.local"
 # ------------------------------
 
 export OLDPATH="${OLDPATH:-${PATH}}"
-export PATH="${OLDPATH}:${GOBIN}:${HOME}/.local/bin/extensions"
+export PATH="${OLDPATH}:${GOBIN}"
 
 # ------------------------------
 
