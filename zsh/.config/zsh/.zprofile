@@ -68,13 +68,6 @@ export NPM_CONFIG_PREFIX="${HOME}/.local"
 export OLDPATH="${OLDPATH:-${PATH}}"
 export PATH="${OLDPATH}:${GOBIN}:${HOME}/.local/bin/extensions"
 
-# export PATH="${PATH}$(find "${HOME}/.local/bin" -type d -printf ":%p")"
-
-# ------------------------------
-
-export SSH_AUTH_SOCK=$(gpgconf --list-dirs agent-ssh-socket)
-
-
 # ------------------------------
 
 [[ $- != *i* ]] && {
@@ -86,6 +79,3 @@ export SSH_AUTH_SOCK=$(gpgconf --list-dirs agent-ssh-socket)
 
 }
 
-# ------------------------------
-
-gpgconf --launch gpg-agent
