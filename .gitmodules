@@ -4,3 +4,6 @@
 [submodule "password-store/.password-store"]
 	path = password-store/.password-store
 	url = https://github.com/andronics/password-store
+[submodule "ssh/.ssh"]
+	path = ssh/.ssh
+	url = https://github.com/andronics/ssh
