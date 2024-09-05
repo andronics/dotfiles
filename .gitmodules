@@ -1,0 +1,3 @@
+[submodule "gnupg/.gnupg"]
+	path = gnupg/.gnupg
+	url = https://github.com/andronics/gnupg
