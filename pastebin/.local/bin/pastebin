@@ -1,0 +1,107 @@
+#!/usr/bin/env sh
+
+name=$(basename $0)
+
+# ------------------------------
+
+# https://pastebin.com/doc_api
+# https://pastebin.com/giwNqG33
+
+# ------------------------------
+
+source $(which _jq)
+source $(which _log)
+source $(which _string)
+
+# ------------------------------
+
+pastebin_cache_dir="${XDG_CACHE_HOME}/${name}"
+pastebin_config_dir="${XDG_CONFIG_HOME}/${name}"
+pastebin_data_dir="${XDG_DATA_HOME}/${name}"
+
+# ------------------------------
+
+pastebin_config=$(cat "${pastebin_config_dir}/config.json")
+
+# ------------------------------
+
+pastebin_api_key=$(echo "${pastebin_config}" | _jq_query '.api_key')
+pastebin_host=$(echo "${pastebin_config}" | _jq_query '.host')
+
+# ------------------------------
+
+source "$(which _args)"
+
+# ------------------------------
+
+_pastebin() {
+
+    [[ $# -eq 0 ]] && {
+        _log_error "command not specified"
+        return 1
+    }
+
+    _command=$1
+    shift 2>/dev/null
+
+    case "${_command}" in
+
+        get) _pastebin_get $* ;;
+        paste) _pastebin_paste $* ;;
+
+        *) _log_warning "command '%s' unsupported" "${_command}" ;;
+        
+    esac
+
+}
+
+_pastebin_get() {
+
+    [[ $# -eq 0 ]] && {
+        _log_info "no record specified"
+        exit 1
+    }
+    
+    _url=$(printf "https://%s/raw/%s" "${pastebin_host}" "$1")
+    curl --silent "${_url}"
+
+}
+
+_pastebin_paste() {
+
+    [[ $# -eq 0 ]] && {
+        _log_info "no value specified"
+        exit 1
+    }
+
+    _code=$1
+    _expires="10M"    # never = N, 10 mins = 10M, 1 hour = 1H
+    _format=
+    _option=paste
+    _private=0      # public = 0, unlisted = 1, private = 2 
+
+    _url=$(printf "https://%s/api/api_post.php" "${pastebin_host}")
+
+    _fields=()
+    
+    _fields+=("api_dev_key=${pastebin_api_key}")
+    _fields+=("api_option=${_option}")
+    _fields+=("api_paste_code=$( _string_url_encode "${_code}") ")
+
+    [[ -n ${_name} ]] && _fields+=("api_paste_name=$( _string_url_encode "${_name}") ")
+    [[ -n ${_expires} ]] && _fields+=("api_paste_expire_date=${_expires}")
+    [[ -n ${_format} ]] && _fields+=("api_paste_format=${_format}")
+    [[ -n ${_private} ]] && _fields+=("api_paste_private=${_private}")
+
+    echo curl -X POST \
+        $( for _field in "${_fields[@]}"; do echo -n " -d ${_field}"; done ) \
+        "$(printf "https://%s/api/api_post.php" "${pastebin_host}")"
+
+}
+
+
+# ------------------------------
+
+_pastebin "$@"
+
+
