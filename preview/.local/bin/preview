@@ -1,0 +1,62 @@
+#!/usr/bin/env sh
+
+name=$(basename $0)
+
+# ------------------------------
+
+source $(which _log)
+
+# ------------------------------
+
+preview_cache_dir="${XDG_CACHE_HOME}/${name}"
+preview_config_dir="${XDG_CONFIG_HOME}/${name}"
+preview_data_dir="${XDG_DATA_HOME}/${name}"
+
+# ------------------------------
+
+_preview() {
+
+    [[ -p /dev/stdin ]] && _path=$(cat) || {
+
+        [[ $# -eq 0 && ! -n ${_path} ]] && {
+            _log_error "path not specified"
+            return 1
+        } || _path=$1
+
+    }
+
+    shift 2>/dev/null
+
+    case "${_path}" in
+        
+        *.png|*.jpg|*.jpeg|*.mkv|*.mp4) mediainfo "${_path}";;
+
+        *.md) glow -s dark "${_path}";;
+        
+        *.pdf) pdftotext "${_path}" -;;
+        
+        *.zip) zipinfo "${_path}";;
+        
+        *.tar.gz) tar -ztvf "${_path}";;
+        
+        *.tar.bz2) tar -jtvf "${_path}";;
+        
+        *.tar) tar -tvf "${_path}";;
+        
+        *.rar) unrar l "${_path}";;
+        
+        *.7z) 7z l "${_path}";;
+        
+        *.html|*.xml) w3m -dump "${_path}";;
+        
+        *.zsh*|*.bash*|*.git*) pistol "${_path}";;
+        
+        *) highlight "${_path}" -O ansi --force ;;
+    
+    esac
+
+}
+
+# ------------------------------
+
+_preview "$@"
