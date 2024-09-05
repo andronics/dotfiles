@@ -1,0 +1,36 @@
+#!/usr/bin/env sh
+
+name=$(basename $0)
+
+# ------------------------------
+
+_x11_info() {
+  
+    [[ $# -eq 0 ]] && {
+        _log_error "command not specified"
+        return 1
+    }
+
+    _command=$1
+    shift 2>/dev/null
+
+    case "${_command}" in
+
+        children) xwininfo -id "$id" -children | sed -n '/[0-9]\+ \(child\|children\):/,$s/ \+\(0x[0-9a-z]\+\).*/\1/p' ;;
+        class) _x11_info_xprop $* | sed -n '/WM_CLASS/s/.*, "\(.*\)"/\1/p' ;;
+        name) _x11_info_xprop $* | grep -P "^WM_NAME\((UTF8_)?STRING\)" | awk '{print $3}' | tr -d '"' ;;
+
+        *) _log_warning "command '%s' unsupported" "${_command}" ;;
+
+
+    esac
+
+}
+
+_x11_info_xprop() {
+    [[ -z "$1" ]] && xprop || xprop -id "$1"
+}
+
+# ------------------------------
+
+_x11_info "$@"

@@ -1,0 +1,61 @@
+#!/usr/bin/env sh
+
+name=$(basename $0)
+
+# ------------------------------
+
+source "$(which _log)"
+
+# ------------------------------
+
+x11_events_field_seperators="[ ,()]+"
+x11_events_mask="keyboard"
+
+# ------------------------------
+
+_x11_events() {
+
+    [[ $# -eq 1 ]] && x11_events_mask=$1
+
+    case "${x11_events_mask}" in
+        "keyboard")
+            _program='
+                /event/ {
+                    event = $1;
+                    window = $8;
+                }
+                /^KeyPress|KeyRelease/ {
+                    a[NR+2]
+                }
+                NR in a {
+                    printf "event: %10s | window: %10s | code: %3s | name: %s\n", event, window, $5, $8
+                }
+            '
+            ;;
+        "mouse")
+            _program='
+                /event/ {
+                    event = $1;
+                    window = $8;
+                }
+                /^MotionNotify/ {
+                    a[NR+1]
+                }
+                NR in a {
+                    printf "event: %10s | window: %10s | x: %3s | y: %4s\n", event, window, $8, $9
+                }
+            '
+            ;;
+        *)
+            _log_info "unsupport mask - ${x11_events_mask}"
+            exit
+            ;;
+    esac
+
+    xev -event "${x11_events_mask}" | awk -F "${x11_events_field_seperators}" -e "${_program}"
+   
+}
+
+# ------------------------------
+
+_x11_events "$@"

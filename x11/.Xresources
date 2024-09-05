@@ -1,0 +1,81 @@
+! https://wiki.archlinux.org/title/x_resources
+! https://stuff.mit.edu/afs/sipb/project/doc/ixresources/xres.html
+
+! https://linux.die.net/man/1/urxvt
+URxvt.font: xft:JetBrains Mono Medium:size=11
+URxvt.boldFont: xft:DejaVu Sans Mono:size=11
+URxvt.scrollBar: true
+URxvt.perl-ext-common:resize-font
+URxvt.keysym.C-minus:resize-font:smaller
+URxvt.keysym.C-equal:resize-font:bigger
+URxvt.keysym.C-0:resize-font:reset
+URxvt*depth: 32
+URxvt.shading: 114
+URxvt*transparent: true
+URxvt.tintColor: #3f3f3f
+
+#define catppuccin_rosewater #f2d5cf
+#define catppuccin_flamingo #eebebe
+#define catppuccin_pink #f4b8e4
+#define catppuccin_mauve #ca9ee6
+#define catppuccin_red #e78284
+#define catppuccin_maroon #ea999c
+#define catppuccin_peach #ef9f76
+#define catppuccin_yellow #e5c890
+#define catppuccin_green #a6d189
+#define catppuccin_teal #81c8be
+#define catppuccin_sky #99d1db
+#define catppuccin_sapphire #85c1dc
+#define catppuccin_blue #8caaee
+#define catppuccin_lavender #babbf1
+#define catppuccin_text #c6d0f5
+#define catppuccin_subtext1 #b5bfe2
+#define catppuccin_subtext0 #a5adce
+#define catppuccin_overlay2 #949cbb
+#define catppuccin_overlay1 #838ba7
+#define catppuccin_overlay0 #737994
+#define catppuccin_surface2 #626880
+#define catppuccin_surface1 #51576d
+#define catppuccin_surface0 #414559
+#define catppuccin_base #303446
+#define catppuccin_mantle #292c3c
+#define catppuccin_crust #232634
+
+*.foreground: catppuccin_text
+*.background: catppuccin_base
+*.cursorColor: catppuccin_yellow
+; *fading: 35
+; *fadeColor: catppuccin_pink
+
+
+! black
+*color0: catppuccin_surface1
+*color8: catppuccin_surface2
+
+! red
+*color1: catppuccin_red
+*color9: catppuccin_red
+
+! green
+*color2: catppuccin_green
+*color10: catppuccin_green
+
+! yellow
+*color3: catppuccin_yellow
+*color11: catppuccin_yellow
+
+! blue
+*color4: catppuccin_blue
+*color12: catppuccin_blue
+
+! magenta
+*color5: catppuccin_pink
+*color13: catppuccin_pink
+
+! cyan
+*color6:  catppuccin_teal
+*color14:  catppuccin_teal
+
+! white
+*color7: catppuccin_subtext1
+*color15: catppuccin_subtext0
