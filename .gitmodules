@@ -7,3 +7,6 @@
 [submodule "ssh/.ssh"]
 	path = ssh/.ssh
 	url = https://github.com/andronics/ssh
+[submodule "zsh/.config/zsh/.zplugins/zshrc.d"]
+	path = zsh/.config/zsh/.zplugins/zshrc.d
+	url = https://github.com/mattmc3/zshrc.d

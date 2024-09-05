@@ -1,0 +1,1 @@
+alias rmtmps="find ${1:-.} -type f \( -name '*.tmp' -o -name '*.tmp.*' \) -exec rm {} +"
