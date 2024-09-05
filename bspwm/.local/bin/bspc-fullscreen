@@ -1,0 +1,29 @@
+#!/usr/bin/env sh
+
+name=$(basename $0)
+
+# ------------------------------
+
+source "$(which _log)"
+
+# ------------------------------
+
+_bspc_fullscreen() {
+
+  if [ -z "$(bspc query -N -n .focused.fullscreen -d focused)" ]; then
+  
+    _log_info "tiled to fullscreen"
+    bspc node focused.tiled -t fullscreen
+  
+  else
+    
+    _log_info "fullscreen to tiled"
+    bspc node focused.fullscreen -t tiled
+  
+  fi
+
+}
+
+# ------------------------------
+
+_bspc_fullscreen "$@"

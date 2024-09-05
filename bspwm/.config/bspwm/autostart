@@ -1,0 +1,60 @@
+echo "Autostart: Position 1" >> /tmp/output.txt
+
+# bspc subscribers
+# bspc-balance &
+bspc-desktops &
+# bspc-swallow &
+
+echo "Autostart: Position 2" >> /tmp/output.txt
+
+# Simple X Hotkey Daemon
+sxhkd &
+
+echo "Autostart: Position 3" >> /tmp/output.txt
+
+# rofi polkit agent (see dependencies)
+rofi-polkit-agent &
+
+echo "Autostart: Position 4" >> /tmp/output.txt
+
+# compositor
+picom -b --animations \
+    --animation-clamping \
+    --animation-dampening 25 \
+    --animation-for-open-window zoom \
+    --animation-for-transient-window zoom \
+    --animation-stiffness 350 \
+    --animation-window-mass 5 &
+
+echo "Autostart: Position 5" >> /tmp/output.txt
+
+# notifications
+dunst &
+
+echo "Autostart: Position 6" >> /tmp/output.txt
+
+# keyboards layout
+# setxkbmap -layout uk 
+
+echo "Autostart: Position 7" >> /tmp/output.txt
+
+# xorg
+xsetroot -cursor_name left_ptr &
+xset s off &
+xset s -dpms &
+xrdb ~/.Xresources &
+
+echo "Autostart: Position 8" >> /tmp/output.txt
+
+# wallpaper
+feh --no-fehbg --bg-fill "${HOME}/.local/share/backgrounds/0001.png"  >> /tmp/output.txt
+
+echo "Autostart: Position 9" >> /tmp/output.txt
+
+# music
+# spotifyd &
+
+# polybar
+polybar -r main &
+
+echo "Autostart: Position 10" >> /tmp/output.txt

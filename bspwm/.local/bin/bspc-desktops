@@ -1,0 +1,79 @@
+#!/usr/bin/env sh
+
+name=$(basename $0)
+
+# ------------------------------
+
+source $(which _log)
+source $(which _singleton)
+
+# ------------------------------
+
+bspc_desktops_id="1"
+bspc_desktops_monitor="focused"
+
+# ------------------------------
+
+_singleton && [[ $? -eq 1 ]] && exit 1
+
+# ------------------------------
+
+_bspc_desktops() {
+
+    _log_info "subscribing to events"
+
+    _bspc_desktops_manage
+
+    bspc subscribe node_add node_remove node_state node_geometry | while read -r _event; do
+        _bspc_desktops_manage
+    done
+
+}
+
+_bspc_desktops_add() {
+    
+    _log_info "adding new desktop"
+
+    bspc monitor "${bspc_desktops_monitor}" -a "${bspc_desktops_id}"
+    
+    ((bspc_desktops_id=bspc_desktops_id+1))
+
+}
+
+_bspc_desktops_manage() {
+    
+    _total=$(_bspc_desktops_total)
+    _occupied=$(_bspc_desktops_occupied)
+    
+    [[ ${_occupied} -eq ${_total} ]] && _bspc_desktops_add
+    [[ ${_occupied} -lt $((_total-1)) ]] && _bspc_desktops_remove
+    
+}
+
+_bspc_desktops_occupied() {
+    bspc query -D -d ".occupied" -m "${bspc_desktops_monitor}" | wc -l
+}
+
+_bspc_desktops_remove() {
+    
+    _log_info "removing unoccupied desktops"
+    
+    _total=$(_bspc_desktops_total)
+    _occupied=$(_bspc_desktops_occupied)
+    
+    while [[ ${_occupied} -lt $((_total-1)) ]]; do
+        bspc desktop "any.!occupied" -r
+        
+        _total=$(_bspc_desktops_total)
+        _occupied=$(_bspc_desktops_occupied)
+    
+    done
+}
+
+_bspc_desktops_total() {
+    bspc query -D -m "${bspc_desktops_monitor}" | wc -l
+}
+
+# ------------------------------
+
+_bspc_desktops "$@"

@@ -1,0 +1,34 @@
+#!/usr/bin/env sh
+
+name=$(basename $0)
+
+# ------------------------------
+
+source $(which _log)
+source $(which _singleton)
+
+# ------------------------------
+
+_singleton && [[ $? -eq 1 ]] && exit 1
+
+# ------------------------------
+
+_bspc_floating_borders() {
+
+	_log_info "subscribing to events"
+
+	while read -r _ _ _ _node _state _status; do
+		
+		[[ "${_state}" == "floating" && "${_status}" == "on" ]] && \
+			bspc config -n ${_node} border_width 0
+
+	done < <(bspc subscribe node_state)
+
+}
+
+_bspc_floating_borders "$@"
+
+
+
+
+

@@ -1,0 +1,40 @@
+#!/usr/bin/env sh
+
+name=$(basename $0)
+
+# ------------------------------
+
+source $(which _log)
+source $(which _singleton)
+
+# ------------------------------
+
+_singleton && [[ $? -eq 1 ]] && exit 1
+
+# ------------------------------
+    
+_bspc_balance() {
+
+    _log_info "subscribing to events"
+
+    bspc subscribe node_add node_remove node_state node_geometry | while read -r _event; do
+
+        _log_info "event ${_event}"
+
+        for _window in $(bspc query -N -d -n .window); do
+            _log_debug "window: ${_window}"
+            bspc node "${_window}#@north" -B
+        done
+
+        for _node in $(bspc query -N '@/' -n '.descendant_of.!window' | grep -v "$(bspc query -N '@/' -n)"); do
+            _log_debug "node: ${_node}"
+            bspc node ${_node} -B;
+        done
+
+    done
+
+}
+
+# ------------------------------
+
+_bspc_balance "$@"

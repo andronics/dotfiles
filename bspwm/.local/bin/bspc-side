@@ -1,0 +1,85 @@
+#!/usr/bin/env sh
+
+name=$(basename $0)
+
+# ------------------------------
+
+source "$(which _log)"
+
+# ------------------------------
+
+# if no node is focused, exit.
+bspc query -N -n > /dev/null || exit
+
+# ------------------------------
+
+_bspc_side() {
+
+    # if the focused node is the root node, just call ensure_tiled and exit.
+    bspc query -N -n '@/.focused' > /dev/null && {
+        _bspc_side_tile
+        exit
+    }
+
+    case "$1" in
+        'west'|'north') _bspc_side_focus_first ;;
+        'east'|'south') _bspc_side_focus_second ;;
+    esac
+
+    case "$1" in
+        'west'|'east') _bspc_side_split_vertical ;;
+        'north'|'south') _bspc_side_split_horizontal ;;
+    esac
+
+    _bspc_side_tile
+
+}
+
+_bspc_side_tile() {
+    
+    bspc query -N -n focused.window > /dev/null || return
+    bspc query -D -d focused.user_tiled > /dev/null || return
+
+    if bspc node focused.fullscreen -t '~fullscreen' || bspc node focused.floating -t '~floating'; then
+        bspc node 'focused.!tiled.!pseudo_tiled.window' -t tiled
+    fi
+
+}
+
+_bspc_side_focus_first() {
+    
+    bspc node '@/1.!focused' -s '@/2.focused' || {
+        bspc node '@/1.!focused#focused' -n '@/' && bspc node '@/1.!focused' -s '@/2.focused'
+    }
+
+}
+
+_bspc_side_focus_second() {
+    
+    bspc node '@/2.!focused' -s '@/1.focused' || bspc node '@/2.!focused#focused' -n '@/'
+
+}
+
+_bspc_side_split_horizontal() {
+    
+    # ensure that the split type of the root node is horizontal.
+    bspc node '@/.!horizontal' -R -90 && bspc node '@brother' -R 90
+
+}
+
+_bspc_side_split_vertical() {
+
+    # ensure that the split type of the root node is vertical.
+    bspc node '@/.!vertical' -R -90 && bspc node '@brother' -R 90
+
+}
+
+
+
+# ------------------------------
+
+_bspc_side "$@"
+
+
+
+

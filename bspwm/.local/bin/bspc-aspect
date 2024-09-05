@@ -1,0 +1,65 @@
+#!/usr/bin/env sh
+
+name=$(basename $0)
+
+# ------------------------------
+
+source "$(which _jq)"
+source "$(which _log)"
+
+# ------------------------------
+
+bspc_aspect_x=16
+bspc_aspect_y=9
+
+# ------------------------------
+
+_bspc_aspect() {
+
+  [[ $# -eq 2 ]] && {
+    bspc_aspect_x=$1
+    bspc_aspect_y=$2
+  }
+
+  _log_info "aspect ratio to %d x %d" ${bspc_aspect_x} ${bspc_aspect_y}
+
+  _node=( $(bspc query -T -n | _jq_query '.client.tiledRectangle.width,.client.tiledRectangle.height,.id') )
+  _parent=( $(bspc query -T -n @parent | _jq_query '.splitType,.firstChild.id') )
+
+  [[ "${_parent[0]}" = "vertical" ]] && {
+
+    _width=$(printf "%.0f" $(echo "scale=4;${_node[1]}*${bspc_aspect_x}/${bspc_aspect_y}" | bc))
+    
+    if [ "${_node[2]}" = "${_parent[1]}" ]; then
+      
+      bspc node -z right $((_width-_node[0])) 0
+    
+    else
+      
+      bspc node -z left $((_node[0]-_width)) 0
+    
+    fi
+
+  }
+
+  [[ "${_parent[0]}" = "horizontal" ]] && {
+    
+    _height=$(printf "%.0f\n" $(echo "scale=4;${_node[0]}*${bspc_aspect_y}/${bspc_aspect_x}" | bc))
+    
+    if [[ "${_node[2]}" = "${_parent[1]}" ]]; then
+  
+      bspc node -z bottom 0 $((_height-_node[1]))
+
+    else
+  
+      bspc node -z top 0 $((_node[1]-_height))
+  
+    fi
+  
+  }
+
+}
+
+# ------------------------------
+
+_bspc_aspect "$@"
