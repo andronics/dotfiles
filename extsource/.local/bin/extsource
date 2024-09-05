@@ -1,0 +1,47 @@
+#!/usr/bin/env sh
+
+name=$(basename "$0")
+
+# ------------------------------
+
+extsource_cache_dir="${XDG_CACHE_HOME}/${name}"
+extsource_config_dir="${XDG_CONFIG_HOME}/${name}"
+extsource_data_dir="${XDG_DATA_HOME}/${name}"
+
+# ------------------------------
+
+extsource_root="${HOME}/.local/bin/extensions"
+
+# ------------------------------
+
+_extsource() {
+
+    [[ $# -ne 1 ]] && {
+        echo "usage: $0 <command>"
+        exit 1
+    }
+
+    [[ ! -d "${extsource_root}" ]] && {
+        echo "Error: '${extsource_root}' is not a directory"
+    }
+
+    _command=$1
+
+    for _file in "${extsource_root}"/*; do
+
+        [[ -x "${_file}" && "$(basename "${_file}")" = "${_command}" ]] && {
+
+            . "${_file}"
+            return 0
+
+        }
+
+    done
+
+    return 1
+
+}
+
+# ------------------------------
+
+_extsource "$@"
