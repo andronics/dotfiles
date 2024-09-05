@@ -1,0 +1,166 @@
+#!/usr/bin/env sh
+
+name=$(basename "$0")
+
+# ------------------------------
+
+source "$(which _log)"
+source "$(which _service)"
+source "$(which _xidlehook)"
+
+# ------------------------------
+
+lockscreen_cache_dir="${XDG_CACHE_HOME}/${name}"
+lockscreen_config_dir="${XDG_CONFIG_HOME}/${name}"
+lockscreen_data_dir="${XDG_DATA_HOME}/${name}"
+
+# ------------------------------
+
+lockscreen_wallpaper="${XDG_CONFIG_HOME}/.local/share/backgrounds/0001.png"
+
+# ------------------------------
+
+source "$(which _args)"
+
+# ------------------------------
+
+_lockscreen() {
+
+
+    [[ $# -eq 0 ]] && {
+        _log_error "command not specified"
+        return 1
+    }
+
+    _command=$1
+    shift 2>/dev/null
+
+    case "${_command}" in
+
+        hook-delete) _lockscreen_hook_delete $* ;;
+        hook-disable) _lockscreen_hook_disable $* ;;
+        hook-enable) _lockscreen_hook_enable $* ;;
+        hook-idle) _lockscreen_hook_idle $*;;
+        hook-init) _lockscreen_hook_init $*;;
+        hook-query) _lockscreen_hook_query $* ;;
+        hook-trigger) _lockscreen_hook_trigger $* ;;
+        
+        service-install) _lockscreen_service_install $* ;;
+        service-restart) _lockscreen_service_restart $* ;;
+        service-start) _lockscreen_service_start $* ;;
+        service-status) _lockscreen_service_status $* ;;
+        service-stop) __lockscreen_service_stop $* ;;
+        service-uninstall) _lockscreen_service_uninstall $* ;;
+
+        state-activate) _lockscreen_state_activate $* ;;
+        
+        wallpaper-update) _lockscreen_wallpaper_update $* ;;
+
+        *) _log_warning "command '%s' unsupported" "${_command}" ;;
+
+    esac
+
+}
+
+# ------------------------------
+
+_lockscreen_state_activate() {
+    
+    betterlockscreen --lock -- -n
+
+}
+
+# ------------------------------
+
+_lockscreen_hook_delete() {
+     
+     _xidlehook_delete $*
+
+}
+
+_lockscreen_hook_disable() {
+     
+     _xidlehook_disable $*
+
+}
+
+_lockscreen_hook_enable() {
+     
+     _xidlehook_enable $*
+
+}
+
+_lockscreen_hook_idle() {
+     
+     _xidlehook_idle $*
+
+}
+
+_lockscreen_hook_init() {
+     
+     _xidlehook_init "$0 state-activate"
+
+}
+
+_lockscreen_hook_query() {
+     
+     _xidlehook_query $*
+
+}
+
+_lockscreen_hook_trigger() {
+     
+     _xidlehook_trigger $*
+
+}
+
+# ------------------------------
+
+_lockscreen_service_install() {
+     
+     _service_install $*
+
+}
+
+_lockscreen_service_restart() {
+     
+     _service_restart $*
+
+}
+
+_lockscreen_service_start() {
+     
+     _service_start $*
+
+}
+
+_lockscreen_service_status() {
+     
+     _service_status $*
+
+}
+
+_lockscreen_service_stop() {
+     
+     __service_stop $*
+
+}
+
+_lockscreen_service_uninstall() {
+     
+     _service_uninstall $*
+
+}
+
+# ------------------------------
+
+_lockscreen_wallpaper_update() {
+
+    _log_info "updating lockscreen image"
+    betterlockscreen --update "${lockscreen_wallpaper}"
+
+}
+
+# ------------------------------
+
+_lockscreen "$@"
