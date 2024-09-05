@@ -1,0 +1,7 @@
+[Desktop Entry]
+Exec=google-chrome-stable --new-window https://web.whatsapp.com
+Icon=whatsapp
+Terminal=false
+Type=Application
+Categories=Network;WebBrowser;
+StartupNotify=true
