@@ -1,0 +1,57 @@
+#!/usr/bin/env sh
+
+name=$(basename $0)
+
+# ------------------------------
+
+source $(which _log)
+source $(which _rofi)
+source $(which _string)
+
+# ------------------------------
+
+power_cache_dir="${XDG_CACHE_HOME}/${name}"
+power_config_dir="${XDG_CONFIG_HOME}/${name}"
+power_data_dir="${XDG_DATA_HOME}/${name}"
+
+# ------------------------------
+
+rofi_config="${power_data_dir}/theme.rasi"
+
+# ------------------------------
+
+power_options=("Reboot\nShutdown\nSuspend\nLock\nLogout")
+
+# ------------------------------
+
+_power() {
+
+    _option=$(echo  "${power_options}" | _rofi_prompt -m "Power Menu" | _string_lowercase)
+
+    
+    [[ -n ${_option} ]] || {
+
+        _log_info "no option selected"
+        exit 1
+
+    }
+    
+    _log_info "option selected is '${_option}'"
+    
+    case ${_option} in
+        
+        shutdown) systemctl poweroff ;;
+        reboot) systemctl reboot ;;
+        lock) betterlockscreen -l ;;
+        suspend) systemctl suspend ;;
+        logout)  bspc quit ;;
+
+        *) _log_warning "option '%s' unsupported" "${_option}" ;;
+
+    esac
+
+}
+
+# ------------------------------
+
+_power "$@"

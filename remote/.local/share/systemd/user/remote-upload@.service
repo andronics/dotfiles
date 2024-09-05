@@ -1,0 +1,9 @@
+[Unit]
+Description=Upload media to cloud storage
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/media-upload
+
+[Install]
+WantedBy=timers.target

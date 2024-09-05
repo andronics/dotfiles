@@ -1,0 +1,70 @@
+#!/usr/bin/env sh
+
+name=$(basename $0)
+
+# ------------------------------
+
+source "$(which _log)"
+source "$(which _rofi)"
+source "$(which _string)"
+
+# ------------------------------
+
+search_cache_dir="${XDG_CACHE_HOME}/${name}"
+search_config_dir="${XDG_CONFIG_HOME}/${name}"
+search_data_dir="${XDG_DATA_HOME}/${name}"
+
+# ------------------------------
+
+search_history="${search_config_dir}/history"
+search_history_max=5
+search_providers="${search_config_dir}/providers"
+
+# ------------------------------
+
+_search() {
+
+    _search=$(sort "${search_history}" | rofi -dmenu -i -p "Search" | awk '{$1=$1;print}')
+
+    [[ -n ${_search} ]] || {
+        _log_info "no search parameters entered"
+        return 1
+    }
+
+    awk -v max="${search_history_max}" "NR <= max" "${search_history}" > temp && \
+        mv temp "${search_history}"
+
+    awk -v search="${_search}" -e '
+        NR == 1 { found = 0 }
+        $0 == search { found = 1 }
+        { lines[NR] = $0 }
+        END {
+            if (!found) {
+                print search
+            }
+            for (i = 1; i <= NR; i++) {
+                print lines[i]
+            }
+        }
+    ' "${search_history}" > temp && mv temp "${search_history}"
+
+    [[ -n ${_search} ]] && [[ "${_search}" != "" ]] && {
+
+        _provider=$(sort "${search_providers}" | sed 's/:.*//' | _rofi_dmenu "Provider" | xargs -I % grep "%:" "${search_providers}" | sed 's/.*://')
+    
+        _url=$( printf "${_provider}" "$(_string_url_encode "${_search}")" )
+        _log_info "opening ${_url} with ${BROWSER}"
+        
+        ${BROWSER} --new-window "$1" "${_url}" > /dev/null &
+    
+        disown
+    
+    }
+
+
+}
+
+# ------------------------------
+
+_search "$@"
+

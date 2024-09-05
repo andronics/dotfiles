@@ -1,0 +1,45 @@
+#!/usr/bin/env sh
+
+name=$(basename $0)
+
+# ------------------------------
+
+source $(which _log)
+source $(which _rofi)
+
+# ------------------------------
+
+history_cache_dir="${XDG_CACHE_HOME}/${name}"
+history_config_dir="${XDG_CONFIG_HOME}/${name}"
+history_data_dir="${XDG_DATA_HOME}/${name}"
+
+# ------------------------------
+
+rofi_config="${history_data_dir}/theme.rasi"
+
+# ------------------------------
+
+_history() {
+
+    _program='
+        BEGIN {
+            FS = ";" 
+        }
+        !seen[$1]++ {
+            lines[i++]=$1
+        }
+        END {
+            for (i in lines)
+                if (seen[lines[i]]==1)
+                    print lines[i]
+        }
+    ' 
+
+    tac ${HISTFILE} | awk "${_program}" | _rofi_dmenu "History" | xclip -selection clipboard
+    xdotool type "$(xclip -o -selection clipboard)" 2>&1
+
+}
+
+# ------------------------------
+
+_history "$@"

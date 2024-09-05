@@ -1,0 +1,13 @@
+Amazon:www.amazon.co.uk/s?k=%s
+BBC:www.bbc.co.uk/search?q=%s
+DuckDuckGo: duckduckgo.com/?q=%s
+G Mail:mail.google.com/mail/u/0/#search/%s
+Google:www.google.com/search?q=%s
+Goodreads:www.goodreads.com/search?query=%s
+Lidarr:lidarr.andronics.io/add/search?term=%s
+Netflix:www.netflix.com/search?q=%s
+Radarr:radarr.andronics.io/add/new?term=%s
+Readarr:readarr.andronics.io/add/search?term=%s
+Sonarr:sonarr.andronics.io/add/new?term=%s
+Reddit:www.reddit.com/search/?q=%s
+Wikipedia:en.wikipedia.org/w/index.php?search=%s

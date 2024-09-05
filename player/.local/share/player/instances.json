@@ -1,0 +1,16 @@
+[
+    { "name": "chrome", "icon": "\uE743" },
+    { "name": "chromium", "icon": "\uE743" },
+    { "name": "facebook", "icon": "\uF70C" },
+    { "name": "firefox", "icon": "\uF269" },
+    { "name": "mpv", "icon": "\uE743" },
+    { "name": "ncspot", "icon": "\uF1BC" },
+    { "name": "reddit", "icon": "\uF281" },
+    { "name": "soundcloud", "icon": "\uF1BE" },
+    { "name": "spotify", "icon": "\uF1BC" },
+    { "name": "steam", "icon": "\uF1B6" },
+    { "name": "vlc", "icon": "\uFA7B" },
+    { "name": "whatsapp", "icon": "\uF232" },
+    { "name": "youtube", "icon": "\uF2B1" },
+    { "name": "default", "icon": "\uF1BC" }
+]

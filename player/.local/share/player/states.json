@@ -1,0 +1,8 @@
+[
+    { "state": "paused", "icon": "\uF04C" },
+    { "state": "playing", "icon": "\uF04B" },
+    { "state": "stopped", "icon": "\uF04D" },
+    { "state": "none", "icon": "\uF04D" },
+    { "state": "playlist", "icon": "\uF04D" },
+    { "state": "track", "icon": "\uF04D" }
+]

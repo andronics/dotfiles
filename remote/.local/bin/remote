@@ -1,0 +1,290 @@
+#!/usr/bin/env sh
+
+icon=""
+name=$(basename $0)
+version="0.0.1"
+
+# ------------------------------
+
+source "$(which _jq)"
+source "$(which _kv)"
+source "$(which _log)"
+
+# ------------------------------
+
+remote_cache_dir="${XDG_CACHE_HOME}/${name}"
+remote_config_dir="${XDG_CONFIG_HOME}/${name}"
+remote_data_dir="${XDG_DATA_HOME}/${name}"
+remote_runtime_dir=${XDG_RUNTIME_DIR}/${name}
+
+# ------------------------------
+
+remote_config=$(cat "${remote_config_dir}/config.json")
+
+# ------------------------------
+
+_remote() {
+
+    [[ $# -eq 0 ]] && {
+        _log_error "command not specified"
+        return 1
+    }
+
+    _command=$1
+    shift 2>/dev/null
+
+    case "${_command}" in
+        
+        mount) _remote_mount $* ;;
+        unmount) _remote_unmount $* ;;
+        upload) _remote_upload $* ;;
+
+        *) _log_warning "command '%s' unsupported" "${_command}" ;;
+
+    esac
+
+}
+
+# ------------------------------
+
+_remote_cfg() {
+    
+    _filter=$1
+    echo "${remote_config}" | _jq_query "${_filter}"
+
+}
+
+# ------------------------------
+
+_remote_rclone_cfg() {
+
+    _unit_name=${1}
+    _unit_cfg=$(_remote_cfg '.units."'${_unit_name}'"')
+    _unit_credentials=$( echo "${_unit_cfg}" | _jq_query ".credentials")
+    _unit_drive_id=$( echo "${_unit_cfg}" | _jq_query ".drive_id")
+    _unit_root_folder_id=$( echo "${_unit_cfg}" | _jq_query ".root_folder_id")
+
+    [[ "${_unit_drive_id}" == "null" ]] && _unit_drive_id=""
+    [[ "${_unit_root_folder_id}" == "null" ]] && _unit_root_folder_id=""
+    
+    _credentials_cfg=$(_remote_cfg '.credentials."'${_unit_credentials}'"')
+    _credentials_client_id=$( echo "${_credentials_cfg}" | _jq_query '.client_id' )
+    _credentials_client_secret=$( echo "${_credentials_cfg}" | _jq_query '.client_secret' )
+    _credentials_scope=$( echo "${_credentials_cfg}" | _jq_query '.scope' )
+    _credentials_token=$( echo "${_credentials_cfg}" | _jq_query '.token' | tr -d "\n|[:space:]")
+
+    cat <<EOF
+[${_unit_name}]
+type = drive
+client_id = ${_credentials_client_id}
+client_secret = ${_credentials_client_secret}
+root_folder_id = ${_unit_root_folder_id}
+scope = ${_credentials_scope}
+team_drive = ${_unit_drive_id}
+token = ${_credentials_token}
+EOF
+}
+
+# ------------------------------
+
+_remote_mount() {
+    
+    [[ $# -eq 0 ]] && {
+        _log_info "Error: No unit specified for mounting."
+        return 1
+    }
+
+    local _unit_name=${1}
+    local _unit_cfg=$(_remote_cfg '.units."'${_unit_name}'"')
+
+    if [[ "${_unit_cfg}" == "null" ]]; then
+        _log_info "Error: Specified unit does not exist."
+        return 1
+    fi
+
+    local _unit_connection=$( echo "${_unit_cfg}" | _jq_query ".connection")
+    local _unit_mountpoint=$( echo "${_unit_cfg}" | _jq_query ".mountpoint")
+    
+    local _root_remote=$(_remote_cfg '.root.remote')
+
+    local _cache_dir="${remote_cache_dir}/${_unit_name}" 
+    local _runtime_dir="${remote_runtime_dir}/${_unit_name}" 
+
+    if [ ! -d "${_root_remote}/${_unit_mountpoint}" ]; then
+        _log_info "creating mount directory: ${_root_remote}/${_unit_mountpoint}"
+        mkdir -p "${_root_remote}/${_unit_mountpoint}"
+    fi
+    
+    if [ ! -d "${_cache_dir}" ]; then
+        _log_info "creating cache directory: ${_cache_dir}"
+        mkdir -p "${_cache_dir}"
+    fi
+
+    if [ ! -d "${_runtime_dir}" ]; then
+        _log_info "creating runtime directory: ${_runtime_dir}"
+        mkdir -p "${_runtime_dir}"
+    fi
+    
+    echo "$(_remote_rclone_cfg "${_unit_name}")" > "${_runtime_dir}/rclone.conf"
+    
+    _log_info "mounting ${_unit_name} @ ${_root_remote}/${_unit_mountpoint}"
+
+    rclone mount "${_unit_name}:" "${_root_remote}/${_unit_mountpoint}" \
+        --allow-non-empty \
+        --allow-other \
+        --buffer-size "256M" \
+        --cache-dir "${_cache_dir}" \
+        --config "${_runtime_dir}/rclone.conf" \
+        --default-permissions \
+        --dir-cache-time "96h" \
+        --gid "984"  \
+        --log-level "INFO" \
+        --log-file "${_runtime_dir}/rclone.log" \
+        --poll-interval "15s" \
+        --timeout "1h" \
+        --uid "1000" \
+        --umask "002" \
+        --vfs-cache-mode "full" \
+        --vfs-cache-max-age "48h" \
+        --vfs-cache-max-size "64G" \
+        --vfs-read-ahead "256M"
+
+}
+
+# ------------------------------
+
+_remote_unmount() {
+    
+    if [[ $# -eq 0 ]]; then
+        echo "Error: No unit specified for unmounting."
+        return 1
+    fi
+
+    local _unit_name=${1}
+    local _unit_cfg=$(_remote_cfg '.units."'${_unit_name}'"')
+
+    if [[ "${_unit_cfg}" == "null" ]]; then
+        _log_info "Error: Specified unit does not exist."
+        return 1
+    fi
+
+    local _unit_mountpoint=$( echo "${_unit_cfg}" | _jq_query ".mountpoint")
+    
+    local _root_remote=$(_remote_cfg '.root.remote')
+    
+    _log_info "unmounting ${_unit_name} at ${_root_remote}/${_unit_mountpoint}"
+
+    /bin/fusermount -uz "${_root_remote}/${_unit_mountpoint}"
+
+}
+
+# ------------------------------
+
+_remote_upload() {
+    
+    if [[ $# -eq 0 ]]; then
+        _log_error "Error: No unit specified for uploading."
+        return 1
+    fi
+
+    local _unit_name=${1}
+    local _unit_cfg=$(_remote_cfg '.units."'${_unit_name}'"')
+
+    if [[ "${_unit_cfg}" == "null" ]]; then
+        _log_info "Error: Specified unit does not exist."
+        return 1
+    fi
+
+    local _unit_filters=$( echo "${_unit_cfg}" | _jq_query ".filters[]")
+    local _unit_mountpoint=$( echo "${_unit_cfg}" | _jq_query ".mountpoint")
+    
+    local _root_local=$(_remote_cfg '.root.local')
+    
+    if [ ! -d "${_root_local}/${_unit_mountpoint}" ]; then
+        _log_error "mountpoint does not exist: ${_unit_mountpoint}"
+        return 1
+    fi
+
+    _remote_upload_scan "${_root_local}/${_unit_mountpoint}" | \
+    _remote_upload_filter "${_unit_filters}"
+    # _remote_upload_transfer "${_unit_name}"
+    
+
+}
+
+_remote_upload_filter() {
+
+    _unit_filters=$1
+
+    local _filters_cfg=$(_remote_cfg '.filters')
+    local _filters_regexs=()
+        
+    while read _file; do
+    
+        # echo "$_file"
+
+        for _filter_name in ${_unit_filters}; do
+    
+            _filter_group=$(echo "${_filters_cfg}" | _jq_query ".${_filter_name}")
+            _filter_filename=$(echo ${_filter_group} | _jq_query '.filename')
+            
+            [[ ! ${_file} =~ ${_filter_filename} ]] && continue
+
+            _filter_mimetype=$(echo ${_filter_group} | _jq_query '.mimetype')
+
+            echo "${_filter_mimetype} :  ${_file}"
+
+            break
+    
+        done
+    
+    done
+    
+}
+
+_remote_upload_scan() {
+    
+    _path=$1
+
+    _log_info "scanning directory: ${_path}"
+
+    while read file; do
+
+        # _log_info "%8s | %-150s" "scan" "${file}"
+        echo ${file}
+
+    done < <(find "${_path}" -type f )
+}
+
+_remote_upload_transfer() {
+    
+    _unit_nane=$1
+
+    _log_info "transferring: ${_unit_name}"
+
+    while read file; do
+
+        _log_info "%8s | %-150s" "scan" "${file}" &
+        echo ${file}
+
+    done 
+}
+
+_remote_upload_validate() {
+    
+    _unit_nane=$1
+
+    _log_info "transferring: ${_unit_name}"
+
+    while read file; do
+
+        _log_info "%8s | %-150s" "scan" "${file}" &
+        echo ${file}
+
+    done 
+}
+
+
+# ------------------------------
+
+_remote "$@"

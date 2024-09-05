@@ -1,0 +1,29 @@
+
+[Unit]
+Description=remote mount (%i)
+Wants=default.target
+After=default.target
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+Environment=PATH="%h/.local/bin:%h/.local/bin/extensions:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+Environment=XDG_CACHE_HOME="%h/.cache"
+Environment=XDG_CONFIG_HOME="%h/.config"
+# ExecStartPre=/usr/bin/sleep 5
+ExecStart=%h/.local/bin/remote mount "%i"
+ExecStop=%h/.local/bin/remote unmount "%i"
+Restart=on-failure
+RestartSec=5
+CacheDirectory=%p
+CacheDirectoryMode=0755
+ConfigurationDirectory=%p
+ConfigurationDirectoryMode=0755
+LogsDirectory=%p
+LogsDirectoryMode=0755
+StateDirectory=%p
+StateDirectoryMode=0755
+
+[Install]
+WantedBy=default.target

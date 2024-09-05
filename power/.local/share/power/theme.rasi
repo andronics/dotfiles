@@ -1,0 +1,27 @@
+@import "~/.config/rofi/config.rasi"
+
+window {
+    location: center;
+    anchor: center;
+    fullscreen: false;
+    width: 800px;
+}
+
+mainbox {
+    children: [ "message", "listview" ];
+}
+
+listview {
+    columns: 5;
+    lines: 1;
+}
+
+element-text {
+    horizontal-align: 0.5;
+    color: #ffffff;
+}
+
+textbox {
+    horizontal-align: 0.5;
+    color: #ffffff;
+}

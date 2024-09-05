@@ -1,0 +1,55 @@
+#!/usr/bin/env sh
+
+name=$(basename $0)
+
+# ------------------------------
+
+source "$(which _jq)"
+source "$(which _log)"
+source "$(which _rofi)"
+
+# ------------------------------
+
+translate_cache_dir="${XDG_CACHE_HOME}/${name}"
+translate_config_dir="${XDG_CONFIG_HOME}/${name}"
+translate_data_dir="${XDG_DATA_HOME}/${name}"
+
+# ------------------------------
+
+translate_languages=$(cat "${translate_data_dir}/languages.json")
+
+# ------------------------------
+
+_translate() {
+    
+    [[ -p /dev/stdin ]] && {
+        read -r _text < /dev/stdin
+    } || {
+        _text=$1
+    }
+    
+    [[ -n ${_text} ]] || {
+        _log_info "no text to translate"
+        return 1
+    }
+
+    _names=$(echo "${translate_languages}" | _jq_query '.[] | .name')
+    _name=$(echo -e "${_names}" | _rofi_dmenu "Select Language")
+
+    [[ -n ${_name} ]] || {
+        _log_info "no transation language specified"
+        return 1
+    }
+
+    _filter='.[] | select(.name == $name) | .iso '
+    _iso=$(echo "${translate_languages}" | _jq_query "${_filter}" "name" "${_name}")
+
+    _engine=$( trans -S | sed "s/.* //" | sort | _rofi_dmenu "Engine" )
+
+    trans -e "${_engine}" --no-ansi "auto:${_iso}" "${_text}"
+
+}
+
+# ------------------------------
+
+_translate "$@"

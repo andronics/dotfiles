@@ -1,0 +1,6 @@
+[
+    { "pattern": ".hdmi-stereo$", "name": "HDMI Speakers", "icon": "\uF9C2" },
+    { "pattern": ".94_DB_56_F5_8F_9E.", "name": "WH-1000MX4 Headphones", "icon": "\uF7CA" },
+    { "pattern": ".iec958-stereo$", "name": "Digital Speakers", "icon": "\uF9C2" },
+    { "pattern": ".analog-stereo$", "name": "Analog Speakers", "icon": "\uF9C2" }
+]

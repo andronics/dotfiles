@@ -1,0 +1,230 @@
+#!/usr/bin/env sh
+
+name=$(basename $0)
+
+# ------------------------------
+
+source "$(which _jq)"
+source "$(which _log)"
+source "$(which _string)"
+
+# ------------------------------
+
+player_cache_dir="${XDG_CACHE_HOME}/${name}"
+player_config_dir="${XDG_CONFIG_HOME}/${name}"
+player_data_dir="${XDG_DATA_HOME}/${name}"
+
+# ------------------------------
+
+player_instances=$(cat "${player_data_dir}/instances.json")
+player_states=$(cat "${player_data_dir}/states.json")
+
+# ------------------------------
+
+source "$(which _args)"
+
+# ------------------------------
+
+_player() {
+
+    [[ $# -eq 0 ]] && {
+        _log_error "command not specified"
+        return 1
+    }
+
+    _command=$1
+    shift 2>/dev/null
+
+    case "${_command}" in
+        
+        action-loop) _player_action_loop $* ;;
+        action-next) _player_action_next $* ;;
+        action-play-pause) _player_action_play_pause $* ;;
+        action-previous) _player_action_previous $* ;;
+        action-seek) _player_action_seek $* ;;
+        action-shuffle) _player_action_shuffle $* ;;
+        action-stop) _player_action_stop $* ;;
+
+        control)    _player_control $* ;;
+        
+        metadata) _player_metadata $* ;;
+        metadata-artist) _player_metadata_artist $* ;;
+        metadata-artwork) _player_metadata_artwork $* ;;
+        metadata-length) _player_metadata_length $* ;;
+        metadata-title) _player_metadata_title $* ;;
+        
+        instance-icon) _player_instance_icon $* ;;
+        instance-name) _player_instance_name $* ;;
+        
+        status-icon) _player_status_icon $* ;;
+        status-name) _player_status_name $* ;;
+
+        *) _log_warning "command '%s' unsupported" "${_command}" ;;
+
+    esac
+
+}
+
+# ------------------------------
+
+_player_action_loop() {
+
+    _status=$(_player_control loop | _string_lowercase)
+
+    case "${_status}" in
+        none)
+            _player_control loop track ;;
+        playlist)
+            _player_control loop none ;;
+        track)
+            _player_control loop playlist ;;
+    esac
+
+}
+
+_player_action_next() {
+
+    _player_control next
+
+}
+
+_player_action_pause() {
+
+    _player_control pause
+
+}
+
+_player_action_play_pause() {
+
+    _player_control play-pause
+
+}
+
+_player_action_previous() {
+
+    _player_control previous
+
+}
+
+_player_action_seek() {
+
+    _position=1
+
+    _player_control position ${_position}
+
+}
+
+_player_action_shuffle() {
+
+    _status=$(_player_control shuffle)
+
+    [[ "${_status}" =  'On' ]] && _player_control shuffle Off || _player_control shuffle On 
+
+}
+
+_player_action_stop() {
+
+    _player_control stop
+
+}
+
+# ------------------------------
+
+_player_control() {
+    
+    playerctl $* 2>/dev/null
+
+}
+
+# ------------------------------
+
+_player_instance_icon() {
+
+    _name=$(_player_instance_name)
+    
+    _filter='.[] | select( .name | test($name) ) | .icon'
+
+    echo ${player_instances} | _jq_query "${_filter}" "name" "${_name}"
+
+}
+
+_player_instance_name() {
+
+    _instance=$(_player_control metadata | awk '/xesam:title/{ print $1 }')
+
+    [[ -z ${_instance} ]] && _instance="default"
+    
+    echo ${_instance}
+
+}
+
+# ------------------------------
+
+_player_metadata() {
+
+    _artist=$(_player_metadata_artist)
+    _title=$(_player_metadata_title)
+
+    [[ ! -n "${_artist}" && ! -n "${_title}" ]] && {
+        printf ""
+        return
+    }
+    
+    printf "%s: %s" "${_artist:-"Unknown Artist"}" "${_title:-"Unknown Title"}"
+    
+
+}
+
+_player_metadata_artist() {
+
+    _player_control metadata xesam:artist
+
+}
+
+_player_metadata_artwork() {
+
+    _player_control metadata mpris:artUrl
+
+}
+
+_player_metadata_length() {
+    
+    _length="00:00:00"
+    _micro_seconds=$(_player_control metadata mpris:length)
+    
+    [[ $? -eq 0 ]] && {
+        _seconds=$(echo "${_micro_seconds}/1000000" | bc)
+        _length="$(date -d "1970-01-01 ${_seconds} seconds" +%H:%M:%S)"
+    }
+
+    echo "${_length}"
+
+}
+
+_player_metadata_title() {
+
+    _player_control metadata xesam:title
+
+}
+
+# ------------------------------
+
+_player_status_icon() {
+
+    _name=$(_player_status_name)
+    
+    _filter='.[] | select( .state | test($name) ) | .icon'
+
+    echo "${player_states}" | _jq_query "${_filter}" "name" "${_name}"
+
+}
+
+_player_status_name() {
+
+    _player_control status | _string_lowercase
+
+}
+
+# ------------------------------
+
+_player "$@"

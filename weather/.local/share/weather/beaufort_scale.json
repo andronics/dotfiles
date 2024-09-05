@@ -1,0 +1,15 @@
+[
+    { "id": "0", "icon": "\uf0B7", "label": "Calm", "speed_min": 0.0 },
+    { "id": "1", "icon": "\uf0B8", "label": "Light Air", "speed_min": 0.5 },
+    { "id": "2", "icon": "\uf0B9", "label": "Light Breeze", "speed_min": 1.6 },
+    { "id": "3", "icon": "\uf0BA", "label": "Gentle Breeze", "speed_min": 3.4 },
+    { "id": "4", "icon": "\uf0BB", "label": "Moderate Breeze", "speed_min": 5.5 },
+    { "id": "5", "icon": "\uf0BC", "label": "Fresh Breeze", "speed_min": 8.0 },
+    { "id": "6", "icon": "\uf0BD", "label": "Strong Breeze", "speed_min": 10.8 },
+    { "id": "7", "icon": "\uf0BE", "label": "High Wind", "speed_min": 13.9 },
+    { "id": "8", "icon": "\uf0BF", "label": "Fresh Gale", "speed_min": 17.2 },
+    { "id": "9", "icon": "\uf0C0", "label": "Strong Gale", "speed_min": 20.8 },
+    { "id": "10", "icon": "\uf0C1", "label": "Storm", "speed_min": 24.5 },
+    { "id": "11", "icon": "\uf0C2", "label": "Violent Storm", "speed_min": 28.5 },
+    { "id": "12", "icon": "\uf0C3", "label": "Hurricane", "speed_min": 32.7  }
+]

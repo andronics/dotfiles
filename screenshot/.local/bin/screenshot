@@ -1,0 +1,77 @@
+#!/usr/bin/env sh
+
+name=$(basename $0)
+
+# ------------------------------
+
+source "$(which _log)"
+source "$(which _rofi)"
+
+# ------------------------------
+
+screenshot_cache_dir="${XDG_CACHE_HOME}/${name}"
+screenshot_config_dir="${XDG_CONFIG_HOME}/${name}"
+screenshot_data_dir="${XDG_DATA_HOME}/${name}"
+
+# ------------------------------
+
+screenshot_output_dir="${HOME}/.screenshots"
+
+# ------------------------------
+
+source "$(which _args)"
+
+# ------------------------------
+
+_screenshot() {
+
+    [[ $# -eq 0 ]] && {
+        _log_error "command not specified"
+        return 1
+    }
+
+    _command=$1
+    shift 2>/dev/null
+
+    if [ -z ${_command} ]; then
+        _command=$(echo "fullscreen\nfullscreen_wait\nselection\nselection_wait" | _rofi_prompt -m "Screenshot" -c 4 -w 1500)
+    fi
+
+    case ${_command} in
+
+        "fullscreen") _screenshoot_shoot $* ;;
+        "fullscreen_wait") _screenshoot_wait && _screenshoot_shoot ;;
+        "selection") _screenshoot_shoot -s ;;
+        "selection_wait") _screenshoot_wait && _screenshoot_shoot -s ;;
+
+        *) _log_warning "command '%s' unsupported" "${_command}" ;;
+
+
+    esac
+
+}
+
+_screenshoot_path() {
+    printf "%s/screenshot-%s.png" "${screenshot_output_dir}" "$(date +%Y%m%d-%s)"
+}
+
+_screenshoot_shoot() {
+    [[ ! -d "${screenshot_output_dir}" ]] && mkdir -p "${screenshot_output_dir}"
+
+    _path=$(_screenshoot_path)
+
+    maim $1 "${_path}"
+    _log_info "shot taken - %s" "${_path}"
+
+}
+
+_screenshoot_wait() {
+    _seconds=$(echo -e "5\n10\n15\n20\n25\n30" | rofi -dmenu -i -l 10 -p "Wait Time (secs)")
+    sleep ${_seconds}
+}
+
+# ------------------------------
+
+_screenshot "$@"
+
+

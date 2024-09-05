@@ -1,0 +1,26 @@
+#!/usr/bin/env sh
+
+name=$(basename $0)
+
+# ------------------------------
+
+palette_cache_dir="${XDG_CACHE_HOME}/${name}"
+palette_config_dir="${XDG_CONFIG_HOME}/${name}"
+palette_data_dir="${XDG_DATA_HOME}/${name}"
+
+# ------------------------------
+
+source "$(which _args)"
+
+# ------------------------------
+
+_palette() {
+    _filter=$1
+    cat "${palette_config_dir}/palette.conf" | awk  "/^${_filter}/{ print \$2 }"
+}
+
+# ------------------------------
+
+_palette "$@"
+
+
