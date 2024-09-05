@@ -1,0 +1,76 @@
+#!/usr/bin/env sh
+
+# ------------------------------
+
+dotfiles_target_root="${HOME}"
+
+# ------------------------------
+
+_dotfiles() {
+
+   [[ $# -eq 0 ]] && {
+        echo "usage: $(basename $0) command"
+        return 1
+   }
+
+   _command=$1
+   shift 2>/dev/null
+
+   case ${_command} in
+      
+      i|install) _dotfiles_install $* ;;
+      u|uninstall) _dotfiles_uninstall $* ;;
+      
+      *) printf "command '%s' unknown" "${_command}" && return ;;
+
+   esac
+
+
+}
+
+# ------------------------------
+
+_dotfiles_install() {
+
+   [[ ! -d "${dotfiles_target_root}" ]] && mkdir -p "${dotfiles_target_root}"
+
+   for _package in *; do
+      [[ -d ${_package} && ! ${_package} =~ /^./ ]] && {
+         
+         printf "installing package: %-20s \n" "${_package}"
+         
+         stow -v -t "${dotfiles_target_root}" -S ${_package}
+         
+         [[ $? -ne 0 ]] && {
+            printf "... failed\n"
+         }
+      
+      }
+   done
+
+}
+
+_dotfiles_uninstall() {
+
+   [[ ! -d "${dotfiles_target_root}" ]] && return 1
+
+   for _package in *; do
+      [[ -d ${_package} && ! ${_package} =~ /^./ ]] && {
+         
+         printf "uninstalling package: %-20s\n" "${_package}"
+         
+         stow -v -t "${dotfiles_target_root}" -D ${_package}
+
+         [[ $? -ne 0 ]] && {
+            printf "... failed\n"
+         }
+
+      }
+   done
+
+}
+
+# ------------------------------
+
+_dotfiles "$@"
+
