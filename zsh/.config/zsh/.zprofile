@@ -48,11 +48,6 @@ export DBUS_SESSION_BUS_ADDRESS="unix:path=${XDG_RUNTIME_DIR}/bus" # Temporary P
 
 # ------------------------------
 
-export GOBIN="${HOME}/.go/bin"
-export GOPATH="${HOME}/.go"
-
-# ------------------------------
-
 export GPG_TTY=$(tty)
 
 # ------------------------------
@@ -66,7 +61,6 @@ export NPM_CONFIG_PREFIX="${HOME}/.local"
 # ------------------------------
 
 export OLDPATH="${OLDPATH:-${PATH}}"
-export PATH="${OLDPATH}:${GOBIN}"
 
 # ------------------------------
 
