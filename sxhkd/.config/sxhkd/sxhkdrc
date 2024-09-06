@@ -99,7 +99,7 @@ control + u
 
 # function - show bindings
 super + F1
-  rofi-bindings
+  ${HOME}/.local/bin/bindings
 
 # function - edit bindings
 super + F1 + alt
@@ -111,23 +111,23 @@ super + F1 + shift
 
 # function - history
 super + F2
-  rofi-history
+  ${HOME}/.local/bin/history
 
 # function - vpn
 super + F3
-  rofi-vpn
+  ${HOME}/.local/bin/vpn
 
 # function - wifi
 super + F4
-  rofi-wifi
+  ${HOME}/.local/bin/wifi
 
 # function - search
 super + F5
-  rofi-search
+  ${HOME}/.local/bin/search
 
 # function - fullscreen
 super + F11
-  bspc-fullscreen
+  ${HOME}/.local/bin/bspc-fullscreen
 
 #
 # Launchers
@@ -139,7 +139,7 @@ super + space
 
 # launcher - favourites
 super + space + alt
-  rofi-apps
+  ${HOME}/.local/bin/apps
 
 # launcher - terminal
 super + space + shift
@@ -239,15 +239,15 @@ super + c
 
 # terminal - default
 super + Return
-  terminal-tdrop scratch
+  ${HOME}/.local/bin/terminal drop scratch
 
-# terminal - draw
+# terminal
 super + Return + alt
   $TERMINAL
 
-# terminal - scratch
+# terminal - draw
 super + Return + shift
-  terminal-draw
+  ${HOME}/.local/bin/terminal draw
 
 #
 # Tree
