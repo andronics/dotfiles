@@ -9,6 +9,7 @@ name=$(basename $0)
 
 # ------------------------------
 
+source "$(which _func)"
 source "$(which _jq)"
 source "$(which _log)"
 
@@ -96,39 +97,39 @@ _bluetooth_controller_select() {
 # ------------------------------
 
 _bluetooth_device_connect() {
-    _log_fatal "not yet implemented: device-connect"
+    _func_unimplemented "${FUNCNAME}" 
 }
 
 _bluetooth_device_connected() {
-    _log_fatal "not yet implemented: device-connected"
+    _func_unimplemented "${FUNCNAME}" 
 }
 
 _bluetooth_device_disconnect() {
-    _log_fatal "not yet implemented: device-disconnect"
+    _func_unimplemented "${FUNCNAME}" 
 }
 
 _bluetooth_device_pair() {
-    _log_fatal "not yet implemented: device-pair"
+    _func_unimplemented "${FUNCNAME}" 
 }
 
 _bluetooth_device_paired() {
-    _log_fatal "not yet implemented: device-paired"
+    _func_unimplemented "${FUNCNAME}" 
 }
 
 _bluetooth_device_trust() {
-    _log_fatal "not yet implemented: device-trust"
+    _func_unimplemented "${FUNCNAME}" 
 }
 
 _bluetooth_device_trusted() {
-    _log_fatal "not yet implemented: device-trusted"
+    _func_unimplemented "${FUNCNAME}" 
 }
 
 _bluetooth_device_unpair() {
-    _log_fatal "not yet implemented: device-unpair"
+    _func_unimplemented "${FUNCNAME}" 
 }
 
 _bluetooth_device_untrust() {
-    _log_fatal "not yet implemented: device-untrust"
+    _func_unimplemented "${FUNCNAME}" 
 }
 
 # ------------------------------

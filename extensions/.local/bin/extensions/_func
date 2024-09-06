@@ -1,0 +1,12 @@
+#!/usr/bin/env sh
+
+# ------------------------------
+
+source "$(which _log)"
+
+# ------------------------------
+
+_func_unimplemented() {
+    # ${FUNCNAME}
+    _log_fatal "%s : function has not been implemented" "$1" 2>&1
+}
