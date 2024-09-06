@@ -1,0 +1,70 @@
+#!/usr/bin/env sh
+
+name=$(basename $0)
+
+# ------------------------------
+
+source $(which _jq)
+source $(which _log)
+source $(which _rofi)
+
+# ------------------------------
+
+apps_cache_dir="${XDG_CACHE_HOME}/${name}"
+apps_config_dir="${XDG_CONFIG_HOME}/${name}"
+apps_data_dir="${XDG_DATA_HOME}/${name}"
+
+# ------------------------------
+
+apps_config=$(cat "${apps_config_dir}/apps.json")
+
+# ------------------------------
+
+rofi_config="${apps_data_dir}/theme.rasi"
+
+# ------------------------------
+
+source "$(which _args)"
+
+# ------------------------------
+
+_apps() {
+
+    _category=$1
+
+    _app="$(_apps_list "${_category}")"
+                
+    [[ -n "${_app}" ]] && eval $(_apps_command "${_category}" "${_app}")
+                
+}
+
+
+_apps_category() {
+    
+    _filter=". | sort_by(.category)[] | (.category)"
+    
+    printf "%s\n" $(echo "${apps_config}" | _jq_query "${_filter}" | uniq | _rofi_dmenu "categories" "s")
+
+}
+
+_apps_command() {
+
+    _category=$1
+    _filter=". | sort_by(.name)[] | select((.category | contains(\"${_category}\")) and (.enabled != false)) | .command "
+
+    echo "${apps_config}" | _jq_query "${_filter}"  | awk "NR==$2+1 { print \$0 }"
+
+}
+
+_apps_list() {
+
+    _category=$1
+    _filter=". | sort_by(.name)[] | select((.category | contains(\"${_category}\")) and (.enabled != false)) | (.name + \"\t \" + .description)"
+    
+    echo "${apps_config}" | _jq_query "${_filter}" | column -t -s $'\t' | _rofi_dmenu "${_categorys:-"all"}" "i"
+
+}
+
+# ------------------------------
+
+_apps "$@"

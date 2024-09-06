@@ -1,0 +1,272 @@
+[
+    {
+        "name": "audiobookshelf",
+        "description": "audiobook & poscast server",
+        "category": "media",
+        "command": "$BROWSER -app='https://audiobookshelf.andronics.io'"
+    },
+    {
+        "name": "authy",
+        "description": "audiobook & poscast server",
+        "category": "starred",
+        "command": "authy"
+    },
+    {
+        "name": "authelia",
+        "description": "single sign-on service",
+        "category": "devops",
+        "command": "$BROWSER -app='https://authelia.andronics.io'"
+    },
+    {
+        "name": "bbc news",
+        "description": "up-to-the-minute news from around the world",
+        "category": "news",
+        "command": "$BROWSER -app='https://www.bbc.co.uk/news'"
+    },
+    {
+        "name": "chromium",
+        "description": "chromium browser",
+        "category": "starred",
+        "command": "$BROWSER"
+    },
+    {
+        "name": "calibre",
+        "description": "e-book manager",
+        "category": "media",
+        "command": "$BROWSER -app='https://calibre-web.andronics.io'"
+    },
+    {
+        "name": "cameras",
+        "description": "camera management control ui",
+        "category": "devops",
+        "command": "$BROWSER -app='https://cameras.andronics.io'"
+    },
+        {
+        "name": "code",
+        "description": "source code editor - local",
+        "category": "starred",
+        "command": "code"
+    },
+    {
+        "name": "code",
+        "description": "source code editor - web ui",
+        "category": "devops",
+        "command": "$BROWSER -app='https://code.andronics.io'"
+    },
+    {
+        "name": "curiosity stream",
+        "description": "documentaries that enlighten, entertain & inspire",
+        "category": "media",
+        "command": "$BROWSER -app='https://curiositystream.com'"
+    },
+    {
+        "name": "deluge",
+        "description": "lightweight, cross-platform bittorrent client",
+        "category": "transfer",
+        "command": "$BROWSER -app='https://deluge.andronics.io'"
+    },
+    {
+        "name": "emby",
+        "description": "personal media server",
+        "category": "media",
+        "command": "$BROWSER -app='https://emby.andronics.io'"
+    },
+    {
+        "name": "gateway",
+        "description": "gateway ui",
+        "category": "devops",
+        "command": "$BROWSER -app='https://gateway.andronics.io'"
+    },
+    {
+        "name": "gmail",
+        "description": "google email server",
+        "category": "communications",
+        "command": "$BROWSER -app='https://mail.google.com/mail/u/0/'"
+    },
+    {
+        "name": "google news",
+        "description": "aggregated news coverage from all over the world",
+        "category": "news",
+        "command": "$BROWSER -app='https://www.bbc.co.uk/news'"
+    },
+    {
+        "name": "grafana",
+        "description": "analytics and interactive visualisation",
+        "category": "devops",
+        "command": "$BROWSER -app='https://grafana.andronics.io'"
+    },
+    {
+        "name": "iplayer",
+        "description": "live tv channels and vod",
+        "category": "media",
+        "command": "$BROWSER -app='https://www.bbc.co.uk/iplayer'"
+    },
+    {
+        "name": "lidarr",
+        "description": "music collection manager ",
+        "category": "pvr",
+        "command": "$BROWSER -app='https://lidarr.andonics.io'"
+    },
+    {
+        "name": "metube",
+        "description": "web gui with for youtube-dl",
+        "category": "transfer",
+        "command": "$BROWSER -app='https://metube.andronics.io'"
+    },
+    {
+        "name": "nodered",
+        "description": "wire together apis, devices & services",
+        "category": "automation",
+        "command": "$BROWSER -app='https://nodered.andronics.io'"
+    },
+    {
+        "name": "home assistant",
+        "description": "smart home automation",
+        "category": "automation",
+        "command": "$BROWSER -app='https://home.andonics.io'"
+    },
+    {
+        "name": "portainer",
+        "description": "container management platform",
+        "category": "devops",
+        "command": "$BROWSER -app='https://portainer.andronics.io'"
+    },
+    {
+        "name": "printers",
+        "description": "printers ui",
+        "category": "devops",
+        "command": "$BROWSER -app='https://printers.andronics.io'"
+    },
+    {
+        "name": "prowlarr",
+        "description": "indexer manager",
+        "category": "pvr",
+        "command": "$BROWSER -app='https://prowlarr.andonics.io'"
+    },
+    {
+        "name": "radarr",
+        "description": "movie collection manager ",
+        "category": "pvr",
+        "command": "$BROWSER -app='https://radarr.andonics.io'"
+    },
+    {
+        "name": "readarr",
+        "description": "book collection manager ",
+        "category": "pvr",
+        "command": "$BROWSER -app='https://readarr.andonics.io'"
+    },
+    {
+        "name": "rtorrent",
+        "description": "bitorrent client",
+        "category": "transfer",
+        "command": "$BROWSER -app='https://rtorent.andronics.io'"
+    },
+    {
+        "name": "sabnzbd",
+        "description": "easy binary newsreader",
+        "category": "transfer",
+        "command": "$BROWSER -app='https://sabnzbd.andronics.io'"
+    },
+    {
+        "name": "semaphore",
+        "description": "web ui for ansible",
+        "category": "devops",
+        "command": "$BROWSER -app='https://semaphore.andronics.io'"
+    },
+    {
+        "name": "slack",
+        "description": "instamt messaging for teams",
+        "category": "communications",
+        "command": "$BROWSER -app='https://app.slack.com/client/T02GR89MNMQ'"
+    },
+    {
+        "name": "sms",
+        "description": "android sms messaging",
+        "category": "communications",
+        "command": "$BROWSER -app='https://messages.android.com'"
+    },
+    {
+        "name": "sonarr",
+        "description": "television collection manager ",
+        "category": "pvr",
+        "command": "$BROWSER -app='https://sonarr.andonics.io'"
+    },
+    {
+        "name": "spotify",
+        "description": "digital music with millions of songs",
+        "category": "media",
+        "command": "$BROWSER -app='https://open.spotify.com'"
+    },
+    {
+        "name": "statping",
+        "description": "videos and music you love",
+        "category": "devops",
+        "command": "$BROWSER -app='https://youtube.com'"
+    },
+    {
+        "name": "steam",
+        "description": "e-book manager",
+        "category": "media",
+        "command": "steam -silent"
+    },
+    {
+        "name": "storm",
+        "description": "mobile friendly deluge ui",
+        "category": "transfer",
+        "command": "$BROWSER -app='https://trackarr.andonics.io'"
+    },
+    {
+        "name": "tdarr",
+        "description": "conditional based transcoding",
+        "category": "pvr",
+        "command": "$BROWSER -app='https://tdarr.andonics.io'"
+    },
+    {
+        "name": "tiktok",
+        "description": "millions of personalized short videos",
+        "category": "media",
+        "command": "$BROWSER -app='https://tiktok.com'"
+    },
+    {
+        "name": "trackarr",
+        "description": "tracker announce irc",
+        "category": "pvr",
+        "command": "$BROWSER -app='https://trackarr.andonics.io'"
+    },
+    {
+        "name": "traefik",
+        "description": "cloud native application networking",
+        "category": "devops",
+        "command": "$BROWSER -app='https://traefik.andronics.io'"
+    },
+    {
+        "name": "whatsapp",
+        "description": "android sms messaging",
+        "category": "communications",
+        "command": "$BROWSER -app='https://web.whatsapp.com'"
+    },
+    {
+        "name": "youtube",
+        "description": "videos and music you love",
+        "category": "media",
+        "command": "$BROWSER -app='https://youtube.com'"
+    },
+    {
+        "name": "bspc - reload",
+        "description": "bspwn - reload configuration",
+        "category": "commands",
+        "command": "bspc wm -r && notify-send -i \" \" \"bspc\" \"reloaded\""
+    },
+    {
+        "name": "compositor - reload",
+        "description": "compositor - reload configuration",
+        "category": "commands",
+        "command": "pkill -sigusr1 picom && notify-send -i \" \" \"picom\" \"reloaded\""
+    },
+    {
+        "name": "polybar - reload",
+        "description": "polybar - reload configuration",
+        "category": "commands",
+        "command": "polybar-reload"
+    }
+]
