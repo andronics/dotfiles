@@ -65,12 +65,12 @@ _terminal_drop() {
 
     _session=${1:-"scratch"}
 
-    _log_info "alacritty --class ${name},${_session} --title ${name} - ${_session}"
+    _log_info "alacritty --class terminal-drop,${_session} --title ${name} - ${_session}"
 
     tdrop \
         --session "${_session}" \
         --height "80%" \
-        alacritty --class "${name},${_session}" --title "${name} - ${_session}"
+        alacritty --class "terminal-drop,${_session}" --title "${name} - ${_session}"
 
 }
 

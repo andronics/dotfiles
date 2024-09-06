@@ -32,7 +32,7 @@ _bspc_external_rules() {
 			eval "${_tags}"
 			[ "$state" ] || echo "state=floating rectangle=${_instance}"
 			;;
-		terminal-tdrop)
+		terminal-drop)
 			eval "${_tags}"
 			[ "$state" ] || echo "state=floating rectangle=5120x1152+0+0 sticky=on follow=on" 
 			;;
