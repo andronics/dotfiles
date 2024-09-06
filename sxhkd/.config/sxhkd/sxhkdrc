@@ -1,0 +1,284 @@
+#
+# Audio Control
+#
+
+# xf86 - audio - lower
+XF86AudioLowerVolume
+  audio volume-decrease
+
+# xf86 - audio - raise
+XF86AudioRaiseVolume
+  audio volume-increase
+
+# xf86 - audio - mute
+XF86AudioMute
+  audio mute-toggle
+
+# xf86 - audio - next
+XF86AudioNext
+  player action-next
+
+# xf86 - audio - previous
+XF86AudioPrev
+  player action-previous
+
+# xf86 - audio - play-pause
+XF86AudioPlay
+  player action-play-pause
+
+#
+# Dunst
+#
+
+# # dunst - action
+# Alt_L + a
+#   dunstctl action
+
+# # dunst - close all
+# Alt_L + c
+#   dunstctl close-all
+
+# # dunst - context menu
+# Alt_L + m
+#   dunstctl context
+
+# # dunst - pop from history
+# Alt_L + p
+#   dunstctl history-pop
+
+# # dunst - remove from history
+# Alt_L + r
+#   dunstctl history-rm
+
+
+#
+# Desktop
+#
+
+# desktop - previous layout
+control + Down
+  bspc desktop -l prev
+
+
+# desktop - hide / unhide
+control + Escape 
+  { bspc-hide && audio mute, bspc-unhide && audio unmute }
+
+# desktop - focus on previous
+control + Left
+  bspc desktop -f prev
+
+# desktop - focus on next
+control + Right
+  bspc desktop -f next
+
+# desktop - next layout
+control + Up
+  bspc desktop -l next 
+
+
+# desktop - send node to next
+control + n
+  bspc node -d $(bspc query -D -d "next") --follow
+
+# desktop - remove
+control + r
+  bspc desktop -r
+
+# desktop - send node to previous
+control + p
+  bspc node -d $(bspc query -D -d "prev") --follow
+
+# desktop - send node to unoccupied
+control + u
+  bspc node -d $(bspc query -D -d "next.!occupied") --follow
+
+#
+# Functions
+#
+
+# function - show bindings
+super + F1
+  rofi-bindings
+
+# function - edit bindings
+super + F1 + alt
+  xdg-open ~/.config/sxhkd/sxhkdrc
+
+# function - reload bindings
+super + F1 + shift
+  pkill -sigusr1 sxhkd
+
+# function - history
+super + F2
+  rofi-history
+
+# function - vpn
+super + F3
+  rofi-vpn
+
+# function - wifi
+super + F4
+  rofi-wifi
+
+# function - search
+super + F5
+  rofi-search
+
+# function - fullscreen
+super + F11
+  bspc-fullscreen
+
+#
+# Launchers
+#
+
+# launcher - gui
+super + space
+  rofi -show drun -show-icons
+
+# launcher - favourites
+super + space + alt
+  rofi-apps
+
+# launcher - terminal
+super + space + shift
+  rofi -show run
+
+#
+# Node
+#
+
+# # node - focus  selection
+super + alt + {Up, Down, Left, Right}
+  bspc node -f { north, south, west, east }
+
+# node - move floating window
+super + shift + {Up, Down, Left, Right}
+  xdo move { -y -20, -y +20, -x -20, -x +20 }
+
+# node - balance
+super + b + {_, shift}
+  bspc node {@parent, @/} --balance
+
+# node - equalise
+super + e + {_, shift}
+  bspc node {@parent, @/} --equalize
+
+# node - floating / fullscreen
+super + f + {_, shift}
+  bspc node --state {floating, fullscreen}
+
+# node - hidden
+super + h + {_,shift}
+  { bspc node --flag hidden=on, bspc node any.hidden.local --flag hidden=off}
+
+# node - locked
+super + l + {_,shift}
+  bspc node --flag locked={on,off}
+
+# node - marked
+super + m + {_,shift}
+  bspc node --flag marked={on,off}
+
+# node - yank to preselect
+super + n
+	bspc node newest.marked.local -n newest.!automatic.local
+
+# node - private
+super + p + {_,shift}
+  bspc node --flag private={on,off}
+
+# node - quit
+super + q + {_,shift}
+  bspc node --{close,kill}
+
+# node - sticky
+super + s + {_,shift}
+  bspc node --flag sticky={on,off}
+
+# node - tiled / pseudo_tiled
+super + t + {_, shift}
+  bspc node --state {tiled,pseudo_tiled}
+
+# node - swap with marked
+super + x
+  bspc node -s $(bspc query -N -n .marked) && bspc node -g marked
+
+#
+# Preselect
+#
+
+# preselect - down
+super + Down
+  bspc node -p "~south"
+
+# preselect - left
+super + Left
+  bspc node -p "~west"
+
+# preselect - right
+super + Right
+  bspc node -p "~east"
+
+# preselect - up
+super + Up
+  bspc node -p "~north"
+
+#
+# Recepticles
+#
+
+# Recepticles - clear
+super + c
+  for win in `bspc query -n -n ".leaf.\!window"`; do bspc node $win -k; done
+
+#
+# Terminal
+#
+
+# terminal - default
+super + Return
+  terminal-tdrop scratch
+
+# terminal - draw
+super + Return + alt
+  $TERMINAL
+
+# terminal - scratch
+super + Return + shift
+  terminal-draw
+
+#
+# Tree
+#
+
+
+# tree - flip vertical
+super + v + {_,shift}
+  bspc node {@parent, @/} -f vertical
+
+# tree - flip horizontal
+super + w + {_,shift}
+  bspc node {@parent, @/} -f horizontal
+
+
+# tree - rotate forward
+super + y + {_,shift}
+  bspc node {@parent, @/} -C forward
+
+# tree - rotate backward
+super + z + {_,shift}
+  bspc node {@parent, @/} -C backward
+
+#
+# Windows Manager
+#
+
+# window manager - gap
+super + g
+  bspc config -d focused window_gap {15,30,65}
+
+# window manager - restart
+super + Escape
+  bspc wm --restart
