@@ -1,0 +1,79 @@
+#!/usr/bin/env sh
+
+name=$(basename $0)
+
+# ------------------------------
+
+source $(which _log)
+source $(which _rofi)
+
+# ------------------------------
+
+terminal_cache_dir="${XDG_CACHE_HOME}/${name}"
+terminal_config_dir="${XDG_CONFIG_HOME}/${name}"
+terminal_data_dir="${XDG_DATA_HOME}/${name}"
+
+# ------------------------------
+
+source "$(which _args)"
+
+# ------------------------------
+
+_terminal() {
+
+    [[ $# -eq 0 ]] && {
+        _log_error "command not specified"
+        return 1
+    }
+
+    _command=$1
+    shift 2>/dev/null
+
+    case "${_command}" in
+
+        draw) _terminal_draw $* ;;
+        drop) _terminal_drop $* ;;
+        
+        *) _log_warning "command '%s' unsupported" "${_command}" ;;
+
+    esac
+
+
+}
+
+# ------------------------------
+
+_terminal_draw() {
+
+    # draw a rectangle using slop then read the geometry value
+    read -r _position_x _position_y _width _height < <(slop -f "%x %y %w %h" -b 4 -t 0 -q)
+
+    # create a variable to be used for termite name option
+    _random_id=$(tr -dc a-z0-9 </dev/urandom | head -c 10)
+
+    # add bspc rule for geometry
+    bspc rule -a "${name}:${_random_id}" -o rectangle="${_width}x${_height}+${_position_x}+${_position_y}" state="floating"
+
+    # launch alacritty
+    alacritty --class "${name},${_random_id}" --title "${name} - ${_random_id}"
+
+}
+
+# ------------------------------
+
+_terminal_drop() {
+
+    _session=${1:-"scratch"}
+
+    _log_info "alacritty --class ${name},${_session} --title ${name} - ${_session}"
+
+    tdrop \
+        --session "${_session}" \
+        --height "80%" \
+        alacritty --class "${name},${_session}" --title "${name} - ${_session}"
+
+}
+
+# ------------------------------
+
+_terminal "$@"
