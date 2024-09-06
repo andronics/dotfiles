@@ -1,0 +1,44 @@
+#!/usr/bin/env sh
+
+name=$(basename $0)
+
+# ------------------------------
+
+source $(which _log)
+source $(which _rofi)
+
+# ------------------------------
+
+bindings_cache_dir="${XDG_CACHE_HOME}/${name}"
+bindings_config_dir="${XDG_CONFIG_HOME}/${name}"
+bindings_data_dir="${XDG_DATA_HOME}/${name}"
+
+# ------------------------------
+
+bindings_config=$(cat "${XDG_CONFIG_HOME}/sxhkd/sxhkdrc")
+
+# ------------------------------
+
+rofi_config="${bindings_data_dir}/theme.rasi"
+
+# ------------------------------
+
+source "$(which _args)"
+
+# ------------------------------
+
+_bindings() {
+
+    export LC_ALL=C
+
+    echo "${bindings_config}" \
+        | awk '/^[a-zA-Z]/ && last {print $0,"\t",last} {last=""} /^#/{last=$0}' \
+        | column -t -s $'\t' \
+        | sort \
+        | _rofi_dmenu "bindings"
+
+}
+
+# ------------------------------
+
+_bindings "$@"
