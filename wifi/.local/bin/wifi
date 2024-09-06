@@ -1,0 +1,45 @@
+#!/usr/bin/env sh
+
+name=$(basename $0)
+
+# ------------------------------
+
+source $(which _log)
+source $(which _rofi)
+
+# ------------------------------
+
+wifi_cache_dir="${XDG_CACHE_HOME}/${name}"
+wifi_config_dir="${XDG_CONFIG_HOME}/${name}"
+wifi_data_dir="${XDG_DATA_HOME}/${name}"
+
+# ------------------------------
+
+rofi_config="${wifi_data_dir}/theme.rasi"
+
+# ------------------------------
+
+source "$(which _args)"
+
+# ------------------------------
+
+_wifi() {
+
+    _devices=$(nmcli -g BARS,SSID device wifi list)
+    _ssid=$(echo "${_devices}" | column -t -s $':' | _rofi_dmenu "Wifi")
+
+    [[ -z "${_ssid}" ]] && return 1
+
+    _password=$(_rofi_dmenu "Password for ${_ssid}" -password <&-)
+
+    [[ -z "${_password}" ]] && {
+        nmcli dev wifi connect "${_ssid}"
+    } || {
+        nmcli dev wifi connect "${_ssid}" password "${_password}"
+    }
+
+}
+
+# ------------------------------
+
+_wifi "$@"
