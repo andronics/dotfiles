@@ -1,0 +1,96 @@
+@import "~/.config/rofi/colours.rasi"
+
+* {
+	font: "Roboto Mono for Powerline 14";
+	separatorcolor: transparent;
+}
+
+configuration {
+	display-drun: ">";
+	display-clipboard: ">";
+	drun-display-format: "{name}";
+	modi: "drun";
+}
+
+window {
+	/* width: 600px; */
+	border-radius: 0;
+	border: 0;
+	padding: 0;
+	background-color: @mantle;
+} 
+
+mainbox {
+	background-color: @mantle;
+	/* children: [inputbar, listview]; */
+	padding: 10;
+} 
+
+inputbar {
+	children: [prompt, entry];
+	background-color: @mantle;
+	border-radius: 0;
+	margin: 0 0 0 0;
+} 
+
+prompt {
+	font: "RobotoMono Nerd Font 14";
+	text-color: @text;
+	enabled: true;
+	border-radius: 0;
+	padding: 0 10 0 0;
+} 
+
+entry {
+	font: "RobotoMono Nerd Font 14";
+	background-color: @mantle;
+	text-color: @text;
+	placeholder-color: @subtext0;
+	border-radius: 0;
+	placeholder: "Filter ...";
+	blink: false;
+	padding: 0 0 0 10;
+}
+
+listview {
+	scrollbar: false;
+	padding: 0;
+	background-color: @mantle;
+	columns: 1;
+	/*lines: 10;*/
+	margin: 10 0 5 0;
+	spacing: 10;
+ 	dynamic: true;
+	scrollbar: false;
+	layout: vertical;
+	/*fixed-height: true;*/
+	fixed-columns: true;
+}
+
+element {
+	background-color: rgba(0,0,0,0);
+	padding: 2 0 2 0;
+}
+
+element-text {
+	background-color: inherit;
+	text-color: inherit;
+	expand: true;
+	horizontal-align: 0;
+	vertical-align: 0.5;
+}
+
+element.normal.normal {
+	background-color: rgba(0,0,0,0);
+	text-color: @text;
+}
+
+element.selected.normal {
+	background-color: @crust;
+	text-color: @blue;
+}
+
+element.alternate.normal {
+	background-color: rgba(0,0,0,0);
+	text-color: @text;
+}
