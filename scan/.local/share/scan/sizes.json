@@ -19,6 +19,6 @@
 
     { "name": "US Ledger", "height": 432, "width": 279 },
     { "name": "US Legal", "height": 356, "width": 216 },
-    { "name": "US Letter", "height": 279, "width": 216 },
+    { "name": "US Letter", "height": 279, "width": 216 }
 
 ]
