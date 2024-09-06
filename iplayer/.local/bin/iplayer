@@ -1,0 +1,145 @@
+#!/usr/bin/env sh
+
+name=$(basename $0)
+
+# ------------------------------
+
+source "$(which _jq)"
+source "$(which _log)"
+source "$(which _rofi)"
+source "$(which _string)"
+
+# ------------------------------
+
+iplayer_cache_path=$"${HOME}/.get_iplayer/tv.cache"
+iplayer_history_path="${HOME}/.get_iplayer/download_history"
+
+# ------------------------------
+
+source "$(which _args)"
+
+# ------------------------------
+
+_iplayer() {
+
+    [[ $# -eq 0 ]] && {
+        _log_error "command not specified"
+        return 1
+    }
+
+    _command=$1
+    shift 2>/dev/null
+
+    case "${_command}" in
+        
+        cache-list) _iplayer_cache_list $* ;;
+        cache-update) _iplayer_cache_update $* && echo 2;;
+        
+        download-episode) _iplayer_download_episode $* ;;
+        download-series) _iplayer_download_series $* ;;
+
+        history-clear) _iplayer_history_clear $* ;;
+        history-list) _iplayer_history_list $* ;;
+        history-search) _iplayer_history_search $* ;;
+
+        pvr-add) _iplayer_pvr_add $* ;;
+        pvr-delete) _iplayer_pvr_delete $* ;;
+        pvr-list) _iplayer_pvr_list $* ;;
+        pvr-queue) _iplayer_pvr_queue $* ;;
+        pvr-queue) _iplayer_pvr_queue $* ;;
+
+        *) _log_warning "command '%s' unsupported" "${_command}" ;;
+    esac
+}
+
+# ------------------------------
+
+
+_iplayer_cache_list() {
+    
+    _program='
+        BEGIN {
+            FS = "|"
+            print "["
+        }
+
+        FNR == 1 {
+            total_lines = 0
+        }
+
+        {
+            total_lines++
+        }
+
+        NR == 1 {
+            # Store the header names
+            for (i = 1; i <= NF; i++) {
+                header[i] = $i
+            }
+            next
+        }
+
+        {
+        
+            printf "{\n"
+        
+            for (i = 1; i <= NF; i++) {
+                $i = escape_json($i)
+                # Skip empty fields and values
+                if (header[i] != "" && $i != "") {
+                    printf "        \"%s\": \"%s\"", header[i], $i
+                    if (i < NF && header[i + 1] != "") {
+                        printf ",\n"
+                    } else {
+                        printf "\n"
+                    }
+                }
+            }
+
+            if (FNR < NR_TOTAL) {
+                printf "},\n"
+            } else {
+                printf "}\n"
+            }
+        }
+    
+        END {
+            printf "]"
+        }
+
+        function escape_json(str) {
+            gsub(/\\/, "\\\\", str)   # Escape backslashes
+            gsub(/"/, "\\\"", str)   # Escape double quotes
+            gsub(/\n/, "\\n", str)    # Escape newlines
+            gsub(/\r/, "\\r", str)    # Escape carriage returns
+            gsub(/\t/, "\\t", str)    # Escape tabs
+            gsub(/\b/, "\\b", str)    # Escape backspaces
+            gsub(/\f/, "\\f", str)    # Escape form feeds
+            return str
+        }
+    '
+
+    cat "${iplayer_cache_path}" | awk -e "${_program}" NR_TOTAL=$(wc -l "${iplayer_cache_path}")
+
+}
+
+_iplayer_cache_update() {
+    
+    _log_info "updating cache"
+    get_iplayer --refresh
+
+}
+
+# ------------------------------
+
+_iplayer_history_clear() {
+    
+    _log_info "clearing history "
+    [[ -f "${iplayer_history_path}" ]] && rm "${iplayer_history_path}"
+
+}
+
+# ------------------------------
+
+_iplayer "$@"
+
