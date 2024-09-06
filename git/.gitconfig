@@ -1,0 +1,15 @@
+[user]
+	email = andronics@gmail.com
+	name = Stephen Cox
+
+[core]
+	editor = nano
+
+[credential]
+	helper = store
+
+[init]
+	defaultbranch = trunk
+
+[pull]
+	rebase = true
