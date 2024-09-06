@@ -1,0 +1,24 @@
+[
+
+    { "name": "A3", "height": 420, "width": 297 },
+    { "name": "A4", "height": 297, "width": 210 },
+    { "name": "A5", "height": 210, "width": 148 },
+    { "name": "A6", "height": 148, "width": 105 },
+
+    { "name": "B3", "height": 500, "width": 353 },
+    { "name": "B4", "height": 353, "width": 250 },
+    { "name": "B5", "height": 250, "width": 176 },
+    { "name": "B6", "height": 176, "width": 125 },
+
+    { "name": "C3", "height": 458, "width": 324 },
+    { "name": "C4", "height": 324, "width": 229 },
+    { "name": "C5", "height": 229, "width": 162 },
+    { "name": "C6", "height": 162, "width": 114 },
+
+    { "name": "DL", "height": 220, "width": 110 },
+
+    { "name": "US Ledger", "height": 432, "width": 279 },
+    { "name": "US Legal", "height": 356, "width": 216 },
+    { "name": "US Letter", "height": 279, "width": 216 },
+
+]

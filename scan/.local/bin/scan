@@ -1,0 +1,116 @@
+#!/usr/bin/env sh
+
+name=$(basename $0)
+# ------------------------------
+
+# Notes: Airscan vs eSCL
+
+# ------------------------------
+
+source $(which _log)
+source $(which _rofi)
+
+# ------------------------------
+
+scan_cache_dir="${XDG_CACHE_HOME}/${name}"
+scan_config_dir="${XDG_CONFIG_HOME}/${name}"
+scan_data_dir="${XDG_DATA_HOME}/${name}"
+
+# ------------------------------
+
+scan_sizes=$(cat "${scan_data_dir}/sizes.json")
+
+# ------------------------------
+
+source "$(which _args)"
+
+# ------------------------------
+
+_scan() {
+
+    [[ $# -eq 0 ]] && {
+        _log_error "command not specified"
+        return 1
+    }
+
+    _command=$1
+    shift 2>/dev/null
+
+    case "${_command}" in
+        
+        batch) _scan_batch $* ;;
+
+        device-discover) _scan_device_discover $* ;;
+        device-list) _scan_device_list $* ;;
+
+
+        *) _log_warning "command '%s' unsupported" "${_command}" ;;
+
+    esac
+
+}
+
+# ------------------------------
+
+_scan_batch() {
+
+    # _device="escl:http://192.168.0.100:80"
+    _device="airscan:e0:Brother MFC-J5730DW"
+    _format="tiff"
+    _mode="Gray"
+    _resolution=300
+    _source="Flatbed"
+
+    _batch_format="${HOME}/.scan/${_jobid}/page-%d.${_format}"
+    _batch_start=1
+
+    _geometry_left=0
+    _geometry_top=0
+    _geometry_width=210
+    _geometry_height=397
+
+    scanimage \
+        --device-name="${_device}" \
+        --format="${_format}" \
+        --mode="${_mode}" \
+        --resolution="${_resolution}" \
+        --source="${_source}" \
+        -l "${_geometry_left}" \
+        -t "${_geometry_top}" \
+        -x "${_geometry_width}" \
+        -y "${_geometry_height}" \
+        --batch="${_batch_format}" \
+        --batch-increment="1" \
+        --batch-print \
+        --batch-prompt \
+        --batch-start="${_batch_start}"
+
+}
+
+
+# ------------------------------
+
+_scan_control() {
+
+    scanimage $* 2>/dev/null
+
+}
+
+# ------------------------------
+
+_scan_device_discover() {
+
+    _devices=$(_scan_control --list-devices)
+
+}
+
+
+_scan_device_list() {
+
+    _devices=$(_scan_control --list-devices)
+
+}
+
+# ------------------------------
+
+_scan "$@"
