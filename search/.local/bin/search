@@ -22,9 +22,13 @@ search_providers="${search_config_dir}/providers"
 
 # ------------------------------
 
+rofi_config="${search_data_dir}/theme.rasi"
+
+# ------------------------------
+
 _search() {
 
-    _search=$(sort "${search_history}" | rofi -dmenu -i -p "Search" | awk '{$1=$1;print}')
+    _search=$(sort "${search_history}" | _rofi_dmenu "Search" | awk '{$1=$1;print}')
 
     [[ -n ${_search} ]] || {
         _log_info "no search parameters entered"

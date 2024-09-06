@@ -1,0 +1,10 @@
+@import "~/.config/rofi/config.rasi"
+
+window {
+	width: 600px;
+}
+
+listview {
+	columns: 1;
+	lines: 15;
+}
