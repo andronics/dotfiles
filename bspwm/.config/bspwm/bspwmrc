@@ -44,14 +44,3 @@ bspc rule -r "*:*:*"
 bspc rule -a Alacritty border=off
 bspc rule -a "TeamViewer" state=floating
 # bspc rule -a "VirtualBoxVM" state=floating
-
-# ------------------------------
-
-echo "sourcing autostart"
-. "${XDG_CONFIG_HOME}/bspwm/autostart"
-
-# ------------------------------
-
-ls -1 ${XDG_CONFIG_HOME}/bspwm/layouts | while read doc; do
-    ${XDG_CONFIG_HOME}/bspwm/layouts/$doc
-done
