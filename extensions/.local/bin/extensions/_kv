@@ -11,7 +11,7 @@ kv_dir="$HOME/.kv-${name}"
 # ------------------------------
 
 _kv_clear() {
-	_log_info "_kv_clear ${kv_dir}"
+	_log_debug "_kv_clear ${kv_dir}"
 	rm -rf "${kv_dir}"
 }
 
@@ -24,7 +24,7 @@ _kv_del() {
 		return 1
 	}
 	
-	_log_info "_kv_del key ${_key} at ${kv_dir}/${_key}"
+	_log_debug "_kv_del key ${_key} at ${kv_dir}/${_key}"
 
 	[[ -f "${kv_dir}/${_key}" ]] && \
 		rm -f "${kv_dir}/${_key}"
@@ -40,7 +40,7 @@ _kv_get() {
 		return 1
 	}
 	
-	_log_info "_kv_get key ${_key} at ${kv_dir}/${_key}"
+	_log_debug "_kv_get key ${_key} at ${kv_dir}/${_key}"
 
 	_value="$([ -f "${kv_dir}/${_key}" ] && \
 		cat "${kv_dir}/${_key}")"
@@ -52,7 +52,7 @@ _kv_get() {
 
 _kv_list() {
 	
-	_log_info "_kv_list  at ${kv_dir}"
+	_log_debug "_kv_list  at ${kv_dir}"
 	
 	for i in "${kv_dir}/"*; do
 		if [ -f "$i" ]; then
