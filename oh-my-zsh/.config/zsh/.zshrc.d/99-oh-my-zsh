@@ -12,5 +12,3 @@ plugins=(
   zsh-256color
   zsh-abbr
 )
-
-# source ${ZSH}/oh-my-zsh.sh
