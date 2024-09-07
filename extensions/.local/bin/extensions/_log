@@ -5,7 +5,7 @@
 log_dir="${XDG_STATE_HOME}/${name}"
 log_path="${log_dir}/${name}.log"
 log_id=$((RANDOM*RANDOM))
-log_level=2
+log_level=3
 
 # ------------------------------
 
