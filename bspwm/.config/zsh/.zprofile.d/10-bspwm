@@ -1,0 +1,8 @@
+[[ $- != *i* ]] && {
+    
+    export HOST_RESOLUTION=$(xdpyinfo | awk '/dimensions/ {print $2}')
+    export HOST_MONITOR=$(xrandr | awk '/ connected/ {print $1}')
+    export WINDOW_GAP="20"
+    export WINDOW_PADDING="20"
+
+}
