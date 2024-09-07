@@ -1,0 +1,1 @@
+feh --no-fehbg --bg-fill "${HOME}/.local/share/backgrounds/0001.png"  >> /tmp/output.txt
