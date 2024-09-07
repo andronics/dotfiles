@@ -1,0 +1,8 @@
+# picom compositor
+picom -b --animations \
+    --animation-clamping \
+    --animation-dampening 25 \
+    --animation-for-open-window zoom \
+    --animation-for-transient-window zoom \
+    --animation-stiffness 350 \
+    --animation-window-mass 5 &
