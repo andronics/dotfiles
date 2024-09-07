@@ -1,0 +1,6 @@
+# x11
+setxkbmap -layout uk 
+xsetroot -cursor_name left_ptr &
+xset s off &
+xset s -dpms &
+xrdb ~/.Xresources &
