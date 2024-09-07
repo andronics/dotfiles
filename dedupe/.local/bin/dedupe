@@ -1,0 +1,86 @@
+#!/usr/bin/env sh
+
+name=$(basename $0)
+
+# ------------------------------
+
+source $(which _jq)
+source $(which _log)
+
+# ------------------------------
+
+dedupe_cache_dir="${XDG_CACHE_HOME}/${name}"
+dedupe_config_dir="${XDG_CONFIG_HOME}/${name}"
+dedupe_data_dir="${XDG_DATA_HOME}/${name}"
+dedupe_state_dir="${XDG_STATE_HOME}/${name}"
+
+# ------------------------------
+
+dedupe_state_path="${dedupe_state_dir}/$(date +%Y%m%d-%s)"
+dedupe_removed="${dedupe_state_path}/removed"
+dedupe_saved="${dedupe_state_path}/saved"
+
+# ------------------------------
+
+source "$(which _args)"
+
+# ------------------------------
+
+_dedupe() {
+
+    [[ $# -eq 0 ]] && {
+        _log_error "path not specified"
+        return 1
+	}
+
+	_path=$1
+    shift 2>/dev/null
+	
+	[[ ! -d "${_path}" ]] && {
+		_log_error "specified path '${_path}' is not a directory"
+		return 1
+	}
+
+	[[ ! $(command -v sha512sum) ]] && {
+		_log_error "required command 'sha512sum' is not available"
+		return 1
+	}
+
+	[[ ! -d "${dedupe_state_path}" ]] && mkdir -p "${dedupe_state_path}" 
+	[[ ! -f "${dedupe_removed}" ]] && touch "${dedupe_removed}"
+	[[ ! -f "${dedupe_saved}" ]] && touch "${dedupe_saved}"
+
+	_freed_files=0
+	_freed_space=0
+
+	while read _file; do
+		
+		_checksum=$(sha512sum "${_file}" | awk '{ print $1 }')
+		
+		[[ `grep -E "^${_checksum}" "${dedupe_saved}" | wc -l` -eq 0  ]] && {
+			
+			echo "${_checksum} | ${_file}" >> "${dedupe_saved}" 
+		
+		} || {
+
+			_size=$(stat -c %s "${_file}")
+			_freed_files=$((_freed_files + 1))
+			_freed_space=$((_freed_space + _size))
+
+			_log_info "removing file '${_file}' with checksum ${_checksum}"
+			rm -vf "${_file}" 2>1 > /dev/null
+
+			echo "${_checksum} | ${_file}" >> "${dedupe_removed}"  
+
+		}
+	
+	
+	done < <(find "${_path}" -xdev -type f)
+
+	_log_info "process completed - %d blocks & %d files freed" "${_freed_space}"  "${_freed_files}"
+
+}
+
+# ------------------------------
+
+_dedupe "$@"
