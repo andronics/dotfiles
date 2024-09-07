@@ -1,7 +1,7 @@
 [bar/base]
 enable-ipc = true
 fixed-center = true
-monitor = ${env:HOST_MONITOR:LVDS1}
+monitor = ${env:HOST_MONITOR:DP-2}
 monitor-exact = true
 monitor-fallback = DP-2
 monitor-strict = false 
