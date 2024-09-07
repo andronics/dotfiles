@@ -1,0 +1,399 @@
+#!/usr/bin/env sh
+
+name=$(basename $0)
+
+# ------------------------------
+
+# https://docs.docker.com/reference/api/engine/v1.46
+
+# ------------------------------
+
+source $(which _jq)
+source $(which _log)
+
+# ------------------------------
+
+dock_cache_dir="${XDG_CACHE_HOME}/${name}"
+dock_config_dir="${XDG_CONFIG_HOME}/${name}"
+dock_data_dir="${XDG_DATA_HOME}/${name}"
+
+# ------------------------------
+
+dock_api_version="1.46"
+dock_sock="/run/docker.sock"
+dock_volume_root="${HOME}/.docker/volumes"
+
+# ------------------------------
+
+source "$(which _args)"
+
+# ------------------------------
+
+_dock() {
+
+     [[ $# -eq 0 ]] && {
+        _log_error "command not specified"
+        return 1
+    }
+
+    _command=$1
+    shift 2>/dev/null
+
+    case "${_command}" in
+
+        api-delete) _dock_api_delete $* ;;
+        api-get) _dock_api_get $* ;;
+        api-head) _dock_api_head $* ;;
+        api-post) _dock_api_post $* ;;
+        api-put) _dock_api_put $* ;;
+        
+        compose-down) _dock_compose_down $* ;;
+        compose-up) _dock_compose_up $* ;;
+
+        container-changes) _dock_container_changes $* ;;
+        container-export) _dock_container_export $* ;;
+        container-logs) _dock_container_logs $* ;;
+        container-inspect) _dock_container_inspect $* ;;
+        container-stats) _dock_container_stats $* ;;
+        container-top) _dock_container_top $* ;;
+        
+        containers-list) _dock_containers_list $* ;;
+
+        image-export) _dock_image_export $* ;;
+        image-history) _dock_image_history $* ;;
+        image-inspect) _dock_image_inspect $* ;;
+        
+        images-export) _dock_images_export $* ;;
+        images-list) _dock_images_list $* ;;
+        images-search) _dock_images_search $* ;;
+        
+        system-events) _dock_system_events $* ;;
+        system-info) _dock_system_info $* ;;
+        system-ping) _dock_system_ping $* ;;
+        system-usage) _dock_system_usage $* ;;
+        system-version) _dock_system_version $* ;;
+
+        volume-backup) _dock_volume_backup $* ;;
+        volume-inspect) _dock_volume_inspect $* ;;
+        volume-prune) _dock_volume_prune $* ;;
+        volume-remove) _dock_volume_remove $* ;;
+        volume-restore) _dock_volume_restore $* ;;
+
+        volumes-list) _dock_volumes_list $* ;;
+
+        *) _log_warning "command '%s' unsupported" "${_command}" ;;
+
+    esac
+
+}
+
+# ------------------------------
+
+_dock_api_delete() {
+
+    _path=$1
+    _url=$(printf "http://localhost/v%s/%s" "${dock_api_version}" "${_path}")
+    curl --silent --unix-socket "${dock_sock}" -X DELETE "${_url}"
+
+}
+
+_dock_api_get() {
+
+    _path=$1
+    _url=$(printf "http://localhost/v%s/%s" "${dock_api_version}" "${_path}")
+    curl --silent --unix-socket "${dock_sock}" -X GET "${_url}"
+
+}
+
+_dock_api_head() {
+
+    _path=$1
+    _url=$(printf "http://localhost/v%s/%s" "${dock_api_version}" "${_path}")
+    curl --silent --unix-socket "${dock_sock}" -X HEAD "${_url}"
+
+}
+
+_dock_api_post() {
+
+    _path=$1
+    _url=$(printf "http://localhost/v%s/%s" "${dock_api_version}" "${_path}")
+    curl --silent --unix-socket "${dock_sock}" -X POST "${_url}"
+
+}
+
+_dock_api_put() {
+
+    _path=$1
+    _url=$(printf "http://localhost/v%s/%s" "${dock_api_version}" "${_path}")
+    curl --silent --unix-socket "${dock_sock}" -X PUT "${_url}"
+
+}
+
+# ------------------------------
+
+_dock_container_changes() {
+
+    _container=$1
+    _dock_api_get "containers/${_container}/changes"
+
+}
+
+_dock_container_export() {
+
+    _container=$1
+    _dock_api_get "containers/${_container}/export"
+
+}
+
+_dock_container_logs() {
+
+    _container=$1
+    _dock_api_get "containers/${_container}/logs"
+
+}
+
+_dock_container_inspect() {
+
+    _container=$1
+    _dock_api_get "containers/${_container}/json"
+
+}
+
+_dock_container_stats() {
+
+    _container=$1
+    _dock_api_get "containers/${_container}/stats"
+
+}
+
+_dock_container_top() {
+
+    _container=$1
+    _dock_api_get "containers/${_container}/top"
+
+}
+
+# ------------------------------
+
+_dock_containers_list() {
+
+    _dock_api_get "containers/json"
+
+}
+
+# ------------------------------
+
+_dock_container_exec() {
+
+    _container=$1
+    _cmd=${2:="sh"}
+
+    _log_info "executing %s on host %s\n" "${_cmd}" "${_container}"
+    docker exec -it "${_container}" "${_cmd}"
+
+}
+
+_dock_container_list() {
+
+    _pattern=$1
+    _containers=$(docker ps -aq | grep -E "^${_pattern}" | sort)
+
+    for _container in ${_containers}; do
+
+        _data=$(docker inspect "${_container}")
+        
+        _name=$(echo "${_data}" | _jq_query ".[].Name" | sed 's|/||g')
+        _image=$(echo "${_data}" | _jq_query ".[].Config.Image" | sed 's|@.*||g')
+        _addresses=$(echo "${_data}" | _jq_query ".[].NetworkSettings.Networks | to_entries[] | .value.IPAddress")
+
+        printf "%16s | %-30.30s | %-50.50s | %-20s\n" "${_container}" "${_name}" "${_image}" "$(IFS=' | ' echo ${_addresses[*]})"
+
+    done
+
+}
+
+_dock_container_remove() {
+
+    _pattern=$1
+    _containers=$(docker ps -aq | grep -E "^${_pattern}")
+
+    for _container in ${_containers}; do
+
+        _log_info "removing container '%s'" "${_container}"
+        docker rm -f "${_container}"
+
+    done
+
+}
+
+_docker_container_state() {
+
+    _pattern=$1
+    _containers=$(docker ps -aq | grep -E "^${_pattern}")
+   
+    
+    if [ ! -d "$root_folder" ]; then
+        printf "folder does not exist - %s\n" $root_folder
+    else
+        pushd $root_folder 1>/dev/null
+        case "$1" in
+            "down" | "stop")
+                docker-compose down
+                ;;
+            "up" | "start")
+                docker-compose up -d
+                ;;
+            "restart")
+                docker-compose down
+                docker-compose up -d
+                ;;
+        esac
+        popd 1>/dev/null
+    fi
+}
+
+# ------------------------------
+
+_dock_image_export() {
+
+    _image=$1
+    _dock_api_get "images/${_image}/get"
+
+}
+
+_dock_image_history() {
+
+    _image=$1
+    _dock_api_get "images/${_image}/history"
+
+}
+
+_dock_image_inspect() {
+
+    _image=$1
+    _dock_api_get "images/${_image}/json"
+
+}
+
+_dock_image_remove() {
+
+    _image=$1
+    _force=false
+
+    _dock_api_delete "images/${_image}?force=${_force}"
+
+}
+
+# ------------------------------
+
+_dock_images_export() {
+
+    _names=$1
+    _dock_api_get "images/get?names=${_names}"
+
+}
+
+
+_dock_images_list() {
+
+    _dock_api_get "images/json"
+
+}
+
+_dock_images_search() {
+
+    _term=$1
+    _dock_api_get "images/search?term=${_term}"
+
+}
+
+# ------------------------------
+
+_dock_system_events() {
+
+    _dock_api_get "events"
+
+}
+
+_dock_system_info() {
+
+    _dock_api_get "info"
+
+}
+
+_dock_system_ping() {
+
+    _dock_api_get "_ping"
+
+}
+
+_dock_system_usage() {
+
+    _dock_api_get "system/df"
+
+}
+
+_dock_system_version() {
+
+    _dock_api_get "version"
+
+}
+
+# ------------------------------
+
+_dock_volume_backup() {
+
+    _container=$1
+    _path=$2
+    _timestamp=$(date +%Y%m%d-%s)
+
+    mkdir -p "${dock_volume_root}/${_container}"
+    sudo docker run --rm --volumes-from "$_container" -v "${dock_volume_root}:/volumes_root" busybox tar cvf "/volumes_root/${_container}/${_timestamp}.tar" "${_path}"
+
+}
+
+_dock_volume_inspect() {
+
+    _volume=$1
+    _dock_api_get "volumes/${_volume}"
+
+}
+
+_dock_volume_prune() {
+
+    _volume=$1
+    _force=false
+    
+    _dock_api_post "volumes/prune"
+
+}
+
+_dock_volume_remove() {
+
+    _volume=$1
+    _force=false
+
+    _dock_api_delete "volumes/${_volume}?force=${_force}"
+
+}
+
+_dock_volume_restore() {
+
+    _container=$1
+    _timestamp=$2
+
+    sudo docker run --rm --volumes-from "$_container" -v "${dock_volume_root}:/archive" busybox tar xvf "/archive/${_container}/${_timestamp}.tar"
+
+}
+
+# ------------------------------
+
+_dock_volumes_list() {
+
+    _dock_api_get "volumes"
+
+}
+
+# ------------------------------
+
+_dock "$@"
