@@ -1,4 +1,4 @@
-#!/usr/bin/env sh
+#!/usr/bin/env zsh
 
 # ------------------------------
 
@@ -38,7 +38,7 @@ _xinitrc() {
     _xinitdir="/etc/X11/xinit/xinitrc.d"
     [[ -d "${_xinitdir}" ]] && {
         for _file in ${_xinitdir}/*; do
-            [[ -x "${_file}" -a ! -d "${_file}" ]] && {
+            [[ -x "${_file}" && ! -d "${_file}" ]] && {
                 echo "loading xinit script ${_file}"
                 . "${_file}"
             }
