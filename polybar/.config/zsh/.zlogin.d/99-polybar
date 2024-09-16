@@ -1,1 +1,10 @@
-polybar -r main &
+[[ -n "${DISPLAY}" || "${WAYLAND_DISPLAY}" ]] && {
+	(
+		while true; do
+			[[ `pgrep "bspwm"` ]] && {
+				polybar -q -r main &
+				break
+			} || sleep 0.25
+		done
+	) &
+}
