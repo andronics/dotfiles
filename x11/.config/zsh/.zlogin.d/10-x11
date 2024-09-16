@@ -1,6 +1,7 @@
-# x11
-setxkbmap -layout uk 
-xsetroot -cursor_name left_ptr &
-xset s off &
-xset s -dpms &
-xrdb ~/.Xresources &
+[[ -n "${DISPLAY}" || "${WAYLAND_DISPLAY}" ]] && {
+    setxkbmap -layout uk > /dev/null
+    xsetroot -cursor_name left_ptr  > /dev/null
+    xset s off  > /dev/null
+    xset s -dpms  > /dev/null
+    xrdb ~/.Xresources  > /dev/null
+}
