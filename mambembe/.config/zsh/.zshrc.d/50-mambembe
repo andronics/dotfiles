@@ -1,0 +1,8 @@
+otp() {
+
+    mambembe-cli get-token -s "$@" | sort | fzf --reverse -0 -1 | sed -n 's/.*Token: "\([0-9]\+\)".*/\1/p'
+}
+
+otpc() {
+    otp "$@" | xclip -i -selection clipboard
+}
