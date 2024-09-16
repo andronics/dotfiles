@@ -1,10 +1,19 @@
 #!/usr/bin/env sh
 
 _onexit() {
-	for child in $(jobs -p); do
-		jobs -p | grep -q $child && kill $child 2> /dev/null
+
+	for _child in $(jobs -p); do
+		kill ${_child} 2>/dev/null || true
 	done
-	[[ -d "${state_path}" && -w "${state_path}" ]] && rm -rf -- "${state_path}"
+
+	_state_path="${XDG_STATE_HOME}/${name}"
+
+	[[ -d "${_state_path}" && -w "${_state_path}" ]] && {
+        rm -rf -- "${_state_path}"
+    }
+
+	exit 0
+
 }
 
-trap _onexit exit quit int 30
+trap _onexit SIGTERM SIGUSR1
