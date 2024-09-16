@@ -1,2 +1,3 @@
-# dunst notifications
-dunst &
+[[ -n "${DISPLAY}" || "${WAYLAND_DISPLAY}" ]] && {
+    dunst &
+}
