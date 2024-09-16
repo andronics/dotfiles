@@ -10,7 +10,7 @@ source $(which _singleton)
 
 # ------------------------------
 
-_singleton && [[ $? -eq 1 ]] && exit 1
+_singleton_terminate && [[ $? -eq 1 ]] && exit 1
 
 # ------------------------------
 
