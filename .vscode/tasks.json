@@ -1,0 +1,43 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Install Packages",
+            "detail": "Installs all or specific selection of packages",
+            "type": "shell",
+            "command": "${workspaceFolder}/dotfiles",
+            "args": [ "install", "${input:packages}" ],
+            "icon": { 
+                "id": "extensions"
+            }
+        },
+        {
+            "label": "Reinstall Packages",
+            "detail": "Reinstalls all or specific selection of packages",
+            "type": "shell",
+            "command": "${workspaceFolder}/dotfiles",
+            "args": [ "reinstall", "${input:packages}" ],
+            "icon": {
+                "id": "extensions"
+            }
+        },
+        {
+            "label": "Uninstall Packages",
+            "detail": "Uninstalls all or specific selection of packages",
+            "type": "shell",
+            "command": "${workspaceFolder}/dotfiles",
+            "args": [ "uninstall", "${input:packages}" ],
+            "icon": {
+                "id": "extensions"
+            }
+        }
+    ],
+    "inputs": [
+        {
+            "id": "packages",
+            "type": "promptString",
+            "description": "What package(s) should we use?",
+            "default": "*"
+          }
+    ]
+  }
