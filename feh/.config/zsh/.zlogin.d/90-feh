@@ -1,1 +1,3 @@
-feh --no-fehbg --bg-fill "${HOME}/.local/share/backgrounds/0001.png"  >> /tmp/output.txt
+[[ -n "${DISPLAY}" || "${WAYLAND_DISPLAY}" ]] && {
+    feh --no-fehbg --bg-fill "${HOME}/.local/share/backgrounds/0001.png" &
+}
