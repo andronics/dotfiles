@@ -19,6 +19,7 @@ _dotfiles() {
    case ${_command} in
       
       i|install) _dotfiles_install $* ;;
+      r|reinstall) _dotfiles_reinstall $* ;;
       u|uninstall) _dotfiles_uninstall $* ;;
       
       *) printf "command '%s' unknown" "${_command}" && return ;;
@@ -34,7 +35,9 @@ _dotfiles_install() {
 
    [[ ! -d "${dotfiles_target_root}" ]] && mkdir -p "${dotfiles_target_root}"
 
-   for _package in *; do
+   _packages=${@:-"*"}
+
+   for _package in ${_packages}; do
       [[ -d ${_package} && ! ${_package} =~ /^./ ]] && {
          
          printf "installing package: %-20s \n" "${_package}"
@@ -50,11 +53,20 @@ _dotfiles_install() {
 
 }
 
+_dotfiles_reinstall() {
+
+   _dotfiles_uninstall $* 
+   _dotfiles_install $* 
+
+}
+
 _dotfiles_uninstall() {
 
    [[ ! -d "${dotfiles_target_root}" ]] && return 1
 
-   for _package in *; do
+   _packages=${@:-"*"}
+
+   for _package in ${_packages}; do
       [[ -d ${_package} && ! ${_package} =~ /^./ ]] && {
          
          printf "uninstalling package: %-20s\n" "${_package}"
