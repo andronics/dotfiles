@@ -6,29 +6,34 @@ name=$(basename $0)
 
 source "$(which _jq)"
 source "$(which _log)"
+source "$(which _onexit)"
 
 # ------------------------------
 
-bspc_aspect_x=16
-bspc_aspect_y=9
+bsp_aspect_x=16
+bsp_aspect_y=9
 
 # ------------------------------
 
-_bspc_aspect() {
+source "$(which _args)"
+
+# ------------------------------
+
+_bsp_aspect() {
 
   [[ $# -eq 2 ]] && {
-    bspc_aspect_x=$1
-    bspc_aspect_y=$2
+    bsp_aspect_x=$1
+    bsp_aspect_y=$2
   }
 
-  _log_info "aspect ratio to %d x %d" ${bspc_aspect_x} ${bspc_aspect_y}
+  _log_info "aspect ratio to %d x %d" ${bsp_aspect_x} ${bsp_aspect_y}
 
   _node=( $(bspc query -T -n | _jq_query '.client.tiledRectangle.width,.client.tiledRectangle.height,.id') )
   _parent=( $(bspc query -T -n @parent | _jq_query '.splitType,.firstChild.id') )
 
   [[ "${_parent[0]}" = "vertical" ]] && {
 
-    _width=$(printf "%.0f" $(echo "scale=4;${_node[1]}*${bspc_aspect_x}/${bspc_aspect_y}" | bc))
+    _width=$(printf "%.0f" $(echo "scale=4;${_node[1]}*${bsp_aspect_x}/${bsp_aspect_y}" | bc))
     
     if [ "${_node[2]}" = "${_parent[1]}" ]; then
       
@@ -44,7 +49,7 @@ _bspc_aspect() {
 
   [[ "${_parent[0]}" = "horizontal" ]] && {
     
-    _height=$(printf "%.0f\n" $(echo "scale=4;${_node[0]}*${bspc_aspect_y}/${bspc_aspect_x}" | bc))
+    _height=$(printf "%.0f\n" $(echo "scale=4;${_node[0]}*${bsp_aspect_y}/${bsp_aspect_x}" | bc))
     
     if [[ "${_node[2]}" = "${_parent[1]}" ]]; then
   
@@ -62,4 +67,4 @@ _bspc_aspect() {
 
 # ------------------------------
 
-_bspc_aspect "$@"
+_bsp_aspect "$@"
