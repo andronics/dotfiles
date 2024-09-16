@@ -1,2 +1,11 @@
-# Simple X Hotkey Daemon
-sxhkd &
+[[ -n "${DISPLAY}" || "${WAYLAND_DISPLAY}" ]] && {
+
+    # Check if mkfifo and sxhkd are available
+    command -v "sxhkd" >/dev/null 2>&1 || {
+        echo "Error: sxhkd is not installed."
+        return 1
+    }
+
+    sxhkd &
+
+}
