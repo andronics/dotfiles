@@ -1,0 +1,77 @@
+#!/usr/bin/env sh
+
+name=$(basename $0)
+
+# ------------------------------
+
+source "$(which _log)"
+
+# ------------------------------
+
+bsp_shroud_cache_dir="${XDG_CACHE_HOME}/${name}"
+bsp_shroud_config_dir="${XDG_CONFIG_HOME}/${name}"
+bsp_shroud_data_dir="${XDG_DATA_HOME}/${name}"
+
+# ------------------------------
+
+source "$(which _args)"
+
+# ------------------------------
+
+_bsp_shroud() {
+    
+    [[ $# -eq 0 ]] && {
+        _log_error "command not specified"
+        return 1
+    }
+
+    _command=$1
+    shift 2>/dev/null
+
+    case "${_command}" in
+        
+        cover) _bsp_shroud_cover $* ;;
+        reveal) _bsp_shroud_reveal $* ;;
+
+        *) _log_warning "command '%s' unsupported" "${_command}" ;;
+
+    esac
+}
+
+# ------------------------------
+
+_bsp_shroud_cover() {
+
+    [[ `pgrep "polybar"` ]] && {
+        _log_debug "covering polybar"
+        polybar-msg cmd hide
+    }
+
+    _nodes=$(bspc query -N -n .leaf -d focused)
+
+    for _node in ${_nodes}; do
+        _log_info "covering node '%s'" "${_node}"
+        bspc node "${_node}" -g hidden=on
+    done
+
+}
+
+_bsp_shroud_reveal() {
+
+    [[ `pgrep "polybar"` ]] && {
+        _log_debug "reveaing polybar"
+        polybar-msg cmd show
+    }
+
+    _nodes=$(bspc query -N -n .leaf -d focused)
+
+    for _node in ${_nodes}; do
+        _log_info "revealing node '%s'" "${_node}"
+        bspc node "${_node}" -g hidden=off
+    done
+
+}
+
+# ------------------------------
+
+_bsp_shroud "$@"
