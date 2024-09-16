@@ -1,0 +1,47 @@
+#!/usr/bin/env sh
+
+name=$(basename $0)
+
+# ------------------------------
+
+shopt -s nullglob globstar
+
+# ------------------------------
+
+source $(which _rofi)
+
+# ------------------------------
+
+rpass_store="${PASSWORD_STORE_DIR:-"${HOME}/.password-store"}"
+
+# ------------------------------
+
+_rpass() {
+
+	_type=0
+
+	[[ $1 =~ ^(-t|--type)$ ]] && {
+		_type=1
+		shift
+		echo yes
+	}
+
+	_files=( "${rpass_store}"/**/*.gpg )
+	_files=( "${_files[@]#"${rpass_store}"/}" )
+	_files=( "${_files[@]%.gpg}" )
+
+	_file=$(printf '%s\n' "${_files[@]}" | _rofi_dmenu "password file")
+
+	[[ -n ${_file} ]] || exit
+
+	if [[ ${_type} -eq 0 ]]; then
+		pass show -c "${_file}" 2>/dev/null
+	else
+		pass show "${_file}" | { IFS= read -r _password; printf %s "${_password}"; } | xdotool type --clearmodifiers --file -
+	fi
+
+}
+
+# ------------------------------
+
+_rpass "$@"
