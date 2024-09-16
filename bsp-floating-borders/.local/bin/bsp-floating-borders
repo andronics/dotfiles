@@ -5,6 +5,7 @@ name=$(basename $0)
 # ------------------------------
 
 source $(which _log)
+source $(which _onexit)
 source $(which _singleton)
 
 # ------------------------------
@@ -13,7 +14,7 @@ _singleton && [[ $? -eq 1 ]] && exit 1
 
 # ------------------------------
 
-_bspc_floating_borders() {
+_bsp_floating_borders() {
 
 	_log_info "subscribing to events"
 
@@ -26,7 +27,9 @@ _bspc_floating_borders() {
 
 }
 
-_bspc_floating_borders "$@"
+# ------------------------------
+
+_bsp_floating_borders "$@"
 
 
 
