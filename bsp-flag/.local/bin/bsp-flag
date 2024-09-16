@@ -1,0 +1,85 @@
+#!/usr/bin/env sh
+
+name=$(basename $0)
+
+# ------------------------------
+
+source $(which _func)
+source $(which _log)
+source $(which _onexit)
+source $(which _singleton)
+
+# ------------------------------
+
+_singleton && [[ $? -eq 1 ]] && exit 1
+
+# ------------------------------
+
+_bsp_flag() {
+
+    _log_info "subscribing to events"
+
+    _window=$(xprop -root _NET_ACTIVE_WINDOW | awk '{print $5}')
+
+    bspc subscribe node_flag | while read _event _monitor _deskop _node _flag _state; do
+
+        _log_debug "node [%s] flag %s set to %s" "${_node}" "${_flag}" "${_state}"
+        
+        case "${_flag}" in
+            'floating') _bsp_flag_floating ;;
+            'hidden') _bsp_flag_hidden ;;
+            'locked') _bsp_flag_locked ;;
+            'marked') _bsp_flag_marked ;;
+            'private') _bsp_flag_private ;;
+            'sticky') _bsp_flag_sticky ;;
+        esac
+
+    done
+
+}
+
+_bsp_flag_floating() {
+
+    _func_unimplemented "${FUNCNAME}"
+
+}
+
+_bsp_flag_hidden() {
+
+    _func_unimplemented "${FUNCNAME}"
+
+}
+
+_bsp_flag_locked() {
+
+    _func_unimplemented "${FUNCNAME}"
+
+}
+
+_bsp_flag_marked() {
+
+    [[ ${_state} == "on" ]] && {
+        bspc config -n "${_node}" border_width 3
+        bspc config focused_border_color $(palette blue)
+    } || {
+        bspc config -n "${_node}" border_width 1
+        bspc config focused_border_color $(palette red)
+    }
+
+}
+
+_bsp_flag_private() {
+
+    _func_unimplemented "${FUNCNAME}"
+
+}
+
+_bsp_flag_sticky() {
+
+    _func_unimplemented "${FUNCNAME}"
+
+}
+
+# ------------------------------
+
+_bsp_flag "$@"

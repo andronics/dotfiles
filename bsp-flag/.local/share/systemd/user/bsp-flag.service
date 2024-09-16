@@ -1,0 +1,18 @@
+[Unit]
+Description=BSP Flag
+Wants=default.target
+After=default.target
+
+[Service]
+Type=simple
+Environment=PATH="%h/.local/bin:%h/.local/bin/extensions:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+Environment=XDG_CACHE_HOME="%h/.cache"
+Environment=XDG_CONFIG_HOME="%h/.config"
+Environment=XDG_STATE_HOME="%h/.local/share"
+ExecStart=%h/.local/bin/bsp-flag
+ExecStop=/usr/bin/kill -SIGUSR1 $MAINPID
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
