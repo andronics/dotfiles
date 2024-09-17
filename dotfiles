@@ -2,7 +2,9 @@
 
 # ------------------------------
 
+dotfiles_source_root="$(cd "$(dirname "$0")" && pwd)"
 dotfiles_target_root="${HOME}"
+dotfiles_ignore="\.(?:pre|post)?(?:un)?install"
 
 # ------------------------------
 
@@ -19,6 +21,7 @@ _dotfiles() {
    case ${_command} in
       
       i|install) _dotfiles_install $* ;;
+      p|pass) _dotfiles_pass $* ;;
       r|reinstall) _dotfiles_reinstall $* ;;
       u|uninstall) _dotfiles_uninstall $* ;;
       
@@ -29,29 +32,93 @@ _dotfiles() {
 
 }
 
+
 # ------------------------------
 
 _dotfiles_install() {
 
    [[ ! -d "${dotfiles_target_root}" ]] && mkdir -p "${dotfiles_target_root}"
 
-   _packages=${@:-"*"}
+   _pkgs=${@:-"*"}
 
-   for _package in ${_packages}; do
-      [[ -d ${_package} && ! ${_package} =~ /^./ ]] && {
-         
-         printf "installing package: %-20s \n" "${_package}"
-         
-         stow -v -t "${dotfiles_target_root}" -S ${_package}
-         
-         [[ $? -ne 0 ]] && {
-            printf "... failed\n"
-         }
+   for _pkg in ${_pkgs}; do
       
+      [[ ! -d ${_pkg} ]] && continue
+      
+      [[ ${_pkg} =~ /^./ ]] && {
+         echo "package '${_pkg}' prefixed with a period... ignoring"
+         continue
       }
+
+      _dotfiles_pre_install
+
+      [[ -f "${_pkg}/.install" && -x "${_pkg}/.install" ]] && {
+         echo "package '${_pkg}' is being installed by script"
+         source "${_pkg}/.install"
+      }
+      
+      [[ ! -f "${_pkg}/.install" ]] && {
+         
+         echo "package '${_pkg}' is being installed by stow"
+         stow -v -t "${dotfiles_target_root}" -S ${_pkg} --ignore="${dotfiles_ignore}"
+
+         [[ $? -ne 0 ]] && echo "... failed to install"
+
+      }
+
+      _dotfiles_post_install
+
    done
 
 }
+
+# ------------------------------
+
+_dotfiles_pre_install() {
+
+   _script="${dotfiles_source_root}/${_pkg}/.preinstall"
+      
+   [[ -f "${_script}" && -x "${_script}" ]] && {
+      echo "executing '${_pkg}' pre install script"
+      source "${_script}"
+   }
+
+}
+
+_dotfiles_pre_uninstall() {
+
+   _script="${dotfiles_source_root}/${_pkg}/.preuninstall"
+      
+   [[ -f "${_script}" && -x "${_script}" ]] && {
+      echo "executing '${_pkg}' pre uninstall script"
+      source "${_script}"
+   }
+   
+}
+
+_dotfiles_post_install() {
+
+   _script="${dotfiles_source_root}/${_pkg}/.postinstall"
+      
+   [[ -f "${_script}" && -x "${_script}" ]] && {
+      echo "executing '${_pkg}' post install script"
+      source "${_script}"
+   }
+
+}
+
+_dotfiles_post_uninstall() {
+
+   _script="${dotfiles_source_root}/${_pkg}/.postuninstall"
+      
+   [[ -f "${_script}" && -x "${_script}" ]] && {
+      echo "executing '${_pkg}' post uninstall script"
+      source "${_script}"
+   }
+   
+}
+
+# ------------------------------
 
 _dotfiles_reinstall() {
 
@@ -60,24 +127,41 @@ _dotfiles_reinstall() {
 
 }
 
+# ------------------------------
+
 _dotfiles_uninstall() {
 
    [[ ! -d "${dotfiles_target_root}" ]] && return 1
 
-   _packages=${@:-"*"}
+   _pkgs=${@:-"*"}
 
-   for _package in ${_packages}; do
-      [[ -d ${_package} && ! ${_package} =~ /^./ ]] && {
-         
-         printf "uninstalling package: %-20s\n" "${_package}"
-         
-         stow -v -t "${dotfiles_target_root}" -D ${_package}
+   for _pkg in ${_pkgs}; do
+      
+      [[ ! -d ${_pkg} ]] && continue
 
-         [[ $? -ne 0 ]] && {
-            printf "... failed\n"
-         }
+      [[ ${_pkg} =~ /^./ ]] && {
+         echo "package '${_pkg}' prefixed with a period... ignoring"
+         continue
+      }
+
+      _dotfiles_pre_uninstall
+         
+      [[ -f "${_pkg}/.uninstall" && -x "${_pkg}/.uninstall" ]] && {
+         echo "package '${_pkg}' is being uninstalled by script"
+         source "${_pkg}/.uninstall"
+      }
+      
+      [[ ! -f "${_pkg}/.uninstall"  && ! -f "${_pkg}/.install" ]] && {
+         
+         echo "package '${_pkg}' is being uninstalled by stow"
+         stow -v -t "${dotfiles_target_root}" -S ${_pkg} --ignore="${dotfiles_ignore}"
+
+         [[ $? -ne 0 ]] && echo "... failed to install"
 
       }
+
+      _dotfiles_post_uninstall
+
    done
 
 }
