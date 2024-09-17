@@ -60,7 +60,7 @@ _dotfiles_install() {
       [[ ! -f "${_pkg}/.install" ]] && {
          
          echo "package '${_pkg}' is being installed by stow"
-         stow -v -t "${dotfiles_target_root}" -S ${_pkg} --ignore="${dotfiles_ignore}"
+         stow -t "${dotfiles_target_root}" -S ${_pkg} --ignore="${dotfiles_ignore}" --no-folding
 
          [[ $? -ne 0 ]] && echo "... failed to install"
 
@@ -79,7 +79,7 @@ _dotfiles_pre_install() {
    _script="${dotfiles_source_root}/${_pkg}/.preinstall"
       
    [[ -f "${_script}" && -x "${_script}" ]] && {
-      echo "executing '${_pkg}' pre install script"
+      echo "package '${_pkg}' executing preinstall script"
       source "${_script}"
    }
 
@@ -90,7 +90,7 @@ _dotfiles_pre_uninstall() {
    _script="${dotfiles_source_root}/${_pkg}/.preuninstall"
       
    [[ -f "${_script}" && -x "${_script}" ]] && {
-      echo "executing '${_pkg}' pre uninstall script"
+      echo "package '${_pkg}' executing preuninstall script"
       source "${_script}"
    }
    
@@ -101,7 +101,7 @@ _dotfiles_post_install() {
    _script="${dotfiles_source_root}/${_pkg}/.postinstall"
       
    [[ -f "${_script}" && -x "${_script}" ]] && {
-      echo "executing '${_pkg}' post install script"
+      echo "package '${_pkg}' executing postinstall script"
       source "${_script}"
    }
 
@@ -112,7 +112,7 @@ _dotfiles_post_uninstall() {
    _script="${dotfiles_source_root}/${_pkg}/.postuninstall"
       
    [[ -f "${_script}" && -x "${_script}" ]] && {
-      echo "executing '${_pkg}' post uninstall script"
+      echo "package '${_pkg}' executing postuninstall script"
       source "${_script}"
    }
    
@@ -154,7 +154,7 @@ _dotfiles_uninstall() {
       [[ ! -f "${_pkg}/.uninstall"  && ! -f "${_pkg}/.install" ]] && {
          
          echo "package '${_pkg}' is being uninstalled by stow"
-         stow -v -t "${dotfiles_target_root}" -S ${_pkg} --ignore="${dotfiles_ignore}"
+         stow -t "${dotfiles_target_root}" -D ${_pkg} --ignore="${dotfiles_ignore}" --no-folding
 
          [[ $? -ne 0 ]] && echo "... failed to install"
 
