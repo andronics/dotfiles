@@ -1,0 +1,4 @@
+#!/usr/bin/env sh
+
+[[ -d "${dotfiles_target_root}/.ssh" ]] &&
+    rm -R "${dotfiles_target_root}/.ssh"

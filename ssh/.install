@@ -1,0 +1,19 @@
+#!/usr/bin/env sh
+
+cp -r -t "${dotfiles_target_root}" "${dotfiles_source_root}/ssh/.ssh"
+
+[[ -d "${dotfiles_target_root}/.ssh" ]] &&
+    chmod 700  "${dotfiles_target_root}/.ssh" &&
+    chown -R $(whoami):$(whoami)  "${dotfiles_target_root}/.ssh"
+
+[[ -f "${dotfiles_target_root}/.ssh/authorized_keys" ]] &&
+    chmod 600  "${dotfiles_target_root}/.ssh/authorized_keys"
+
+[[ -f "${dotfiles_target_root}/.ssh/id_ed25519" ]] &&
+    chmod 600  "${dotfiles_target_root}/.ssh/id_ed25519"
+
+[[ -f "${dotfiles_target_root}/.ssh/id_rsa" ]] &&
+    chmod 600  "${dotfiles_target_root}/.ssh/id_rsa"
+
+[[ -f "${dotfiles_target_root}/.ssh/known_hosts" ]] &&
+    chmod 600  "${dotfiles_target_root}/.ssh/known_hosts"
