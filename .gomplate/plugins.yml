@@ -1,0 +1,10 @@
+plugins:
+  pass:
+    cmd: sh
+    args:
+      - "-c"
+      - |
+        pass "$(cat)" 2>/dev/null | tr -d '[:space:]'
+        exit 0
+    pipe: true
+    timeout: 60s
