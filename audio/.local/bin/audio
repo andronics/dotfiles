@@ -1,12 +1,13 @@
-#!/usr/bin/env sh
+#!/usr/bin/env zsh
 
 name=$(basename $0)
 
 # ------------------------------
 
+source "$(which _cava)"
 source "$(which _jq)"
 source "$(which _log)"
-source "$(which _spectrum)"
+
 
 # ------------------------------
 
@@ -35,7 +36,7 @@ source "$(which _args)"
 _audio() {
 
     [[ $# -eq 0 ]] && {
-        _log_error "command not specified"
+        log-error "command not specified"
         return 1
     }
 
@@ -44,30 +45,30 @@ _audio() {
 
     case "${_command}" in
         
-        device-name) _audio_device_name $* ;;
-        device-icon) _audio_device_icon $* ;;
+        device-name) _audio_device_name "$@" ;;
+        device-icon) _audio_device_icon "$@" ;;
 
-        level-name) _audio_level_name $* ;;
-        level-icon) _audio_level_icon $* ;;
+        level-name) _audio_level_name "$@" ;;
+        level-icon) _audio_level_icon "$@" ;;
         
-        mute-disable) _audio_mute_disable $* ;;
-        mute-enable) _audio_mute_enable $* ;;
-        mute-toggle) _audio_mute_toggle $* ;;
+        mute-disable) _audio_mute_disable "$@" ;;
+        mute-enable) _audio_mute_enable "$@" ;;
+        mute-toggle) _audio_mute_toggle "$@" ;;
         
-        restart) _audio_restart $* ;;
+        restart) _audio_restart "$@" ;;
 
-        sink-next) _audio_sink_next $* ;;
-        sink-prev) _audio_sink_prev $* ;;
+        sink-next) _audio_sink_next "$@" ;;
+        sink-prev) _audio_sink_prev "$@" ;;
 
-        spectrum) _audio_spectrum $* ;;
+        spectrum) _audio_spectrum "$@" ;;
         
-        subscribe) _audio_subscribe $* ;;
+        subscribe) _audio_subscribe "$@" ;;
         
-        volume-decrease) _audio_volume_decrease $* ;;
-        volume-increase) _audio_volume_increase $* ;;
-        volume-query) _audio_volume_query $* ;;
+        volume-decrease) _audio_volume_decrease "$@" ;;
+        volume-increase) _audio_volume_increase "$@" ;;
+        volume-query) _audio_volume_query "$@" ;;
 
-        *) _log_warning "command '%s' unsupported" "${_command}" ;;
+        *) log-warning "command '%s' unsupported" "${_command}" ;;
         
     esac
 
@@ -82,7 +83,7 @@ _audio_device_icon() {
 
     _filter='.[] | .pattern as $pattern  | select($name | test($pattern)) | .icon' 
     
-    echo "${audio_devices}" | _jq_query "${_filter}"  "name" "${_name}" "people" "1"
+    echo "${audio_devices}" | jq-query "${_filter}"  "name" "${_name}" "people" "1"
 
 }
 
@@ -94,7 +95,7 @@ _audio_device_name() {
 
     _filter='.[] | .pattern as $pattern  | select($name | test($pattern)) | .name' 
     
-    echo "${audio_devices}" | _jq_query "${_filter}" "name" "${_name}" 
+    echo "${audio_devices}" | jq-query "${_filter}" "name" "${_name}" 
 
 }
 
@@ -105,7 +106,7 @@ _audio_level_icon() {
     _sink=$(_audio_sink_current)
     _level=$(_audio_level_name)
 
-    echo "${audio_levels}" | _jq_query '."'${_level}'"'
+    echo "${audio_levels}" | jq-query '."'${_level}'"'
 
 }
 
@@ -209,7 +210,7 @@ _audio_sink_move_input() {
     for _input in ${_inputs}; do
 
         pacmd move-sink-input "${_inputs}" "${_sink}"
-        _log_info "input %s moved to sink %s" "${_input}" "${_sink}"
+        log-info "input %s moved to sink %s" "${_input}" "${_sink}"
     
     done
 
@@ -254,7 +255,7 @@ _audio_sink_next() {
     
     }
 
-    _log_info "changed to sink %s" "${_next}"
+    log-info "changed to sink %s" "${_next}"
     
     _audio_sink_default "${_next}"
     _audio_sink_move_input "${_next}"
@@ -298,7 +299,7 @@ _audio_spectrum() {
     
     cava -p ${audio_spectrum_cfg} &
 
-    cat ${audio_spectrum_pipe} | _spectrum
+    cat ${audio_spectrum_pipe} | cava-spectrum
 
 }
 

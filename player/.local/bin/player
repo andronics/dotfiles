@@ -1,4 +1,4 @@
-#!/usr/bin/env sh
+#!/usr/bin/env zsh
 
 name=$(basename $0)
 
@@ -21,14 +21,14 @@ player_states=$(cat "${player_data_dir}/states.json")
 
 # ------------------------------
 
-source "$(which _args)"
+# source "$(which _args)"
 
 # ------------------------------
 
 _player() {
 
     [[ $# -eq 0 ]] && {
-        _log_error "command not specified"
+        log-error "command not specified"
         return 1
     }
 
@@ -37,29 +37,29 @@ _player() {
 
     case "${_command}" in
         
-        action-loop) _player_action_loop $* ;;
-        action-next) _player_action_next $* ;;
-        action-play-pause) _player_action_play_pause $* ;;
-        action-previous) _player_action_previous $* ;;
-        action-seek) _player_action_seek $* ;;
-        action-shuffle) _player_action_shuffle $* ;;
-        action-stop) _player_action_stop $* ;;
+        action-loop) _player_action_loop "$@" ;;
+        action-next) _player_action_next "$@" ;;
+        action-play-pause) _player_action_play_pause "$@" ;;
+        action-previous) _player_action_previous "$@" ;;
+        action-seek) _player_action_seek "$@" ;;
+        action-shuffle) _player_action_shuffle "$@" ;;
+        action-stop) _player_action_stop "$@" ;;
 
-        control)    _player_control $* ;;
+        control)    _player_control "$@" ;;
         
-        metadata) _player_metadata $* ;;
-        metadata-artist) _player_metadata_artist $* ;;
-        metadata-artwork) _player_metadata_artwork $* ;;
-        metadata-length) _player_metadata_length $* ;;
-        metadata-title) _player_metadata_title $* ;;
+        metadata) _player_metadata "$@" ;;
+        metadata-artist) _player_metadata_artist "$@" ;;
+        metadata-artwork) _player_metadata_artwork "$@" ;;
+        metadata-length) _player_metadata_length "$@" ;;
+        metadata-title) _player_metadata_title "$@" ;;
         
-        instance-icon) _player_instance_icon $* ;;
-        instance-name) _player_instance_name $* ;;
+        instance-icon) _player_instance_icon "$@" ;;
+        instance-name) _player_instance_name "$@" ;;
         
-        status-icon) _player_status_icon $* ;;
-        status-name) _player_status_name $* ;;
+        status-icon) _player_status_icon "$@" ;;
+        status-name) _player_status_name "$@" ;;
 
-        *) _log_warning "command '%s' unsupported" "${_command}" ;;
+        *) log-warning "command '%s' unsupported" "${_command}" ;;
 
     esac
 
@@ -69,7 +69,7 @@ _player() {
 
 _player_action_loop() {
 
-    _status=$(_player_control loop | _string_lowercase)
+    _status=$(_player_control loop | string-lowercase)
 
     case "${_status}" in
         none)
@@ -144,7 +144,7 @@ _player_instance_icon() {
     
     _filter='.[] | select( .name | test($name) ) | .icon'
 
-    echo ${player_instances} | _jq_query "${_filter}" "name" "${_name}"
+    echo ${player_instances} | jq-query "${_filter}" "name" "${_name}"
 
 }
 
@@ -215,13 +215,13 @@ _player_status_icon() {
     
     _filter='.[] | select( .state | test($name) ) | .icon'
 
-    echo "${player_states}" | _jq_query "${_filter}" "name" "${_name}"
+    echo "${player_states}" | jq-query "${_filter}" "name" "${_name}"
 
 }
 
 _player_status_name() {
 
-    _player_control status | _string_lowercase
+    _player_control status | string-lowercase
 
 }
 

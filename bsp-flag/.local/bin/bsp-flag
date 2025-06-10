@@ -1,4 +1,4 @@
-#!/usr/bin/env sh
+#!/usr/bin/env zsh
 
 name=$(basename $0)
 
@@ -17,13 +17,13 @@ _singleton_terminate && [[ $? -eq 1 ]] && exit 1
 
 _bsp_flag() {
 
-    _log_info "subscribing to events"
+    log-info "subscribing to events"
 
     _window=$(xprop -root _NET_ACTIVE_WINDOW | awk '{print $5}')
 
     bspc subscribe node_flag | while read _event _monitor _deskop _node _flag _state; do
 
-        _log_debug "node [%s] flag %s set to %s" "${_node}" "${_flag}" "${_state}"
+        log-debug "node [%s] flag %s set to %s" "${_node}" "${_flag}" "${_state}"
         
         case "${_flag}" in
             'floating') _bsp_flag_floating ;;

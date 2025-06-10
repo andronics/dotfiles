@@ -1,4 +1,4 @@
-#!/usr/bin/env sh
+#!/usr/bin/env zsh
 
 name=$(basename $0)
 # ------------------------------
@@ -29,7 +29,7 @@ source "$(which _args)"
 _scan() {
 
     [[ $# -eq 0 ]] && {
-        _log_error "command not specified"
+        log-error "command not specified"
         return 1
     }
 
@@ -38,13 +38,13 @@ _scan() {
 
     case "${_command}" in
         
-        batch) _scan_batch $* ;;
+        batch) _scan_batch "$@" ;;
 
-        device-discover) _scan_device_discover $* ;;
-        device-list) _scan_device_list $* ;;
+        device-discover) _scan_device_discover "$@" ;;
+        device-list) _scan_device_list "$@" ;;
 
 
-        *) _log_warning "command '%s' unsupported" "${_command}" ;;
+        *) log-warning "command '%s' unsupported" "${_command}" ;;
 
     esac
 

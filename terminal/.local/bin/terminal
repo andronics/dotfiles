@@ -1,11 +1,10 @@
-#!/usr/bin/env sh
+#!/usr/bin/env zsh
 
 name=$(basename $0)
 
 # ------------------------------
 
 source $(which _log)
-source $(which _rofi)
 
 # ------------------------------
 
@@ -22,7 +21,7 @@ source "$(which _args)"
 _terminal() {
 
     [[ $# -eq 0 ]] && {
-        _log_error "command not specified"
+        log-error "command not specified"
         return 1
     }
 
@@ -31,10 +30,10 @@ _terminal() {
 
     case "${_command}" in
 
-        draw) _terminal_draw $* ;;
-        drop) _terminal_drop $* ;;
+        draw) _terminal_draw "$@" ;;
+        drop) _terminal_drop "$@" ;;
         
-        *) _log_warning "command '%s' unsupported" "${_command}" ;;
+        *) log-warning "command '%s' unsupported" "${_command}" ;;
 
     esac
 
@@ -65,7 +64,7 @@ _terminal_drop() {
 
     _session=${1:-"scratch"}
 
-    _log_info "alacritty --class terminal-drop,${_session} --title ${name} - ${_session}"
+    log-info "alacritty --class terminal-drop,${_session} --title ${name} - ${_session}"
 
     tdrop \
         --session "${_session}" \

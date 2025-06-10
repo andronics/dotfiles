@@ -1,4 +1,4 @@
-#!/usr/bin/env sh
+#!/usr/bin/env zsh
 
 name=$(basename $0)
 
@@ -47,7 +47,7 @@ _x11_events() {
             '
             ;;
         *)
-            _log_info "unsupport mask - ${x11_events_mask}"
+            log-info "unsupport mask - ${x11_events_mask}"
             exit
             ;;
     esac

@@ -29,7 +29,7 @@ source "$(which _args)"
 _dedupe() {
 
     [[ $# -eq 0 ]] && {
-        _log_error "path not specified"
+        log-error "path not specified"
         return 1
 	}
 
@@ -37,12 +37,12 @@ _dedupe() {
     shift 2>/dev/null
 	
 	[[ ! -d "${_path}" ]] && {
-		_log_error "specified path '${_path}' is not a directory"
+		log-error "specified path '${_path}' is not a directory"
 		return 1
 	}
 
 	[[ ! $(command -v sha512sum) ]] && {
-		_log_error "required command 'sha512sum' is not available"
+		log-error "required command 'sha512sum' is not available"
 		return 1
 	}
 
@@ -67,7 +67,7 @@ _dedupe() {
 			_freed_files=$((_freed_files + 1))
 			_freed_space=$((_freed_space + _size))
 
-			_log_info "removing file '${_file}' with checksum ${_checksum}"
+			log-info "removing file '${_file}' with checksum ${_checksum}"
 			rm -vf "${_file}" 2>1 > /dev/null
 
 			echo "${_checksum} | ${_file}" >> "${dedupe_removed}"  
@@ -77,7 +77,7 @@ _dedupe() {
 	
 	done < <(find "${_path}" -xdev -type f)
 
-	_log_info "process completed - %d blocks & %d files freed" "${_freed_space}"  "${_freed_files}"
+	log-info "process completed - %d blocks & %d files freed" "${_freed_space}"  "${_freed_files}"
 
 }
 

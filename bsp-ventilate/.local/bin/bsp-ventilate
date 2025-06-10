@@ -1,4 +1,4 @@
-#!/usr/bin/env sh
+#!/usr/bin/env zsh
 
 name=$(basename $0)
 
@@ -45,7 +45,7 @@ _singleton_terminate && [[ $? -eq 1 ]] && exit 1
 
 _bsp_ventilate() {
 
-	_log_info "subscribing to events"
+	log-info "subscribing to events"
 
 	bspc subscribe node_add node_remove | while read -r _event; do
 		case $(echo "${_event}" | awk '{ print $1 }') in
@@ -82,25 +82,25 @@ _bsp_ventilate_inhale() {
 	
 	if [ "${_desktop}" = $(bspc query -D -n last) ]; then
 
-		_inhaler_class=$(_bsp_ventilate_class "${_inhaler}" | _string_lowercase)
-		_inhaled_class=$(_bsp_ventilate_class "${_inhaled}" | _string_lowercase)
+		_inhaler_class=$(_bsp_ventilate_class "${_inhaler}" | string-lowercase)
+		_inhaled_class=$(_bsp_ventilate_class "${_inhaled}" | string-lowercase)
 		
-		_log_info "attempting to inhale '%s' by '%s'" "${_inhaled_class}" "${_inhaler_class}"
+		log-info "attempting to inhale '%s' by '%s'" "${_inhaled_class}" "${_inhaler_class}"
 
 		grep -Eiq "^${_inhaler_class}$" "${bsp_ventilate_no_inhale}" "${bsp_ventilate_terminals}" && {
-			_log_info "unable to inhale as '%s' is considered a protected class" "${_inhaler_class}"
+			log-info "unable to inhale as '%s' is considered a protected class" "${_inhaler_class}"
 			return
 		}
 
 		grep -Eiq "^${_inhaled_class}$" "${bsp_ventilate_terminals}" || {
-			_log_info "unable to inhale as %s is not considered a terminal" "${_inhaled_class}"
+			log-info "unable to inhale as %s is not considered a terminal" "${_inhaled_class}"
 			return
 		}
 
 		echo "${_inhaler} ${_inhaled} ${_inhaler_class} ${_inhaled_class}" >> ${bsp_ventilate_inhaled}		
 		bspc node "${_inhaled}" --flag hidden=on
 
-		_log_info "successfully inhaled '%s' with '%s'"  "${_inhaled_class}" "${_inhaler_class}"
+		log-info "successfully inhaled '%s' with '%s'"  "${_inhaled_class}" "${_inhaler_class}"
 	
 	fi
 }
@@ -111,16 +111,16 @@ _bsp_ventilate_exhale() {
 	_desktop=$2
 
 	grep -Eiq "^${_exhaler}" "${bsp_ventilate_inhaled}" || {
-		_log_info "nothing to exhale"
+		log-info "nothing to exhale"
 		return
 	}
 
 	_exhaler_class=$(grep -Ei "^${_exhaler}" ${bsp_ventilate_inhaled} | head -n1 | awk '{ print $3 }')
 
 	_exhaled=$(grep -Ei "^${_exhaler}" ${bsp_ventilate_inhaled} | head -n1 | awk '{ print $2 }')
-	_exhaled_class=$(_bsp_ventilate_class "${_exhaled}" | _string_lowercase)
+	_exhaled_class=$(_bsp_ventilate_class "${_exhaled}" | string-lowercase)
 
-	_log_info "attempting to exhale '%s' from '%s'" "${_exhaled_class}" "${_exhaler_class}"
+	log-info "attempting to exhale '%s' from '%s'" "${_exhaled_class}" "${_exhaler_class}"
 
 	bspc node "${_exhaled}" --flag hidden=off
 	[[ "$(bspc query -D -n "${_exhaled}")" = "${_desktop}" ]] || bspc node "${_exhaled}" -d "${_desktop}"
@@ -128,7 +128,7 @@ _bsp_ventilate_exhale() {
 	bspc node "${_exhaled}" -f
 	sed -i "/^${_exhaler}/d" ${bsp_ventilate_inhaled}
 
-	_log_info "successfully exhaled '%s' with '%s'" "${_exhaled_class}" "${_exhaler_class}"
+	log-info "successfully exhaled '%s' with '%s'" "${_exhaled_class}" "${_exhaler_class}"
 
 }
 

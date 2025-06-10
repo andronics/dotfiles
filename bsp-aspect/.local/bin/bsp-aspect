@@ -1,4 +1,4 @@
-#!/usr/bin/env sh
+#!/usr/bin/env zsh
 
 name=$(basename $0)
 
@@ -26,10 +26,10 @@ _bsp_aspect() {
     bsp_aspect_y=$2
   }
 
-  _log_info "aspect ratio to %d x %d" ${bsp_aspect_x} ${bsp_aspect_y}
+  log-info "aspect ratio to %d x %d" ${bsp_aspect_x} ${bsp_aspect_y}
 
-  _node=( $(bspc query -T -n | _jq_query '.client.tiledRectangle.width,.client.tiledRectangle.height,.id') )
-  _parent=( $(bspc query -T -n @parent | _jq_query '.splitType,.firstChild.id') )
+  _node=( $(bspc query -T -n | jq-query '.client.tiledRectangle.width,.client.tiledRectangle.height,.id') )
+  _parent=( $(bspc query -T -n @parent | jq-query '.splitType,.firstChild.id') )
 
   [[ "${_parent[0]}" = "vertical" ]] && {
 

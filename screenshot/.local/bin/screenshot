@@ -1,4 +1,4 @@
-#!/usr/bin/env sh
+#!/usr/bin/env zsh
 
 name=$(basename $0)
 
@@ -26,7 +26,7 @@ source "$(which _args)"
 _screenshot() {
 
     [[ $# -eq 0 ]] && {
-        _log_error "command not specified"
+        log-error "command not specified"
         return 1
     }
 
@@ -34,17 +34,17 @@ _screenshot() {
     shift 2>/dev/null
 
     if [ -z ${_command} ]; then
-        _command=$(echo "fullscreen\nfullscreen_wait\nselection\nselection_wait" | _rofi_prompt -m "Screenshot" -c 4 -w 1500)
+        _command=$(echo "fullscreen\nfullscreen_wait\nselection\nselection_wait" | rofi-prompt -m "Screenshot" -c 4 -w 1500)
     fi
 
     case ${_command} in
 
-        "fullscreen") _screenshoot_shoot $* ;;
+        "fullscreen") _screenshoot_shoot "$@" ;;
         "fullscreen_wait") _screenshoot_wait && _screenshoot_shoot ;;
         "selection") _screenshoot_shoot -s ;;
         "selection_wait") _screenshoot_wait && _screenshoot_shoot -s ;;
 
-        *) _log_warning "command '%s' unsupported" "${_command}" ;;
+        *) log-warning "command '%s' unsupported" "${_command}" ;;
 
 
     esac
@@ -61,7 +61,7 @@ _screenshoot_shoot() {
     _path=$(_screenshoot_path)
 
     maim $1 "${_path}"
-    _log_info "shot taken - %s" "${_path}"
+    log-info "shot taken - %s" "${_path}"
 
 }
 

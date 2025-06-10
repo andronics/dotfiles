@@ -1,4 +1,4 @@
-#!/usr/bin/env sh
+#!/usr/bin/env zsh
 
 name=$(basename $0)
 
@@ -25,8 +25,8 @@ pastebin_config=$(cat "${pastebin_config_dir}/config.json")
 
 # ------------------------------
 
-pastebin_api_key=$(echo "${pastebin_config}" | _jq_query '.api_key')
-pastebin_host=$(echo "${pastebin_config}" | _jq_query '.host')
+pastebin_api_key=$(echo "${pastebin_config}" | jq-query '.api_key')
+pastebin_host=$(echo "${pastebin_config}" | jq-query '.host')
 
 # ------------------------------
 
@@ -37,7 +37,7 @@ source "$(which _args)"
 _pastebin() {
 
     [[ $# -eq 0 ]] && {
-        _log_error "command not specified"
+        log-error "command not specified"
         return 1
     }
 
@@ -46,10 +46,10 @@ _pastebin() {
 
     case "${_command}" in
 
-        get) _pastebin_get $* ;;
-        paste) _pastebin_paste $* ;;
+        get) _pastebin_get "$@" ;;
+        paste) _pastebin_paste "$@" ;;
 
-        *) _log_warning "command '%s' unsupported" "${_command}" ;;
+        *) log-warning "command '%s' unsupported" "${_command}" ;;
         
     esac
 
@@ -58,7 +58,7 @@ _pastebin() {
 _pastebin_get() {
 
     [[ $# -eq 0 ]] && {
-        _log_info "no record specified"
+        log-info "no record specified"
         exit 1
     }
     
@@ -70,7 +70,7 @@ _pastebin_get() {
 _pastebin_paste() {
 
     [[ $# -eq 0 ]] && {
-        _log_info "no value specified"
+        log-info "no value specified"
         exit 1
     }
 
@@ -86,9 +86,9 @@ _pastebin_paste() {
     
     _fields+=("api_dev_key=${pastebin_api_key}")
     _fields+=("api_option=${_option}")
-    _fields+=("api_paste_code=$( _string_url_encode "${_code}") ")
+    _fields+=("api_paste_code=$( string-url_encode "${_code}") ")
 
-    [[ -n ${_name} ]] && _fields+=("api_paste_name=$( _string_url_encode "${_name}") ")
+    [[ -n ${_name} ]] && _fields+=("api_paste_name=$( string-url_encode "${_name}") ")
     [[ -n ${_expires} ]] && _fields+=("api_paste_expire_date=${_expires}")
     [[ -n ${_format} ]] && _fields+=("api_paste_format=${_format}")
     [[ -n ${_private} ]] && _fields+=("api_paste_private=${_private}")

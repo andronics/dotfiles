@@ -1,4 +1,4 @@
-#!/usr/bin/env sh
+#!/usr/bin/env zsh
 
 name=$(basename $0)
 
@@ -21,7 +21,7 @@ _singleton_terminate && [[ $? -eq 1 ]] && exit 1
 
 _bsp_desktops() {
 
-    _log_info "subscribing to events"
+    log-info "subscribing to events"
 
     _bsp_desktops_manage
 
@@ -33,7 +33,7 @@ _bsp_desktops() {
 
 _bsp_desktops_add() {
 
-    _log_debug "adding new desktop"
+    log-debug "adding new desktop"
 
     bspc monitor "${bsp_desktops_monitor}" -a "${bsp_desktops_id}"
     
@@ -57,7 +57,7 @@ _bsp_desktops_occupied() {
 
 _bsp_desktops_remove() {
     
-    _log_debug "removing unoccupied desktops"
+    log-debug "removing unoccupied desktops"
     
     _total=$(_bsp_desktops_total)
     _occupied=$(_bsp_desktops_occupied)

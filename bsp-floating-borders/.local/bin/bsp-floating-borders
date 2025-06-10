@@ -1,4 +1,4 @@
-#!/usr/bin/env sh
+#!/usr/bin/env zsh
 
 name=$(basename $0)
 
@@ -16,7 +16,7 @@ _singleton_terminate && [[ $? -eq 1 ]] && exit 1
 
 _bsp_floating_borders() {
 
-	_log_info "subscribing to events"
+	log-info "subscribing to events"
 
 	while read -r _ _ _ _node _state _status; do
 		

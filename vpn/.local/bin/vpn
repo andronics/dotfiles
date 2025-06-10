@@ -1,4 +1,4 @@
-#!/usr/bin/env sh
+#!/usr/bin/env zsh
 
 name=$(basename $0)
 
@@ -38,7 +38,7 @@ source "$(which _args)"
 _vpn() {
 
     [[ $# -eq 0 ]] && {
-        _log_error "command not specified"
+        log-error "command not specified"
         return 1
     }
 
@@ -47,32 +47,32 @@ _vpn() {
 
     case "${_command}" in
 
-        list-cities) _vpn_list_cities $* ;;
-        list-countries) _vpn_list_countries $* ;;
-        list-groups) _vpn_list_groups $* ;;
-        list-hostnames) _vpn_list_hostnames $* ;;
-        list-services) _vpn_list_services $* ;;
-        list-technologies) _vpn_list_technologies $* ;;
+        list-cities) _vpn_list_cities "$@" ;;
+        list-countries) _vpn_list_countries "$@" ;;
+        list-groups) _vpn_list_groups "$@" ;;
+        list-hostnames) _vpn_list_hostnames "$@" ;;
+        list-services) _vpn_list_services "$@" ;;
+        list-technologies) _vpn_list_technologies "$@" ;;
         
-        meta) _vpn_meta $* ;;
-        meta-bytes-received) _vpn_meta_bytes_received $* ;;
-        meta-bytes-sent) _vpn_meta_bytes_sent $* ;;
-        meta-city) _vpn_meta_city $* ;;
-        meta-country) _vpn_meta_country $* ;;
-        meta-ip) _vpn_meta_ip $* ;;
-        meta-protocol) _vpn_meta_protocol $* ;;
-        meta-server) _vpn_meta_server $* ;;
-        meta-status) _vpn_meta_status $* ;;
-        meta-status-icon) _vpn_meta_status_icon $* ;;
-        meta-technology) _vpn_meta_technology $* ;;
-        meta-uptime) _vpn_meta_uptime $* ;;
+        meta) _vpn_meta "$@" ;;
+        meta-bytes-received) _vpn_meta_bytes_received "$@" ;;
+        meta-bytes-sent) _vpn_meta_bytes_sent "$@" ;;
+        meta-city) _vpn_meta_city "$@" ;;
+        meta-country) _vpn_meta_country "$@" ;;
+        meta-ip) _vpn_meta_ip "$@" ;;
+        meta-protocol) _vpn_meta_protocol "$@" ;;
+        meta-server) _vpn_meta_server "$@" ;;
+        meta-status) _vpn_meta_status "$@" ;;
+        meta-status-icon) _vpn_meta_status_icon "$@" ;;
+        meta-technology) _vpn_meta_technology "$@" ;;
+        meta-uptime) _vpn_meta_uptime "$@" ;;
 
-        state-connect) _vpn_state_connect $* ;;
-        state-disconnect) _vpn_state_disconnect $* ;;
-        state-name) _vpn_state_name $* ;;
-        state-icon) _vpn_state_icon $* ;;
+        state-connect) _vpn_state_connect "$@" ;;
+        state-disconnect) _vpn_state_disconnect "$@" ;;
+        state-name) _vpn_state_name "$@" ;;
+        state-icon) _vpn_state_icon "$@" ;;
         
-        *) _log_warning "command '%s' unsupported" "${_command}" ;;
+        *) log-warning "command '%s' unsupported" "${_command}" ;;
 
     esac
 
@@ -82,41 +82,41 @@ _vpn() {
 
 _vpn_list_cities() {
     _filter='.[].locations[0].country.city.name'
-    echo "${vpn_servers}" | _jq_query "${_filter}" | sort | uniq
+    echo "${vpn_servers}" | jq-query "${_filter}" | sort | uniq
 }
 
 _vpn_list_countries() {
     
     _filter='.[].locations[0].country.name'
-    echo "${vpn_servers}" | _jq_query "${_filter}" | sort | uniq
+    echo "${vpn_servers}" | jq-query "${_filter}" | sort | uniq
 
 }
 
 _vpn_list_hostnames() {
     
     _filter='.[].hostname'
-    echo "${vpn_servers}" | _jq_query "${_filter}" | sort | uniq
+    echo "${vpn_servers}" | jq-query "${_filter}" | sort | uniq
 
 }
 
 _vpn_list_groups() {
     
     _filter='.[].groups[].title'
-    echo "${vpn_servers}" | _jq_query "${_filter}" | sort | uniq
+    echo "${vpn_servers}" | jq-query "${_filter}" | sort | uniq
 
 }
 
 _vpn_list_services() {
     
     _filter='.[].services[].name'
-    echo "${vpn_servers}" | _jq_query "${_filter}" | sort | uniq
+    echo "${vpn_servers}" | jq-query "${_filter}" | sort | uniq
 
 }
 
 _vpn_list_technologies() {
     
     _filter='.[].technologies[].name'
-    echo "${vpn_servers}" | _jq_query "${_filter}" | sort | uniq
+    echo "${vpn_servers}" | jq-query "${_filter}" | sort | uniq
 
 }
 
@@ -128,43 +128,43 @@ _vpn_meta() {
 }
 
 _vpn_meta_bytes_received() {
-    _vpn_meta "Transfer" | awk '{ print $1 " " $2 }' | _string_lowercase
+    _vpn_meta "Transfer" | awk '{ print $1 " " $2 }' | string-lowercase
 }
 
 _vpn_meta_bytes_sent() {
-    _vpn_meta "Transfer" | awk '{ print $4 " " $5 }' | _string_lowercase
+    _vpn_meta "Transfer" | awk '{ print $4 " " $5 }' | string-lowercase
 }
 
 _vpn_meta_city() {
-    _vpn_meta "City" | _string_lowercase
+    _vpn_meta "City" | string-lowercase
 }
 
 _vpn_meta_country() {
-    _vpn_meta "Country" | _string_lowercase
+    _vpn_meta "Country" | string-lowercase
 }
 
 _vpn_meta_ip() {
-    _vpn_meta "IP" | _string_lowercase
+    _vpn_meta "IP" | string-lowercase
 }
 
 _vpn_meta_protocol() {
-    _vpn_meta "Current protocol" | _string_lowercase
+    _vpn_meta "Current protocol" | string-lowercase
 }
 
 _vpn_meta_server() {
-    _vpn_meta "Server" | _string_lowercase
+    _vpn_meta "Server" | string-lowercase
 }
 
 _vpn_meta_status() {
-    _vpn_meta "Status" | _string_lowercase
+    _vpn_meta "Status" | string-lowercase
 }
 
 _vpn_meta_status_icon() {
     
-    _status=$(_vpn_meta_status | _string_lowercase)
+    _status=$(_vpn_meta_status | string-lowercase)
     _filter='.[] | select( .name | contains( $name ) ) | .icon'
     
-    echo "${vpn_states}" | _jq_query "${_filter}" "name" "${_status}"
+    echo "${vpn_states}" | jq-query "${_filter}" "name" "${_status}"
 
 }
 
@@ -195,10 +195,10 @@ _vpn_state_connect() {
         technologies) _locations=$(_vpn_list_technologies) ;;
     esac
 
-    _location=$(printf "%s\n" "${_locations[@]}" | _rofi_dmenu "Location $(echo "${_area}" | _string_capitalcase )" )
+    _location=$(printf "%s\n" "${_locations[@]}" | rofi-dmenu "Location $(echo "${_area}" | string-capitalcase )" )
 
     [[ -n ${_location} ]] || {
-        _log_info "failed to specify location"
+        log-info "failed to specify location"
         return 1
     } 
 
@@ -210,7 +210,7 @@ _vpn_state_connect() {
 _vpn_state_disconnect() {
     _status=$(_vpn_meta_status)
     [[ ${_status} != "disconnected" ]] && {
-        _log_info "diconnecting from service"
+        log-info "diconnecting from service"
         nordvpn disconnect > /dev/null
     }
 }

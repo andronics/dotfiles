@@ -1,4 +1,4 @@
-#!/usr/bin/env sh
+#!/usr/bin/env zsh
 
 name=$(basename $0)
 
@@ -19,7 +19,7 @@ _preview() {
     [[ -p /dev/stdin ]] && _path=$(cat) || {
 
         [[ $# -eq 0 && ! -n ${_path} ]] && {
-            _log_error "path not specified"
+            log-error "path not specified"
             return 1
         } || _path=$1
 

@@ -1,4 +1,4 @@
-#!/usr/bin/env sh
+#!/usr/bin/env zsh
 
 name=$(basename $0)
 
@@ -32,7 +32,7 @@ source "$(which _args)"
 _dock() {
 
      [[ $# -eq 0 ]] && {
-        _log_error "command not specified"
+        log-error "command not specified"
         return 1
     }
 
@@ -41,47 +41,47 @@ _dock() {
 
     case "${_command}" in
 
-        api-delete) _dock_api_delete $* ;;
-        api-get) _dock_api_get $* ;;
-        api-head) _dock_api_head $* ;;
-        api-post) _dock_api_post $* ;;
-        api-put) _dock_api_put $* ;;
+        api-delete) _dock_api_delete "$@" ;;
+        api-get) _dock_api_get "$@" ;;
+        api-head) _dock_api_head "$@" ;;
+        api-post) _dock_api_post "$@" ;;
+        api-put) _dock_api_put "$@" ;;
         
-        compose-down) _dock_compose_down $* ;;
-        compose-up) _dock_compose_up $* ;;
+        compose-down) _dock_compose_down "$@" ;;
+        compose-up) _dock_compose_up "$@" ;;
 
-        container-changes) _dock_container_changes $* ;;
-        container-export) _dock_container_export $* ;;
-        container-logs) _dock_container_logs $* ;;
-        container-inspect) _dock_container_inspect $* ;;
-        container-stats) _dock_container_stats $* ;;
-        container-top) _dock_container_top $* ;;
+        container-changes) _dock_container_changes "$@" ;;
+        container-export) _dock_container_export "$@" ;;
+        container-logs) _dock_container_logs "$@" ;;
+        container-inspect) _dock_container_inspect "$@" ;;
+        container-stats) _dock_container_stats "$@" ;;
+        container-top) _dock_container_top "$@" ;;
         
-        containers-list) _dock_containers_list $* ;;
+        containers-list) _dock_containers_list "$@" ;;
 
-        image-export) _dock_image_export $* ;;
-        image-history) _dock_image_history $* ;;
-        image-inspect) _dock_image_inspect $* ;;
+        image-export) _dock_image_export "$@" ;;
+        image-history) _dock_image_history "$@" ;;
+        image-inspect) _dock_image_inspect "$@" ;;
         
-        images-export) _dock_images_export $* ;;
-        images-list) _dock_images_list $* ;;
-        images-search) _dock_images_search $* ;;
+        images-export) _dock_images_export "$@" ;;
+        images-list) _dock_images_list "$@" ;;
+        images-search) _dock_images_search "$@" ;;
         
-        system-events) _dock_system_events $* ;;
-        system-info) _dock_system_info $* ;;
-        system-ping) _dock_system_ping $* ;;
-        system-usage) _dock_system_usage $* ;;
-        system-version) _dock_system_version $* ;;
+        system-events) _dock_system_events "$@" ;;
+        system-info) _dock_system_info "$@" ;;
+        system-ping) _dock_system_ping "$@" ;;
+        system-usage) _dock_system_usage "$@" ;;
+        system-version) _dock_system_version "$@" ;;
 
-        volume-backup) _dock_volume_backup $* ;;
-        volume-inspect) _dock_volume_inspect $* ;;
-        volume-prune) _dock_volume_prune $* ;;
-        volume-remove) _dock_volume_remove $* ;;
-        volume-restore) _dock_volume_restore $* ;;
+        volume-backup) _dock_volume_backup "$@" ;;
+        volume-inspect) _dock_volume_inspect "$@" ;;
+        volume-prune) _dock_volume_prune "$@" ;;
+        volume-remove) _dock_volume_remove "$@" ;;
+        volume-restore) _dock_volume_restore "$@" ;;
 
-        volumes-list) _dock_volumes_list $* ;;
+        volumes-list) _dock_volumes_list "$@" ;;
 
-        *) _log_warning "command '%s' unsupported" "${_command}" ;;
+        *) log-warning "command '%s' unsupported" "${_command}" ;;
 
     esac
 
@@ -188,7 +188,7 @@ _dock_container_exec() {
     _container=$1
     _cmd=${2:="sh"}
 
-    _log_info "executing %s on host %s\n" "${_cmd}" "${_container}"
+    log-info "executing %s on host %s\n" "${_cmd}" "${_container}"
     docker exec -it "${_container}" "${_cmd}"
 
 }
@@ -202,9 +202,9 @@ _dock_container_list() {
 
         _data=$(docker inspect "${_container}")
         
-        _name=$(echo "${_data}" | _jq_query ".[].Name" | sed 's|/||g')
-        _image=$(echo "${_data}" | _jq_query ".[].Config.Image" | sed 's|@.*||g')
-        _addresses=$(echo "${_data}" | _jq_query ".[].NetworkSettings.Networks | to_entries[] | .value.IPAddress")
+        _name=$(echo "${_data}" | jq-query ".[].Name" | sed 's|/||g')
+        _image=$(echo "${_data}" | jq-query ".[].Config.Image" | sed 's|@.*||g')
+        _addresses=$(echo "${_data}" | jq-query ".[].NetworkSettings.Networks | to_entries[] | .value.IPAddress")
 
         printf "%16s | %-30.30s | %-50.50s | %-20s\n" "${_container}" "${_name}" "${_image}" "$(IFS=' | ' echo ${_addresses[*]})"
 
@@ -219,7 +219,7 @@ _dock_container_remove() {
 
     for _container in ${_containers}; do
 
-        _log_info "removing container '%s'" "${_container}"
+        log-info "removing container '%s'" "${_container}"
         docker rm -f "${_container}"
 
     done

@@ -1,4 +1,4 @@
-#!/usr/bin/env sh
+#!/usr/bin/env zsh
 
 name=$(basename $0)
 
@@ -23,7 +23,7 @@ source "$(which _args)"
 _iplayer() {
 
     [[ $# -eq 0 ]] && {
-        _log_error "command not specified"
+        log-error "command not specified"
         return 1
     }
 
@@ -32,23 +32,23 @@ _iplayer() {
 
     case "${_command}" in
         
-        cache-list) _iplayer_cache_list $* ;;
+        cache-list) _iplayer_cache_list "$@" ;;
         cache-update) _iplayer_cache_update $* && echo 2;;
         
-        download-episode) _iplayer_download_episode $* ;;
-        download-series) _iplayer_download_series $* ;;
+        download-episode) _iplayer_download_episode "$@" ;;
+        download-series) _iplayer_download_series "$@" ;;
 
-        history-clear) _iplayer_history_clear $* ;;
-        history-list) _iplayer_history_list $* ;;
-        history-search) _iplayer_history_search $* ;;
+        history-clear) _iplayer_history_clear "$@" ;;
+        history-list) _iplayer_history_list "$@" ;;
+        history-search) _iplayer_history_search "$@" ;;
 
-        pvr-add) _iplayer_pvr_add $* ;;
-        pvr-delete) _iplayer_pvr_delete $* ;;
-        pvr-list) _iplayer_pvr_list $* ;;
-        pvr-queue) _iplayer_pvr_queue $* ;;
-        pvr-queue) _iplayer_pvr_queue $* ;;
+        pvr-add) _iplayer_pvr_add "$@" ;;
+        pvr-delete) _iplayer_pvr_delete "$@" ;;
+        pvr-list) _iplayer_pvr_list "$@" ;;
+        pvr-queue) _iplayer_pvr_queue "$@" ;;
+        pvr-queue) _iplayer_pvr_queue "$@" ;;
 
-        *) _log_warning "command '%s' unsupported" "${_command}" ;;
+        *) log-warning "command '%s' unsupported" "${_command}" ;;
     esac
 }
 
@@ -125,7 +125,7 @@ _iplayer_cache_list() {
 
 _iplayer_cache_update() {
     
-    _log_info "updating cache"
+    log-info "updating cache"
     get_iplayer --refresh
 
 }
@@ -134,7 +134,7 @@ _iplayer_cache_update() {
 
 _iplayer_history_clear() {
     
-    _log_info "clearing history "
+    log-info "clearing history "
     [[ -f "${iplayer_history_path}" ]] && rm "${iplayer_history_path}"
 
 }

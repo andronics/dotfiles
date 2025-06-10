@@ -1,4 +1,4 @@
-#!/usr/bin/env sh
+#!/usr/bin/env zsh
 
 name=$(basename "$0")
 
@@ -28,7 +28,7 @@ _lockscreen() {
 
 
     [[ $# -eq 0 ]] && {
-        _log_error "command not specified"
+        log-error "command not specified"
         return 1
     }
 
@@ -37,26 +37,26 @@ _lockscreen() {
 
     case "${_command}" in
 
-        hook-delete) _lockscreen_hook_delete $* ;;
-        hook-disable) _lockscreen_hook_disable $* ;;
-        hook-enable) _lockscreen_hook_enable $* ;;
+        hook-delete) _lockscreen_hook_delete "$@" ;;
+        hook-disable) _lockscreen_hook_disable "$@" ;;
+        hook-enable) _lockscreen_hook_enable "$@" ;;
         hook-idle) _lockscreen_hook_idle $*;;
         hook-init) _lockscreen_hook_init $*;;
-        hook-query) _lockscreen_hook_query $* ;;
-        hook-trigger) _lockscreen_hook_trigger $* ;;
+        hook-query) _lockscreen_hook_query "$@" ;;
+        hook-trigger) _lockscreen_hook_trigger "$@" ;;
         
-        service-install) _lockscreen_service_install $* ;;
-        service-restart) _lockscreen_service_restart $* ;;
-        service-start) _lockscreen_service_start $* ;;
-        service-status) _lockscreen_service_status $* ;;
-        service-stop) __lockscreen_service_stop $* ;;
-        service-uninstall) _lockscreen_service_uninstall $* ;;
+        service-install) _lockscreen_service_install "$@" ;;
+        service-restart) _lockscreen_service_restart "$@" ;;
+        service-start) _lockscreen_service_start "$@" ;;
+        service-status) _lockscreen_service_status "$@" ;;
+        service-stop) __lockscreen_service_stop "$@" ;;
+        service-uninstall) _lockscreen_service_uninstall "$@" ;;
 
-        state-activate) _lockscreen_state_activate $* ;;
+        state-activate) _lockscreen_state_activate "$@" ;;
         
-        wallpaper-update) _lockscreen_wallpaper_update $* ;;
+        wallpaper-update) _lockscreen_wallpaper_update "$@" ;;
 
-        *) _log_warning "command '%s' unsupported" "${_command}" ;;
+        *) log-warning "command '%s' unsupported" "${_command}" ;;
 
     esac
 
@@ -156,7 +156,7 @@ _lockscreen_service_uninstall() {
 
 _lockscreen_wallpaper_update() {
 
-    _log_info "updating lockscreen image"
+    log-info "updating lockscreen image"
     betterlockscreen --update "${lockscreen_wallpaper}"
 
 }

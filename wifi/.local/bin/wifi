@@ -1,4 +1,4 @@
-#!/usr/bin/env sh
+#!/usr/bin/env zsh
 
 name=$(basename $0)
 
@@ -26,11 +26,11 @@ source "$(which _args)"
 _wifi() {
 
     _devices=$(nmcli -g BARS,SSID device wifi list)
-    _ssid=$(echo "${_devices}" | column -t -s $':' | _rofi_dmenu "Wifi")
+    _ssid=$(echo "${_devices}" | column -t -s $':' | rofi-dmenu "Wifi")
 
     [[ -z "${_ssid}" ]] && return 1
 
-    _password=$(_rofi_dmenu "Password for ${_ssid}" -password <&-)
+    _password=$(rofi-dmenu "Password for ${_ssid}" -password <&-)
 
     [[ -z "${_password}" ]] && {
         nmcli dev wifi connect "${_ssid}"

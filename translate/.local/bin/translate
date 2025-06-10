@@ -1,4 +1,4 @@
-#!/usr/bin/env sh
+#!/usr/bin/env zsh
 
 name=$(basename $0)
 
@@ -29,22 +29,22 @@ _translate() {
     }
     
     [[ -n ${_text} ]] || {
-        _log_info "no text to translate"
+        log-info "no text to translate"
         return 1
     }
 
-    _names=$(echo "${translate_languages}" | _jq_query '.[] | .name')
-    _name=$(echo -e "${_names}" | _rofi_dmenu "Select Language")
+    _names=$(echo "${translate_languages}" | jq-query '.[] | .name')
+    _name=$(echo -e "${_names}" | rofi-dmenu "Select Language")
 
     [[ -n ${_name} ]] || {
-        _log_info "no transation language specified"
+        log-info "no transation language specified"
         return 1
     }
 
     _filter='.[] | select(.name == $name) | .iso '
-    _iso=$(echo "${translate_languages}" | _jq_query "${_filter}" "name" "${_name}")
+    _iso=$(echo "${translate_languages}" | jq-query "${_filter}" "name" "${_name}")
 
-    _engine=$( trans -S | sed "s/.* //" | sort | _rofi_dmenu "Engine" )
+    _engine=$( trans -S | sed "s/.* //" | sort | rofi-dmenu "Engine" )
 
     trans -e "${_engine}" --no-ansi "auto:${_iso}" "${_text}"
 

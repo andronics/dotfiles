@@ -1,9 +1,10 @@
-#!/usr/bin/env sh
+#!/usr/bin/env zsh
 
 name=$(basename $0)
 
 # ------------------------------
 
+source "$(which _cat)"
 source "$(which _jq)"
 source "$(which _log)"
 source "$(which _string)"
@@ -16,10 +17,10 @@ weather_data_dir="${XDG_DATA_HOME}/${name}"
 
 # ------------------------------
 
-weather_cache_data=$(cat "${weather_cache_dir}/config.json")
-weather_config_data=$(cat "${weather_config_dir}/config.json")
-weather_beaufort_scale_data=$(cat "${weather_data_dir}/beaufort_scale.json")
-weather_conditions_data=$(cat "${weather_data_dir}/conditions.json")
+weather_cache_data=$(cat-touch "${weather_cache_dir}/config.json" "")
+weather_config_data=$(cat-touch "${weather_config_dir}/config.json" "")
+weather_beaufort_scale_data=$(cat-touch "${weather_data_dir}/beaufort_scale.json")
+weather_conditions_data=$(cat-touch "${weather_data_dir}/conditions.json")
 
 # ------------------------------
 
@@ -31,7 +32,7 @@ _weather_init() {
 
     [[ ! -d "${weather_cache_dir}" ]] && mkdir -p "${weather_cache_dir}"
     
-    _expires=$(echo ${weather_config_data} | _jq_query '.cache.expires')
+    _expires=$(echo ${weather_config_data} | jq-query '.cache.expires')
     _has_elapsed=[[ $(_weather_elapsed) -ge ${_expires} ]]
         
     
@@ -70,8 +71,8 @@ _cache_path() {
     printf "%s/%s_%s_%s" \
         $CACHE_DIR \
         $weather_city \
-        $(_string_lowercase $weather_lang) \
-        $(_string_lowercase $weather_units)
+        $(string-lowercase $weather_lang) \
+        $(string-lowercase $weather_units)
 }
 
 _elapsed() {
@@ -168,7 +169,7 @@ CACHE_PID="$(_cache_path).pid"
 _weather() {
 
     [[ $# -eq 0 ]] && {
-        _log_error "command not specified"
+        log-error "command not specified"
         return 1
     }
 
@@ -178,20 +179,20 @@ _weather() {
 
     case "$subcommand" in
     
-        beaufort) _beaufort $* ;;
-        condition) _condition $* ;;
-        humidity) _humidity $* ;;
-        pressure) _pressure $* ;;
-        sunrise) _sunrise $* ;;
-        sunset) _sunset $* ;;
-        temp) _temp $* ;;
-        visibility) _visibility $* ;;
-        wind_degree) _wind_degree $* ;;
-        wind_speed) _wind_speed $* ;;
-        update) _init_update $* ;;
-        data) _get_data $* ;;
+        beaufort) _beaufort "$@" ;;
+        condition) _condition "$@" ;;
+        humidity) _humidity "$@" ;;
+        pressure) _pressure "$@" ;;
+        sunrise) _sunrise "$@" ;;
+        sunset) _sunset "$@" ;;
+        temp) _temp "$@" ;;
+        visibility) _visibility "$@" ;;
+        wind_degree) _wind_degree "$@" ;;
+        wind_speed) _wind_speed "$@" ;;
+        update) _init_update "$@" ;;
+        data) _get_data "$@" ;;
 
-        *) _log_warning "command '%s' unsupported" "${_command}" ;;
+        *) log-warning "command '%s' unsupported" "${_command}" ;;
 
     esac
 

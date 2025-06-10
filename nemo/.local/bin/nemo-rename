@@ -1,4 +1,4 @@
-#!/usr/bin/env sh
+#!/usr/bin/env zsh
 
 name=$(basename $0)
 
@@ -16,7 +16,7 @@ source $(which _log)
 _nemo_gprename() {
 
     if ! command -v gprename; then
-        _log_info "command 'gprename' not found"
+        log-info "command 'gprename' not found"
         exit
     fi
     
@@ -24,8 +24,8 @@ _nemo_gprename() {
 
     [[ -f "${_path}" ]] && _path=$(dirname "${_path}")
     
-    _log_info "file list set to $*"
-    _log_info "path set to ${_path}"
+    log-info "file list set to $*"
+    log-info "path set to ${_path}"
     
     gprename "${_path}"
 

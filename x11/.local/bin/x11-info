@@ -1,13 +1,17 @@
-#!/usr/bin/env sh
+#!/usr/bin/env zsh
 
 name=$(basename $0)
+
+# ------------------------------
+
+source "$(which _log)"
 
 # ------------------------------
 
 _x11_info() {
   
     [[ $# -eq 0 ]] && {
-        _log_error "command not specified"
+        log-error "command not specified"
         return 1
     }
 
@@ -20,7 +24,7 @@ _x11_info() {
         class) _x11_info_xprop $* | sed -n '/WM_CLASS/s/.*, "\(.*\)"/\1/p' ;;
         name) _x11_info_xprop $* | grep -P "^WM_NAME\((UTF8_)?STRING\)" | awk '{print $3}' | tr -d '"' ;;
 
-        *) _log_warning "command '%s' unsupported" "${_command}" ;;
+        *) log-warning "command '%s' unsupported" "${_command}" ;;
 
 
     esac

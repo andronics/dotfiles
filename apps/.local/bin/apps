@@ -1,4 +1,4 @@
-#!/usr/bin/env sh
+#!/usr/bin/env zsh
 
 name=$(basename $0)
 
@@ -43,7 +43,7 @@ _apps_category() {
     
     _filter=". | sort_by(.category)[] | (.category)"
     
-    printf "%s\n" $(echo "${apps_config}" | _jq_query "${_filter}" | uniq | _rofi_dmenu "categories" "s")
+    printf "%s\n" $(echo "${apps_config}" | jq-query "${_filter}" | uniq | rofi-dmenu "categories" "s")
 
 }
 
@@ -52,7 +52,7 @@ _apps_command() {
     _category=$1
     _filter=". | sort_by(.name)[] | select((.category | contains(\"${_category}\")) and (.enabled != false)) | .command "
 
-    echo "${apps_config}" | _jq_query "${_filter}"  | awk "NR==$2+1 { print \$0 }"
+    echo "${apps_config}" | jq-query "${_filter}"  | awk "NR==$2+1 { print \$0 }"
 
 }
 
@@ -61,7 +61,7 @@ _apps_list() {
     _category=$1
     _filter=". | sort_by(.name)[] | select((.category | contains(\"${_category}\")) and (.enabled != false)) | (.name + \"\t \" + .description)"
     
-    echo "${apps_config}" | _jq_query "${_filter}" | column -t -s $'\t' | _rofi_dmenu "${_categorys:-"all"}" "i"
+    echo "${apps_config}" | jq-query "${_filter}" | column -t -s $'\t' | rofi-dmenu "${_categorys:-"all"}" "i"
 
 }
 

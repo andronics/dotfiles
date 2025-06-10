@@ -1,4 +1,4 @@
-#!/usr/bin/env sh
+#!/usr/bin/env zsh
 
 name=$(basename $0)
 
@@ -21,7 +21,7 @@ source "$(which _args)"
 _bsp_shroud() {
     
     [[ $# -eq 0 ]] && {
-        _log_error "command not specified"
+        log-error "command not specified"
         return 1
     }
 
@@ -30,10 +30,10 @@ _bsp_shroud() {
 
     case "${_command}" in
         
-        cover) _bsp_shroud_cover $* ;;
-        reveal) _bsp_shroud_reveal $* ;;
+        cover) _bsp_shroud_cover "$@" ;;
+        reveal) _bsp_shroud_reveal "$@" ;;
 
-        *) _log_warning "command '%s' unsupported" "${_command}" ;;
+        *) log-warning "command '%s' unsupported" "${_command}" ;;
 
     esac
 }
@@ -43,14 +43,14 @@ _bsp_shroud() {
 _bsp_shroud_cover() {
 
     [[ `pgrep "polybar"` ]] && {
-        _log_debug "covering polybar"
+        log-debug "covering polybar"
         polybar-msg cmd hide
     }
 
     _nodes=$(bspc query -N -n .leaf -d focused)
 
     for _node in ${_nodes}; do
-        _log_info "covering node '%s'" "${_node}"
+        log-info "covering node '%s'" "${_node}"
         bspc node "${_node}" -g hidden=on
     done
 
@@ -59,14 +59,14 @@ _bsp_shroud_cover() {
 _bsp_shroud_reveal() {
 
     [[ `pgrep "polybar"` ]] && {
-        _log_debug "reveaing polybar"
+        log-debug "reveaing polybar"
         polybar-msg cmd show
     }
 
     _nodes=$(bspc query -N -n .leaf -d focused)
 
     for _node in ${_nodes}; do
-        _log_info "revealing node '%s'" "${_node}"
+        log-info "revealing node '%s'" "${_node}"
         bspc node "${_node}" -g hidden=off
     done
 

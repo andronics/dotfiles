@@ -1,4 +1,4 @@
-#!/usr/bin/env sh
+#!/usr/bin/env zsh
 
 name=$(basename $0)
 
@@ -26,17 +26,17 @@ power_options=("Reboot\nShutdown\nSuspend\nLock\nLogout")
 
 _power() {
 
-    _option=$(echo  "${power_options}" | _rofi_prompt -m "Power Menu" | _string_lowercase)
+    _option=$(echo  "${power_options}" | rofi-prompt -m "Power Menu" | string-lowercase)
 
     
     [[ -n ${_option} ]] || {
 
-        _log_info "no option selected"
+        log-info "no option selected"
         exit 1
 
     }
     
-    _log_info "option selected is '${_option}'"
+    log-info "option selected is '${_option}'"
     
     case ${_option} in
         
@@ -46,7 +46,7 @@ _power() {
         suspend) systemctl suspend ;;
         logout)  bspc quit ;;
 
-        *) _log_warning "option '%s' unsupported" "${_option}" ;;
+        *) log-warning "option '%s' unsupported" "${_option}" ;;
 
     esac
 

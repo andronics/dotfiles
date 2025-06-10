@@ -1,4 +1,4 @@
-#!/usr/bin/env sh
+#!/usr/bin/env zsh
 
 name=$(basename $0)
 
@@ -28,10 +28,10 @@ rofi_config="${search_data_dir}/theme.rasi"
 
 _search() {
 
-    _search=$(sort "${search_history}" | _rofi_dmenu "Search" | awk '{$1=$1;print}')
+    _search=$(sort "${search_history}" | rofi-dmenu "Search" | awk '{$1=$1;print}')
 
     [[ -n ${_search} ]] || {
-        _log_info "no search parameters entered"
+        log-info "no search parameters entered"
         return 1
     }
 
@@ -54,10 +54,10 @@ _search() {
 
     [[ -n ${_search} ]] && [[ "${_search}" != "" ]] && {
 
-        _provider=$(sort "${search_providers}" | sed 's/:.*//' | _rofi_dmenu "Provider" | xargs -I % grep "%:" "${search_providers}" | sed 's/.*://')
+        _provider=$(sort "${search_providers}" | sed 's/:.*//' | rofi-dmenu "Provider" | xargs -I % grep "%:" "${search_providers}" | sed 's/.*://')
     
-        _url=$( printf "${_provider}" "$(_string_url_encode "${_search}")" )
-        _log_info "opening ${_url} with ${BROWSER}"
+        _url=$( printf "${_provider}" "$(string-url_encode "${_search}")" )
+        log-info "opening ${_url} with ${BROWSER}"
         
         ${BROWSER} --new-window "$1" "${_url}" > /dev/null &
     

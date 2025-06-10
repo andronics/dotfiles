@@ -1,4 +1,4 @@
-#!/usr/bin/env sh
+#!/usr/bin/env zsh
 
 name=$(basename $0)
 
@@ -30,7 +30,7 @@ _rpass() {
 	_files=( "${_files[@]#"${rpass_store}"/}" )
 	_files=( "${_files[@]%.gpg}" )
 
-	_file=$(printf '%s\n' "${_files[@]}" | _rofi_dmenu "password file")
+	_file=$(printf '%s\n' "${_files[@]}" | rofi-dmenu "password file")
 
 	[[ -n ${_file} ]] || exit
 
