@@ -1,0 +1,1 @@
+alias cscli="docker exec -it crowdsec cscli"
