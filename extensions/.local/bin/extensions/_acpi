@@ -1,21 +1,18 @@
-#!/usr/bin/env sh
+#!/usr/bin/env zsh
 
 # ------------------------------
 
-source "$(which _log)"
-source "$(which _onexit)"
+source $(which _log)
 
 # ------------------------------
 
-acpi_socket="/var/run/acpid.socket"
+ACPI_SOCKET="/var/run/acpid.socket"
 
 # ------------------------------
 
-_acpi_listen() {
-
-    _log_info "acpi listening on socket ${acpi_socket}"
-
-    nc -U "${acpi_socket}" | while read -a _action; do
+acpi-listen() {
+    log-trace "socket '${acpi_socket}'"
+    nc -U "${ACPI_SOCKET}" | while read -a _action; do
         printf "%-20s\t%-20s\t%-20s\t%-20s\n" \
             "${_action[0]}" \
             "${_action[1]}" \
@@ -23,5 +20,3 @@ _acpi_listen() {
             "${_action[3]}"
     done
 }
-
-

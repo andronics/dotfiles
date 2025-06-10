@@ -1,4 +1,4 @@
-#!/usr/bin/env sh
+#!/usr/bin/env zsh
 
 # ------------------------------
 
@@ -6,7 +6,7 @@ source $(which _log)
 
 # ------------------------------
 
-_jq_query() {
+jq-query() {
     
     _filter=${1}
     shift   
@@ -17,16 +17,16 @@ _jq_query() {
         shift 2
     done
 
-    _log_debug "applying filter '${_filter}' with arguments: ${_args[*]}"
+    log-trace "applying filter '${_filter}' with arguments: ${_args[*]}"
     
-    jq -r "${_args[@]}" "${_filter}"
+    jq -c -r "${_args[@]}" "${_filter}"
 
 }
 
-_jq_has_value() {
-    _value=${1}
-    _log_debug "has value: ${_value}"
-    jq -r '. | index("'${_value}'") != null'
+jq-has-key() {
+    _key=${1}
+    # [[ "$(jq -r '. | index("'${_key}'") != null')" === "true" ]] \
+    #     && return 1 \
+    #     || return 0
+
 }
-
-

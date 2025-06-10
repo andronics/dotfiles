@@ -1,41 +1,58 @@
-#!/usr/bin/env sh
+#!/usr/bin/env zsh
 
 # ------------------------------
 
-source "$(which _log)"
+source $(which _log)
 
 # ------------------------------
 
-_service_install() {
-    _log_info "installing systemd service"
-    systemctl --user enable "${name}"
+service-cmd() {
+    _cmd=$1
+    shift
+    
+    [[ $1 == "-u" ]] && {
+        _user="--user"
+        shift
+    }
+    
+    systemctl ${_user} ${_cmd} "$@"
+
 }
 
-_service_reload() {
-    _log_info "reloading systemd daemon"
-    systemctl --user stop "${name}"
+
+# ------------------------------
+
+service-disable() {
+    log-info "disabling systemd service"
+    service-cmd enable "$@"
 }
 
-_service_restart() {
-    _log_info "restarting systemd service"
-    systemctl --user restart "${name}"
+service-enable() {
+    log-info "enabling systemd service"
+    service-cmd enable "$@"
 }
 
-_service_start() {
-    _log_info "starting systemd service"
-    systemctl --user start "${name}"
+service-reload() {
+    log-info "reloading systemd daemon"
+    service-cmd daemon-reload "$@"
 }
 
-_service_status() {
-    systemctl --user status "${name}" | awk '/Active: /{ print $2 }'
+service-restart() {
+    log-info "restarting systemd service"
+    service-cmd restart "$@"
 }
 
-_service_stop() {
-    _log_info "stopping systemd service"
-    systemctl --user stop "${name}"
+service-start() {
+    log-info "starting systemd service"
+    service-cmd start "$@"
 }
 
-_service_uninstall() {
-    _log_info "uninstalling systemd service"
-    systemctl --user disable "${name}"
+service-status() {
+    service-cmd status "$@" | awk '/Active: /{ print $2 }'
 }
+
+service-stop() {
+    log-info "stopping systemd service"
+    service-cmd stop "$@"
+}
+

@@ -1,8 +1,8 @@
-#!/usr/bin/env sh
+#!/usr/bin/env zsh
 
 # ------------------------------
 
-_template_replace() {
+template-replace() {
     
     _template=$1
     _values=$2

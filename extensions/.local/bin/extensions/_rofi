@@ -1,4 +1,4 @@
-#!/usr/bin/env sh
+#!/usr/bin/env zsh
 
 # ------------------------------
 
@@ -6,32 +6,32 @@ source $(which _log)
 
 # ------------------------------
 
-rofi_config="${XDG_CONFIG_HOME}/rofi/config.rasi"
-rofi_format="s"
-rofi_message="Are You Sure"
-rofi_prompt="select"
-rofi_options="No\nYes"
+ROFI_CONFIG="${XDG_CONFIG_HOME}/rofi/config.rasi"
+ROFI_FORMAT="s"
+ROFI_MESSAGE="Are You Sure"
+ROFI_PROMPT="select"
+ROFI_OPTIONS="No\nYes"
 
 # ------------------------------
 
-_rofi_dmenu() {
+rofi-dmenu() {
     
-    _prompt=${1:-${rofi_prompt}}
-    _format=${2:-${rofi_format}}
-    _message=${3:-${rofi_message}}
+    _prompt=${1:-${ROFI_PROMPT}}
+    _format=${2:-${ROFI_FORMAT}}
+    _message=${3:-${ROFI_MESSAGE}}
     
-    _log_info "attempting to listen on tcp port ${_port}..."
+    log-info "attempting to listen on tcp port ${_port}..."
     
-    rofi -config "${rofi_config}" -dmenu -p "${_prompt}" -format "${_format}"
+    rofi -config "${ROFI_CONFIG}" -dmenu -p "${_prompt}" -format "${_format}"
 
 }
 
-_rofi_prompt() {
+rofi-prompt() {
 
     _opts=$(getopt --options c:f:l:m:o:w: -l "columns:,format:,lines:,message:,options:,width:" -- "$@")
 
     [[ $? != 0 ]] && {
-        _log_info "Terminating..."
+        log-info "Terminating..."
         exit 1
     }
 
@@ -59,11 +59,11 @@ _rofi_prompt() {
             '-m' | '--message') _message="$2" && shift 2 && continue ;;
             '-o' | '--options') _options="$2" && shift 2 && continue ;;
             '--') shift && break ;;
-            *) _log_info "options '$1' is not valid" && exit 1 ;;
+            *) log-info "options '$1' is not valid" && exit 1 ;;
         esac
     done
 
-    echo -e "${_options}" | rofi -config "${rofi_config}" -dmenu -p "Confirmation" -mesg "${_message}" -format "${_format}" -markup-rows
+    echo -e "${_options}" | rofi -config "${ROFI_CONFIG}" -dmenu -p "Confirmation" -mesg "${_message}" -format "${_format}" -markup-rows
 
 }
 

@@ -1,0 +1,21 @@
+#!/usr/bin/env zsh
+
+# ------------------------------
+
+math-within-percent() {
+    
+    _value=$1
+    _target=$2
+    _percentage=$3
+
+    # calculate the percentage range
+    _lower_bound=$(echo "${_target} * (1 - ${_percentage} / 100)" | bc -l)
+    _upper_bound=$(echo "${_target} * (1 + ${_percentage} / 100)" | bc -l)
+
+    _lower_pass=$(echo "${_value} >= ${_lower_bound}" | bc -l)
+    _upper_pass=$(echo "${_value} <= ${_upper_bound}" | bc -l)
+
+
+    [[ _lower_pass && _upper_pass ]] && return 0 || return 1
+
+}

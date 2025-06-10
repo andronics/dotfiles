@@ -1,4 +1,192 @@
-#!/usr/bin/env sh
+args-process() {
+
+    _arguments=("${!1}")
+    _configurations=("${!2}")
+
+    for ((_i = 0; _i < ${#_arguments[@]}; _i++)); do
+
+        _arg="${_arguments[_i]}"
+        _matched=false
+
+        for _config in "${_configurations[@]}"; do
+
+            IFS=' '  read -r _flag_combo _action _target _operator <<< "${_config}"
+            IFS='|'  read -r -a _flags <<< "${_flag_combo}"
+
+            for _flag in "${_flags[@]}"; do
+
+                [[ "${_arg}" == "${_flag}" ]] && {
+
+                    _matched=true
+                    args-action "${_action}" "${_target}" "${_arguments[_i+1]}" "${_operator}"
+
+                    [[ "${_action}" == "set_string" ]] && \
+                        _i=$((_i + 1)) 
+
+                    break 2
+
+                }
+
+            done
+
+        done
+
+        [[ "${_matched}" == false ]] && \
+            log-info "Warning: Unrecognized argument '${_arg}'" >&2
+
+    done
+
+}
+
+args-action() {
+
+    _action="$1"
+    _target="$2"
+    _value="$3"
+    _operator="$4"
+
+    case "${_action}" in
+        
+        append)
+            declare -g "${_target}"+=" ${_value}"
+            ;;
+
+        append_unique)
+            [[ " ${!_target} " != *" ${_value} "* ]] && \
+                declare -g "${_target}"+=" ${_value}"
+            ;;
+
+        concatenate)
+            declare -g "${_target}"+="${_value}"
+            ;;
+        
+        increment)
+            declare -g "${_target}"=$(( ${!_target:-0} + ${_value:-1} ))
+            ;;
+
+        join)
+            IFS="${_value}"
+            declare -g "${_target}"="${!_target[*]}"
+            ;;
+
+        limit)
+            local _max_value="${_value}"
+            declare -g "${_target}=$(( ${!_target} > _max_value ? _max_value : ${!_target} ))"
+            ;;
+
+        merge_arrays)
+            declare -g -a "${_target}"
+            eval "${_target}+=(\"${_value}\")"
+            ;;
+        
+        occurrences)
+            declare -g "${_target}"=$(( ${!_target:-0} + 1 ))
+            ;;
+        
+        prepend)
+            declare -g "${_target}"="${_value} ${!_target}"
+            ;;
+
+        print)
+            echo "${_target}: ${!_target}"
+            ;;
+
+        required)
+            [[ -z "${!_target}" ]] && {
+                echo "Error: Missing required argument '${_target}'" >&2
+                exit 1
+            }
+            ;;
+
+        reverse_array)
+            eval "${_target}=( $(for i in "${!_target[@]}"; do echo "${_target[$i]}"; done | tac) )"
+            ;;
+
+        run_command)
+            declare -g "${_target}"="$(${_value})"
+            ;;
+        
+        set_array)
+            declare -g -a "${_target}"
+            eval "${_target}+=(\"${_value}\")"
+            ;;
+        
+        set_boolean)
+            declare -g "${_target}"=true
+            ;;
+        
+        set_default)
+            declare -g "${_target}"="${!_target:-${_value}}"
+            ;;
+        
+        set_kv)
+            declare -g -A "${_target}"
+            IFS='=' read -r key val <<< "${_value}"
+            eval "${_target}[\$key]=\"\$val\""
+            ;;
+        
+        set_string)
+            declare -g "${_target}"="${_value}"
+            ;;
+
+        split)
+            IFS=","
+            declare -g -a "${_target}"="(${_value})"
+            ;;
+
+        shuffle)
+            eval "${_target}=($(shuf -e "${!_target[@]}"))"
+            ;;
+
+        substitute)
+            declare -g "${_target}"="${_value//PATTERN/REPLACEMENT}"
+            ;;
+
+        sum)
+            declare -g "${_target}"=$(( ${!_target:-0} + ${_value} ))
+            ;;
+
+        timestamp)
+            declare -g "${_target}"="$(date +%s)"
+            ;;
+        
+        to_lowercase)
+            declare -g "${_target}"="${_value,,}"
+            ;;
+        
+        to_uppercase)
+            declare -g "${_target}"="${_value^^}"
+            ;;
+        
+        toogle)
+            [[ "${!_target}" == "true" ]] && \
+                declare -g "${_target}"=false || \
+                declare -g "${_target}"=true
+            ;;
+
+        trim)
+            declare -g "${_target}"="$(echo "${_value}" | xargs)"
+            ;;
+        
+        unset)
+            unset "${_target}"
+            ;;
+
+        validate)
+            local _pattern="${_operator}"
+            [[ "${_value}" =~ ${_pattern} ]] && \
+                declare -g "${_target}"="${_value}" || \
+                echo "Error: Value '${_value}' does not match pattern '${_pattern}'" >&2
+            ;;
+        
+        *)
+            log-info "Unsupport action '${_action}'" >&2
+            ;;
+    
+    
+    esac
+
+}
 
 # ------------------------------
 
@@ -46,7 +234,7 @@ while [[ $# -gt 0 ]]; do
 
 done
 
-set -- $*
+set -- "$@"
 unset _arg
 unset _name
 unset _value

@@ -1,37 +1,36 @@
-#!/usr/bin/env sh
-
-# ------------------------------
-
-shopt -s extglob 
+#!/usr/bin/env zsh
 
 # ------------------------------
 
 source $(which _jq)
 source $(which _log)
-source $(which _onexit)
 
 # ------------------------------
 
-_server_listen() {
+# why am i using this? 
+shopt -s extglob 
+
+
+server-listen() {
     
     _port=$1
     shift
     
-    _log_info "attempting to listen on tcp port ${_port}..."
+    log-info "attempting to listen on tcp port ${_port}..."
     
     nc -l -p ${_port} | while read _data; do
     
-        _log_info "received line: ${_data}"
-        _server_execute "$@"
+        log-info "received line: ${_data}"
+        server-execute "$@"
     
         # TODO: Alter to detect other data formats. Assuming the incoming data is already in JSON format.
-        echo "${_data}" | _jq_query '.'
+        echo "${_data}" | jq-query '.'
     
     done
 
 }
 
-_server_execute() {
+server-execute() {
     
     _func_name=$1
     shift
@@ -42,7 +41,7 @@ _server_execute() {
 
     else
 
-        _log_info "function no found: '${_func_name}'"
+        log-info "function no found: '${_func_name}'"
         exit 1
         
     fi

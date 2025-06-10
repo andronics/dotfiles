@@ -1,56 +1,57 @@
-#!/usr/bin/env sh
+#!/usr/bin/env zsh
 
 # ------------------------------
 
+source $(which _log)
 source $(which _template)
 
 # ------------------------------
 
-audnex_host="https://api.audnex.us"
-audnex_region="uk"
+AUDNEX_HOST="https://api.audnex.us"
+AUDNEX_REGION="uk"
 
 # ------------------------------
 
-_audnex_author_by_id() {
+audnex-author-by-id() {
     
     _query_values="{ \"asin\" : \"$1\" }"
-    _query_template="${audnex_host}/authors/{asin}?region=${audnex_region}"
-    _query_url=$(_template_replace "${_query_template}" "${_query_values}")
+    _query_template="${AUDNEX_HOST}/authors/{asin}?region=${AUDNEX_REGION}"
+    _query_url=$(template-replace "${_query_template}" "${_query_values}")
     
-    _audnex_query "${_query_url}"
+    audnex-query "${_query_url}"
 
 }
 
-_audnex_author_by_name() {
+audnex-author-by-name() {
     
     _query_values="{ \"name\" : \"$1\" }"
-    _query_template="${audnex_host}/authors?region=${audnex_region}&name={name}"
-    _query_url=$(_template_replace "${_query_template}" "${_query_values}")
+    _query_template="${AUDNEX_HOST}/authors?region=${AUDNEX_REGION}&name={name}"
+    _query_url=$(template-replace "${_query_template}" "${_query_values}")
     
-    _audnex_query "${url}" 
+    audnex-query "${url}" 
 
 }
 
-_audnex_book() {
+audnex-book() {
     
     _query_values="{ \"asin\" : \"$1\" }"
-    _query_template="${audnex_host}/books/{asin}?region=${audnex_region}" 
-    _query_url=$(_template_replace "${_query_template}" "${_query_values}")
+    _query_template="${AUDNEX_HOST}/books/{asin}?region=${AUDNEX_REGION}" 
+    _query_url=$(template-replace "${_query_template}" "${_query_values}")
     
-    _audnex_query "${url}"
+    audnex-query "${url}"
 
 }
 
-_audnex_chapters() {
+audnex-chapters() {
     
     _query_values="{ \"asin\" : \"$1\" }"
-    _query_template="${audnex_host}/books/{asin}/chapters?region=${audnex_region}" 
-    _query_url=$(_template_replace "${_query_template}" "${_query_values}")
+    _query_template="${AUDNEX_HOST}/books/{asin}/chapters?region=${AUDNEX_REGION}" 
+    _query_url=$(template-replace "${_query_template}" "${_query_values}")
     
-    _audnex_query "${_query_url}"
+    audnex-query "${_query_url}"
 
 }
 
-_audnex_query() {
+audnex-query() {
     curl --silent "$1"
 }

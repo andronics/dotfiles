@@ -1,8 +1,8 @@
-#!/usr/bin/env sh
+#!/usr/bin/env zsh
 
 # ------------------------------
 
-_string_capitalcase() {
+string-capitalcase() {
 
     _program='{
         for (i=1; i<=NF; i++) {
@@ -11,23 +11,23 @@ _string_capitalcase() {
         printf("%s", $0)
     }'
     
-    [[ -p /dev/stdin ]] && awk -e "${_program}" || awawk -e "${_program}" <<< "$1"
+    [[ -p /dev/stdin ]] && awk -e "${_program}" || awk -e "${_program}" <<< "$1"
 
 }
 
-_string_lowercase() {
+string-lowercase() {
 
     [[ -p /dev/stdin ]] && tr '[:upper:]' '[:lower:]' || tr '[:upper:]' '[:lower:]' <<< "$1"
         
 }
 
-_string_ord() {
+string-ord() {
 
     [[ -p /dev/stdin ]] && printf "%d" || printf "%d" <<< "$1"
 
 }
 
-_string_trim() {
+string-trim() {
 
     _expression='s/^[ \t]*//;s/[ \t]*$//'
 
@@ -35,13 +35,13 @@ _string_trim() {
 
 } 
 
-_string_uppercase() {
+string-uppercase() {
 
     [[ -p /dev/stdin ]] && tr '[:lower:]' '[:upper:]' || tr '[:lower:]' '[:upper:]' <<< "$1"
 
 } 
 
-_string_url_decode() {
+string-url-decode() {
 
     _expression='s/%\([0-9A-Fa-f][0-9A-Fa-f]\)/\\x\1/g'
 
@@ -49,7 +49,7 @@ _string_url_decode() {
     
 }
 
-_string_url_encode() {
+string-url-encode() {
 
     _program='{
         for (i = 1; i <= length($0); i++) {

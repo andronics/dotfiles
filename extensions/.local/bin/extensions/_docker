@@ -1,21 +1,21 @@
-#!/usr/bin/env sh
+#!/usr/bin/env zsh
 
 # ------------------------------
 
-source "$(which _jq)"
-source "$(which _onexit)"
+source $(which _jq)
+source $(which _log)
 
 # ------------------------------
 
-docker_socket="/var/run/docker.sock"
+DOCKER_SOCKET="/var/run/docker.sock"
 
 # ------------------------------
 
-_docker_events() {
-    curl -sN --unix-socket "${docker_socket}" http://system/events | while read _event; do
-        _type=$(echo "${_event}" | _jq_query ".Type")
-        _action=$(echo "${_event}" | _jq_query ".Action")
-        _attribs=$(echo "${_event}" | _jq_query ".Actor.Attributes")
-        printf "%-20s\t%-20s\n" "${_type}" "${_action}"
+docker-events() {
+    curl -sN --unix-socket "${DOCKER_SOCKET}" http://system/events | while read _event; do
+        _type=$(echo "${_event}" | jq-query ".Type")
+        _action=$(echo "${_event}" | jq-query ".Action")
+        _attribs=$(echo "${_event}" | jq-query ".Actor.Attributes")
+        log-console "%-20s\t%-20s\n" "${_type}" "${_action}"
     done
 }

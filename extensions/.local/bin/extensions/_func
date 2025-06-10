@@ -1,12 +1,11 @@
-#!/usr/bin/env sh
+#!/usr/bin/env zsh
 
 # ------------------------------
 
-source "$(which _log)"
+source $(which _log)
 
 # ------------------------------
 
-_func_unimplemented() {
-    # ${FUNCNAME}
-    _log_fatal "%s : function has not been implemented" "$1" 2>&1
+func-unimplemented() {
+    log-fatal "function '%s' has not been implemented" "${funcstack[2]}" 2>&1
 }

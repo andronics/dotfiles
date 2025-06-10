@@ -1,4 +1,4 @@
-#!/usr/bin/env sh
+#!/usr/bin/env zsh
 
 # ------------------------------
 
@@ -6,22 +6,23 @@ source $(which _log)
 
 # ------------------------------
 
-_kill_port() {
+kill-port() {
 
     _port=$1
     _process=$( lsof -i :${_port} | grep ${_port} | awk '{ print $2 }' )
 
     [[ "${_process}" != "" ]] || {
-        _log_info "no process on port %d" ${_port}
+        log-trace "no process on port %d" ${_port}
         exit 1
     }
 
-	_log_info "killing process %s on port %s\n" ${_process} ${_port}
-	_kill_process ${_process} > /dev/null
+	log-trace "requesting '%s' connected to port '%s' be killed\n" ${_process} ${_port}
+	kill-process ${_process} > /dev/null
 
 }
 
-_kill_process() {
-    killall $1 && _log_info "killed process %s" "$1"
+kill-process() {
+    log-trace "killing process '%s'\n" $1
+    killall $1 && log-info "killed process %s" "$1"
 }
 

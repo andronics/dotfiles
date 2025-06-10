@@ -1,0 +1,38 @@
+#!/usr/bin/env zsh
+
+# ------------------------------
+
+source $(which _log)
+
+# ------------------------------
+
+on-exit() {
+
+	for _child in $(jobs -p); do
+		kill ${_child} 2>/dev/null || true
+	done
+
+	_state_path="${XDG_STATE_HOME}/${name}"
+
+	[[ -d "${_state_path}" && -w "${_state_path}" ]] && {
+        rm -rf -- "${_state_path}"
+    }
+
+	exit 0
+
+}
+
+on-sigterm() {
+	log-info "sigterm received"
+	on-exit
+}
+
+on-sigusr1() {
+	log-info "sigterm received"
+	on-exit
+}
+
+on-set-trap() {}
+
+# to be repairer
+trap on-exit SIGTERM SIGUSR1

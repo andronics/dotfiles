@@ -1,28 +1,24 @@
-#!/usr/bin/env sh
+#!/usr/bin/env zsh
 
 # ------------------------------
 
-source $(which _jq)
-source $(which _template)
+AUDIBLE_HOST="https://api.audible.com"
+AUDIBLE_REGION="uk"
 
 # ------------------------------
 
-audible_host="https://api.audible.com"
-audible_region="uk"
-
-# ------------------------------
-
-_audible_product() {
+audible-product() {
 
     _keywords=$1
+
     _query_json="{ \"response_groups\" : \"contributors,product_attrs,product_desc,product_extended_attrs,series\", \"num_results\" : 10, \"products_sort_by\" : \"Relevance\", \"keywords\": \"${_keywords}\" }"
     _query_encoded=$(echo ${_query_json} | jq -Rr @uri)
-    _query_url="${audible_host}/1.0/catalog/products?${_query_encoded}"
+    _query_url="${AUDIBLE_HOST}/1.0/catalog/products?${_query_encoded}"
 
-    _audible_query "${_query_url}" | _jq_query "."
+    audible-query "${_query_url}" | jq-query "."
 
 }
 
-_audible_query() {
+audible-query() {
     curl --silent "$1"
 }

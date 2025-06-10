@@ -1,14 +1,12 @@
-#!/usr/bin/sh
-
-# maybe this should be caled CAVA instead
+#!/usr/bin/env zsh
 
 # ------------------------------
 
-spectrum_cava_root="${XDG_CACHE_HOME}/cava"
+CAVA_ROOT="${XDG_CACHE_HOME}/cava"
 
 # ------------------------------
 
-_spectrum() {
+cava-spectrum() {
 
     _bar="${bar:-▁▂▃▄▅▆▇█}"
     _dict="s/\;//g;"
@@ -25,15 +23,15 @@ _spectrum() {
 
 }
 
-_cava() {
+cava-config() {
     
     _id=$1
     _bars=$2
 
-    _pipe="${spectrum_cava_root}/${_id:-"default"}.fifo"
-    _cfg="${spectrum_cava_root}/${_id:-"default"}.cfg"
+    _pipe="${CAVA_ROOT}/${_id:-"default"}.fifo"
+    _cfg="${CAVA_ROOT}/${_id:-"default"}.cfg"
 
-    [[ -d "${spectrum_cava_root}" ]] || mkdir -p "${spectrum_cava_root}"
+    [[ -d "${CAVA_ROOT}" ]] || mkdir -p "${CAVA_ROOT}"
     [[ -p "${_pipe}" ]] && unlink ${_pipe}
 
     mkfifo "${_pipe}"
@@ -55,24 +53,7 @@ _cava() {
 
     cava -p "${_cfg}" &
 
-    _spectrum < ${_pipe}
+    cava-spectrum < ${_pipe}
 
 }
-
-
-# _spectrum() {
-
-#     _bar="${bar:-▁▂▃▄▅▆▇█}"
-#     _dict="s/\d//g;"
-#     _idx=0
-
-#     while [ ${_idx} -lt ${#_bar} ]; do
-#         _dict="${_dict}s/${_idx}/${_bar:${_idx}:1}/g;"
-#         _idx=$((_idx=_idx+1))
-#     done
-
-#     cat | while read -r _data; do
-#         echo ${_data} | sed ${_dict}
-#     done
-
-# }
+`   a||`

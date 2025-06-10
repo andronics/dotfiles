@@ -1,18 +1,14 @@
-#!/usr/bin/env sh
+#!/usr/bin/env zsh
 
-# extract methods from media-upload
+# ------------------------------
 
+source $(which _log)
 
-# ==============================
+# ------------------------------
 
-source "$(which _log)"
-source "$(which _onexit)"
-
-# ==============================
-
-_rclone_transfer() {
+rclone-transfer() {
     
-    _log_info "%8s | %-30s" "transfer" "${file}"
+    log-info "%8s | %-30s" "transfer" "${file}"
 
     _operations=$(_build_operations "${file}")
     _options=$(_build_options "${_rclone_subroot}" "${_subroot_name}")
@@ -21,7 +17,7 @@ _rclone_transfer() {
     rclone rc "sync/move" --json "${_operations}"
 }
 
-_rclone_operation() {
+rclone-operation() {
     _src_fs=$1
     _dst_fs=$2
     cat <<EOF
@@ -33,7 +29,7 @@ _rclone_operation() {
 EOF
 }
 
-_rclone_options() {
+rclone-options() {
     _file=$1
     cat <<EOF
     {
