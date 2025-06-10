@@ -1,9 +1,3 @@
 [[ -n "${DISPLAY}" || "${WAYLAND_DISPLAY}" ]] && {
-    picom -b --animations \
-        --animation-clamping \
-        --animation-dampening 25 \
-        --animation-for-open-window zoom \
-        --animation-for-unmap-window zoom \
-        --animation-stiffness 350 \
-        --animation-window-mass 5 &
+    pgrep -x "picom" > /dev/null || picom -b &
 }

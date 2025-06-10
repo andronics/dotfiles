@@ -2,7 +2,7 @@
 	(
 		while true; do
 			[[ `pgrep "bspwm"` ]] && {
-				polybar -q -r main &
+				pgrep -x "polybar" > /dev/null || polybar -q -r main &
 				break
 			} || sleep 0.25
 		done

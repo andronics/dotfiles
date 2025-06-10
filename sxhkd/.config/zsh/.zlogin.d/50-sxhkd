@@ -6,6 +6,6 @@
         return 1
     }
 
-    sxhkd &
+    pgrep -x "sxhkd" > /dev/null || sxhkd &
 
 }

@@ -1,3 +1,3 @@
 [[ -n "${DISPLAY}" || "${WAYLAND_DISPLAY}" ]] && {
-    rofi-polkit-agent &
+    pgrep -f "rofi-polkit-agent" > /dev/null || rofi-polkit-agent &
 }
