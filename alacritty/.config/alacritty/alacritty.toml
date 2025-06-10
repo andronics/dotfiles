@@ -1,4 +1,4 @@
-import = ["/home/andronics/.config/alacritty/themes/catppuccin-moncha.yml"]
+general.import = ["/home/andronics/.config/alacritty/themes/catppuccin-mocha.toml"]
 
 [font]
 size = 14.0
