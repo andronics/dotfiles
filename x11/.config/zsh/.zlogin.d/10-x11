@@ -1,5 +1,5 @@
 [[ -n "${DISPLAY}" || "${WAYLAND_DISPLAY}" ]] && {
-    setxkbmap -layout uk > /dev/null
+    setxkbmap -layout gb > /dev/null
     xsetroot -cursor_name left_ptr  > /dev/null
     xset s off  > /dev/null
     xset s -dpms  > /dev/null
