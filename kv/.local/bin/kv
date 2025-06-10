@@ -1,0 +1,144 @@
+#!/usr/bin/env zsh
+
+name=$(basename $0)
+
+# ------------------------------
+
+source "$(which _log)"
+
+# ------------------------------
+
+kv_cache_dir="${XDG_CACHE_HOME}/${name}"
+kv_config_dir="${XDG_CONFIG_HOME}/${name}"
+kv_data_dir="${XDG_DATA_HOME}/${name}"
+kv_runtime_dir=${XDG_RUNTIME_DIR}/${name}
+
+# ------------------------------
+
+kv_store="${kv_data_dir}/default"
+
+# ------------------------------
+
+source "$(which _args)"
+
+# ------------------------------
+
+_kv() {
+
+     [[ $# -eq 0 ]] && {
+        log-error "command not specified"
+        return 1
+    }
+
+    _command=$1
+    shift 2>/dev/null
+
+    case "${_command}" in
+        
+        clear) _kv_clear "$@" ;;
+        delete) _kv_delete "$@" ;;
+        get) _kv_get "$@" ;;
+        list) _kv_list "$@" ;;
+        set) _kv_set "$@" ;;
+
+        *) log-warning "command '%s' unsupported" "${_command}" ;;
+
+    esac
+
+}
+
+_kv_clear() {
+	
+	log-trace "attempting to clear store '${kv_store}'"
+	
+	rm -rf "${kv_store}"
+
+    log-trace "succeessfully cleared store '${kv_store}'"
+}
+
+_kv_delete() {
+
+	_key="$1"
+	
+	log-trace "attempting to delete key '${_key}'"
+
+	_kv_validate_key "$_key" || {
+		log-error "key '${_key}' is invalid"
+		return 1
+	}
+
+	[[ -f "${kv_store}/${_key}" ]] && {
+		rm -f "${kv_store}/${_key}"
+        log-trace "successfully deleted key '${_key}'"
+    }
+
+}
+
+_kv_get() {
+	
+	_key="$1"
+
+	log-trace "attempting to retrieve key '${_key}'"
+	
+	_kv_validate_key "$_key" || {
+		log-error "key '${_key}' is invalid"
+		return 1
+	}
+	
+	_value="$([ -f "${kv_store}/${_key}" ] && \
+		cat "${kv_store}/${_key}")"
+
+    log-trace "successfully retrieved key '${_key}'"
+	
+	echo "${_value}"
+	
+	[[ "${_value}" != "" ]]
+
+}
+
+_kv_list() {
+	
+	log-trace "store '${kv_store}'"
+	
+	for i in "${kv_store}/"*; do
+		if [ -f "$i" ]; then
+			_key="$(basename "$i")"
+			echo "key: ${_key} | value: $(_kv_get "${_key}")"
+		fi
+	done 
+}
+
+_kv_set() {
+
+	_key="$1"
+	_value="$2"
+	
+	log-trace "attempting to set '${_key}' to value '${_value}'"
+	
+	_kv_validate_key "$_key" || {
+		log-error "key '${_key}' is invalid"
+		return 1
+	}
+	
+	[[ ! -d "${kv_store}" ]] && mkdir -p "${kv_store}"
+
+	echo "${_value}" > "${kv_store}/${_key}" && \
+        log-debug "sucessfully set '${_key}' to '${_value}'"
+
+}
+
+_kv_validate_key() {
+
+	_key=$1
+
+	log-trace "validating key '${_key}'"
+
+	[[ "$1" =~ ^[0-9a-zA-Z._:-]+$  ]] && return 0 || return 1
+
+}
+
+# ------------------------------
+
+_kv "$@"
+
+
