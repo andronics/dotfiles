@@ -1,11 +1,9 @@
-#!/usr/bin/env sh
+#!/usr/bin/env zsh
 
 # ------------------------------
 
-log_dir="${XDG_STATE_HOME}/${name}"
-log_path="${log_dir}/${name}.log"
-log_id=$((RANDOM*RANDOM))
-log_level=3
+LOG_ID=$((RANDOM*RANDOM))
+LOG_LEVEL=3
 
 # ------------------------------
 
@@ -13,56 +11,78 @@ log_level=3
 
 # ------------------------------
 
-_log_console() {
+log-console() {
     [[ -t 1 ]] && {
+
         _log_format=$1 && shift
-        printf "[%10d] %s: ${_log_format}\n" $$ "${name}" $*
+        printf "${_log_format}\n" "$@" >&2
     }
+}
+
+# # ------------------------------
+
+log-fatal() {
+    [[ LOG_LEVEL -ge 0 ]] && {
+        _msg=$(log-message "$@")
+        echo "${_msg}" | systemd-cat -t "${name}" -p "crit"
+        log-console "$@" 
+    }
+}
+
+log-error() {
+    [[ LOG_LEVEL -ge 1 ]] && {
+        _msg=$(log-message "$@")
+        echo "${_msg}" | systemd-cat -t "${name}" -p "err"
+        log-console "$@" 
+    }
+}
+
+log-warning() {
+    [[ LOG_LEVEL -ge 2 ]] && {
+        _msg=$(log-message "$@")
+        echo "${_msg}" | systemd-cat -t "${name}" -p "warning"
+        log-console "$@" 
+    }
+}
+
+log-info() {
+    [[ LOG_LEVEL -ge 3 ]] && {
+        _msg=$(log-message "$@")
+        echo "${_msg}" | systemd-cat -t "${name}" -p "info"
+        log-console "$@" 
+    }
+}
+
+log-debug() {
+    [[ LOG_LEVEL -ge 4 ]] && {
+        _msg=$(log-message "$@")
+        echo "${_msg}" | systemd-cat -t "${name}" -p "debug"
+        log-console "$@" 
+    }
+}
+
+log-trace() {
+    [[ LOG_LEVEL -ge 5 ]] && {
+        _msg=$(log-message "$@")
+        echo "${_msg}" | systemd-cat -t "${name}" -p "notice"
+        log-console "$@" 
+    }
+}
+
+log-message() {
+    if [[ ${#funcstack[@]} -gt 2 ]]; then
+        printf "${funcstack[2]} | $@"
+    else
+        printf "$@"
+    fi
 }
 
 # ------------------------------
 
-_log_fatal() {
-    [[ log_level -ge 0 ]] && {
-        printf "$@" | systemd-cat -t "${name}" -p "crit"
-        _log_console "$@"
-    }
+log-view() {
+    journalctl --user -f -t $1 -n ${2:-50} -p ${3:-3}..7
 }
 
-_log_error() {
-    [[ log_level -ge 1 ]] && {
-        printf "$@" | systemd-cat -t "${name}" -p "err"
-        _log_console "$@"
-    }
+log-watch() {
+    journalctl --user -f -t $1 -p ${2:-3}..7
 }
-
-_log_warning() {
-    [[ log_level -ge 2 ]] && {
-        printf "$@" | systemd-cat -t "${name}" -p "warning"
-        _log_console "$@"
-    }
-}
-
-_log_info(){
-    [[ log_level -ge 3 ]] && {
-        printf "$@" | systemd-cat -t "${name}" -p "info"
-        _log_console "$@"
-    }
-}
-
-_log_debug() {
-    [[ log_level -ge 4 ]] && {
-        printf "$@" | systemd-cat -t "${name}" -p "debug"
-        _log_console "$@"
-    }
-}
-
-_log_trace() {
-    [[ log_level -ge 5 ]] && {
-        printf "$@" | systemd-cat -t "${name}" -p "notice"
-        _log_console "$@"
-    }
-}
-
-
-
