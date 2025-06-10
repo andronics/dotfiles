@@ -4,7 +4,7 @@
 
 dotfiles_source_root="$(cd "$(dirname "$0")" && pwd)"
 dotfiles_target_root="${HOME}"
-dotfiles_ignore="\.(?:pre|post)?(?:un)?install"
+dotfiles_ignore="\.((?:pre|post)?(?:un)?install|fold)"
 
 # ------------------------------
 
@@ -18,16 +18,20 @@ _dotfiles() {
    _command=$1
    shift 2>/dev/null
 
+   pushd "${dotfiles_source_root}" > /dev/null
+
    case ${_command} in
       
-      i|install) _dotfiles_install $* ;;
-      p|pass) _dotfiles_pass $* ;;
-      r|reinstall) _dotfiles_reinstall $* ;;
-      u|uninstall) _dotfiles_uninstall $* ;;
+      i|install) _dotfiles_install "$@" ;;
+      p|pass) _dotfiles_pass "$@" ;;
+      r|reinstall) _dotfiles_reinstall "$@" ;;
+      u|uninstall) _dotfiles_uninstall "$@" ;;
       
       *) printf "command '%s' unknown" "${_command}" && return ;;
 
    esac
+
+   popd > /dev/null
 
 
 }
@@ -58,9 +62,13 @@ _dotfiles_install() {
       }
       
       [[ ! -f "${_pkg}/.install" ]] && {
+
+         _no_folding="--no-folding"
          
+         [[ -f "${_pkg}/.fold" ]] && _no_folding=""
+
          echo "package '${_pkg}' is being installed by stow"
-         stow -t "${dotfiles_target_root}" -S ${_pkg} --ignore="${dotfiles_ignore}" --no-folding
+         stow -t "${dotfiles_target_root}" -S ${_pkg} --ignore="${dotfiles_ignore}" ${_no_folding}
 
          [[ $? -ne 0 ]] && echo "... failed to install"
 
@@ -152,9 +160,13 @@ _dotfiles_uninstall() {
       }
       
       [[ ! -f "${_pkg}/.uninstall"  && ! -f "${_pkg}/.install" ]] && {
+
+        _no_folding="--no-folding"
+         
+         [[ -f "${_pkg}/.fold" ]] && _no_folding=""
          
          echo "package '${_pkg}' is being uninstalled by stow"
-         stow -t "${dotfiles_target_root}" -D ${_pkg} --ignore="${dotfiles_ignore}" --no-folding
+         stow -t "${dotfiles_target_root}" -D ${_pkg} --ignore="${dotfiles_ignore}" ${_no_folding}
 
          [[ $? -ne 0 ]] && echo "... failed to install"
 
