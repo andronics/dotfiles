@@ -1,4 +1,4 @@
-#!/usr/bin/env sh
+#!/usr/bin/env zsh
 
 name=$(basename $0)
 
@@ -15,7 +15,6 @@ bsp_side_data_dir="${XDG_DATA_HOME}/${name}"
 # ------------------------------
 
 source "$(which _args)"
-
 
 # ------------------------------
 
@@ -71,24 +70,16 @@ _bsp_side_focus_second() {
 
 _bsp_side_split_horizontal() {
     
-    # ensure that the split type of the root node is horizontal.
     bspc node '@/.!horizontal' -R -90 && bspc node '@brother' -R 90
 
 }
 
 _bsp_side_split_vertical() {
 
-    # ensure that the split type of the root node is vertical.
     bspc node '@/.!vertical' -R -90 && bspc node '@brother' -R 90
 
 }
 
-
-
 # ------------------------------
 
 _bsp_side "$@"
-
-
-
-
