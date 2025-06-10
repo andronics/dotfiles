@@ -1,0 +1,9 @@
+# node 
+node_modules
+
+# environs
+.env
+
+# logs / traces 
+*.log
+*.traces
