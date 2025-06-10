@@ -1,3 +1,4 @@
 #!/usr/bin/env sh
 
 gpg-connect-agent reloadagent /bye
+echo UPDATESTARTUPTTY | gpg-connect-agent
