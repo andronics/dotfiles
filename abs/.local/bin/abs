@@ -1,0 +1,219 @@
+#!/usr/bin/env zsh
+
+name=$(basename $0)
+
+# ------------------------------
+
+source "$(which _cat)"
+source "$(which _jq)"
+source "$(which _log)"
+source "$(which _string)"
+
+# ------------------------------
+
+abs_cache_dir="${XDG_CACHE_HOME}/${name}"
+abs_config_dir="${XDG_CONFIG_HOME}/${name}"
+abs_data_dir="${XDG_DATA_HOME}/${name}"
+
+# ------------------------------
+
+abs_instances=$(cat-touch "${abs_data_dir}/instances.json" "{}")
+abs_states=$(cat-touch "${abs_data_dir}/states.json" "{}")
+
+# ------------------------------
+
+abs_token="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI2YWM0ZjllNS1kY2I0LTRkYjAtYTU1Yy1hYTI3MzliMTAyMmIiLCJ1c2VybmFtZSI6ImFuZHJvbmljcyIsImlhdCI6MTcxNjA3NzkyMn0.ePQ78eDK20EbdIZJzBL-0IvvIZHJTIKYrtcwNHd1kUQ"
+abs_host="audiobookshelf.andronics.io"
+
+# ------------------------------
+
+main() {
+
+    [[ $# -eq 0 ]] && {
+        log-error "command not specified"
+        return 1
+    }
+
+    _command=$1
+    shift 2>/dev/null
+
+    case "${_command}" in
+
+        delete) curl-delete "$@" ;;
+        get) curl-get "$@" ;;
+        post) curl-post "$@" ;;
+        
+        
+
+        bulk-convert) bulk-convert "$@" ;;
+
+        fetch-item) fetch-item "$@" ;;
+        fetch-item-cover) fetch-item-cover "$@" ;;
+        fetch-item-match) fetch-item-match "$@" ;;
+
+        fetch-library) fetch-library "$@" ;;
+        fetch-library-collections) fetch-library-collections "$@" ;;
+        fetch-library-items) fetch-library-items "$@" ;;
+        fetch-libraries) fetch-libraries "$@" ;;
+
+        fetch-tools-embed-metadata) fetch-tools-embed-metadata "$@" ;;
+        fetch-tools-encode-m4b) fetch-tools-encode-m4b "$@" ;;
+        fetch-tools-encode-m4b-cancel) fetch-tools-encode-m4b-cancel "$@" ;;
+
+        login) login "$@" ;;
+        logout) logout "$@" ;;
+
+        *) log-warning "command '%s' unsupported" "${_command}" ;;
+
+    esac
+
+}
+
+
+# ------------------------------
+
+bulk-convert() {
+    fetch-libraries | jq -r ".libraries[].id" | \
+    fetch-library-items | jq -r ".results[] | select(.media.numAudioFiles != "1") | .id" | \
+    fetch-tools-encode-m4b
+}
+
+# ------------------------------
+
+curl-delete() {
+    _url=$1
+    shift
+    curl -X DELETE "${_url}" \
+        -H "Authorization: Bearer ${abs_token}" \
+        -H "Content-Type: application/json" \
+        $@
+}
+
+curl-get() {
+    _url=$1
+    shift
+    curl -s -X GET "${_url}" \
+        -H "Authorization: Bearer ${abs_token}" \
+        -H "Accept: application/json" \
+        $@
+}
+
+curl-post() {
+    _url=$1
+    shift
+    curl -X POST "${_url}" \
+        -H "Authorization: Bearer ${abs_token}" \
+        -H "Content-Type: application/json" \
+        $@
+}
+
+
+
+# ------------------------------
+
+fetch-item() {
+    while read -r _item; do
+        curl-get "https://${abs_host}/api/items/${_item}"
+    done
+}
+
+fetch-item-cover() {
+    while read -r _item; do
+        curl-get "https://${abs_host}/api/items/${_item}/cover"
+    done
+}
+
+fetch-item-match() {
+    while read -r _item; do
+        curl-get "https://${abs_host}/api/items/${_item}/match"
+    done
+}
+
+
+# ------------------------------
+
+fetch-library() {
+    while read -r _library; do
+        curl-get "https://${abs_host}/api/libraries/${_library}"
+    done
+}
+
+fetch-library-collections() {
+    while read -r _library; do
+        curl-get "https://${abs_host}/api/libraries/${_library}/collections"
+    done
+}
+
+fetch-library-items() {
+    while read -r _library; do
+        curl-get "https://${abs_host}/api/libraries/${_library}/items"
+    done
+}
+
+fetch-libraries() {
+    curl-get "https://${abs_host}/api/libraries"
+}
+
+# ------------------------------
+
+fetch-me() {
+    curl-get "https://${abs_host}/api/me"
+}
+
+fetch-me-listening-sessions() {
+    curl-get "https://${abs_host}/api/me/listening-sesssions"
+}
+
+fetch-me-listening-stats() {
+    curl-get "https://${abs_host}/api/me/listening-stats"
+}
+
+fetch-me-item-progress() {
+    while read -r _item; do
+        curl-get "https://${abs_host}/api/me/progress/${_item}"
+    done
+}
+
+fetch-me-episode-progress() {
+    _item=$1
+    _episode=$2
+    curl-get "https://${abs_host}/api/me/progress/${_item}/${_episode}"
+}
+
+# ------------------------------
+
+fetch-tools-embed-metadata() {
+    while read -r _item; do
+        curl-post "https://${abs_host}/api/tools/item/${_item}/embed-metadata"
+    done
+}
+
+fetch-tools-encode-m4b() {
+    while read -r _item; do
+        curl-post "https://${abs_host}/api/tools/item/${_item}/encode-m4b"
+    done
+}
+
+fetch-tools-encode-m4b-cancel() {
+    while read -r _item; do
+        curl-delete "https://${abs_host}/api/tools/item/${_item}/encode-m4b"
+    done
+}
+
+# ------------------------------
+
+login() {
+    _username=$1
+    _password=$2
+    curl-post "https://${abs_host}/login" \
+        -d "{\"username\": \"${_username}\", \"password\": \"${_password}\"}" \
+        -w "\n%{http_code}"
+}
+
+logout() {
+    curl-post "https://${abs_host}/logout" 
+}
+
+# ------------------------------
+
+main "$@"
