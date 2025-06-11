@@ -1,8 +1,8 @@
 # https://starship.rs/config/
 
-add_newline = false
+add_newline = true
 format = """
-[╭─ ](base)$sudo$username in $directory$git_branch$git_status$package$nodejs
+[╭─ ](base)$sudo$username on $hostname at $directory$git_branch$package$nodejs$cmd_duration
 [│](base)
 [╰─ ](base)$character$line_break
 """
@@ -10,35 +10,29 @@ palette = "catppuccin_frappe"
 
 [character]
 success_symbol = "[❯](teal)"
-error_symbol = "[x](read)"
-
-[username]
-style_user = "teal"
-style_root = "red"
-format = "[$user]($style)"
-disabled = false
-show_always = true
-
-[hostname]
-ssh_only = false
-style = "bold #D28D93"
-format = "[@](sapphire)[$hostname]($style) [in](#ECEFF4) "
-disabled = false
+error_symbol = "[x](red)"
 
 [directory]
+format = "[ $path](lavender)[$read_only]($read_only_style) "
 read_only = " "
+style = "bold #ffffff"
+truncation_length = 2
 
 [git_branch]
-symbol = " "
+format = "| [$symbol$branch(:$remote_branch)](lavender) "
 
-[line_break]
-disabled = true
+
+[hostname]
+format = "[󰍹 $hostname](lavender)"
+ssh_only = false
+style = "bold #ffffff"
 
 [nodejs]
-disabled = false
+format = "| [$symbol($version )](lavender)"
 
 [package]
-disabled = false
+format = "| [$symbol $version](lavender) "
+symbol = " "
 
 [palettes.catppuccin_frappe]
 rosewater = "#f2d5cf"
@@ -67,4 +61,11 @@ surface0 = "#414559"
 base = "#303446"
 mantle = "#292c3c"
 crust = "#232634"
+
+[username]
+style_user = "bold #000000"
+style_root = "bold #000000"
+format = "[ $user](lavender)"
+disabled = false
+show_always = true
 
