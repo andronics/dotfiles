@@ -1,0 +1,59 @@
+# Sample sxhkdrc configuration for bspc-manager integration
+# Add these bindings to your existing sxhkdrc
+
+# Layout Templates
+super + shift + ctrl + {1,2,3,4}
+    ~/.dotfiles/bsp-daemon/.local/share/doc/bspc-keybinds template-{split-v,split-h,triple,quad}
+
+# Window State Management
+super + shift + space
+    ~/.dotfiles/bsp-daemon/.local/share/doc/bspc-keybinds cycle-state
+
+# Smart Preselection (toggles on/off)
+super + ctrl + {h,v}
+    ~/.dotfiles/bsp-daemon/.local/share/doc/bspc-keybinds smart-presel-{h,v}
+
+# Quick Application Assignment
+super + shift + ctrl + {f,c}
+    ~/.dotfiles/bsp-daemon/.local/share/doc/bspc-keybinds assign-current-{firefox,code}
+
+# Layout Management
+super + shift + s
+    ~/.dotfiles/bsp-daemon/.local/share/doc/bspc-keybinds save-current-layout
+
+# Development Workspace Setup
+super + shift + ctrl + d
+    ~/.dotfiles/bsp-daemon/.local/share/doc/bspc-keybinds dev-setup
+
+# Window Information
+super + shift + i
+    ~/.dotfiles/bsp-daemon/.local/share/doc/bspc-keybinds window-info
+
+# Enhanced Focus Navigation
+super + {Tab,shift + Tab}
+    ~/.dotfiles/bsp-daemon/.local/share/doc/bspc-keybinds focus-{next,prev}
+
+# Enhanced Window Movement (using bspc-manager)
+super + shift + {h,j,k,l}
+    ~/.dotfiles/bsp-daemon/.local/bin/bspc-manager move {west,south,north,east}
+
+# Enhanced Window Resizing
+super + alt + {h,j,k,l}
+    ~/.dotfiles/bsp-daemon/.local/bin/bspc-manager resize {left,down,up,right} 20
+
+# Quick Desktop Operations
+super + shift + ctrl + {n,r}
+    {~/.dotfiles/bsp-daemon/.local/bin/bspc-manager create-desktop $(date +%H%M), \
+     ~/.dotfiles/bsp-daemon/.local/bin/bspc-manager rename-desktop $(bspc query -D -d focused --names) $(dmenu -p "New name:")}
+
+# Direct bspc-manager commands via dmenu/rofi
+super + shift + semicolon
+    ~/.dotfiles/bsp-daemon/.local/bin/bspc-manager $(echo -e "focus\nmove\nresize\nstate\ntemplate\nassign-desktop\npresel\nsave-layout" | dmenu -p "bspc-manager:")
+
+# Rule Management
+super + shift + ctrl + r
+    ~/.dotfiles/bsp-daemon/.local/bin/bspc-manager load-rules
+
+# Layout switching via dmenu
+super + shift + ctrl + l
+    desktop=$(echo -e "dev\nweb\nchat\nmedia\nsystem" | dmenu -p "Switch to:") && ~/.dotfiles/bsp-daemon/.local/bin/bspc-manager focus-desktop "$desktop"

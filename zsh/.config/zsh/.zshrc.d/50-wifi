@@ -1,0 +1,19 @@
+wifi-connect() {
+     nmcli device wifi connect "$1" password "$2"
+}
+
+wifi-hotspot() {
+     nmcli device wifi hotspot ssid "$1" password "$2"
+}
+
+wifi-list() {
+     nmcli device wifi list
+}
+
+wifi-scan() {
+     nmcli device wifi rescan
+}
+
+wifi-show-password() {
+     nmcli device wifi show-password
+}

@@ -1,0 +1,35 @@
+file-tracks() {
+    echo "   SIZE | VIDEO | AUDIO | FOLDER"
+    echo "----------------------------------------------------------------------------------------"
+    while read file; do
+    
+        counts=$(mediainfo --Output=JSON "$file" | jq -r "
+            if .media.track then
+                {
+                    video: [.media.track[] | select(.\"@type\" == \"Video\")] | length,
+                    audio: [.media.track[] | select(.\"@type\" == \"Audio\")] | length
+                }
+            else
+                0
+            end
+        ")
+
+        count_video=$(echo "$counts" | jq -r .video)
+        count_audio=$(echo "$counts" | jq -r .audio)
+        total_count=$((count_video + count_audio))
+
+        size=$(echo "$(stat -c "%s" "$file") / 1073741824" | bc -l)
+        size=$(printf "%.2f" $size)
+
+        printf " %06s | %05d | %05d | %s\n"  "$size" "$count_video" "$count_audio"  "$(dirname "$file")"
+    
+    done < <(find ${1:-.} -type f -name "*.mp4" | sort)
+}
+
+rm-tmps() {
+    find ${1:-.} -type f \( -name '*.tmp' -o -name '*.tmp.*' \) -exec rm {} +
+}
+
+file-types() {
+    sudo find ${1:-.} -type f | sed 's|.*\.||' | sort | uniq -c | sort -
+}

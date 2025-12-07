@@ -1,0 +1,275 @@
+#!/usr/bin/env zsh
+
+name=$(basename $0)
+
+# ------------------------------
+
+source $(which _log)
+source $(which _jq)
+
+# ------------------------------
+
+BSP_ECOSYSTEM_CONF="${XDG_DATA_HOME:-$HOME/.local/share}/bsp-daemon/ecosystem.conf"
+
+# Default values if config doesn't exist or source fails
+BSP_IPC_DIR="${BSP_IPC_DIR:-/tmp/bsp-ecosystem}"
+BSP_STATE_FILE="${BSP_STATE_FILE:-$BSP_IPC_DIR/state}"
+BSP_EVENTS_FIFO="${BSP_EVENTS_FIFO:-$BSP_IPC_DIR/events}"
+BSP_LOCK_DIR="${BSP_LOCK_DIR:-$BSP_IPC_DIR/locks}"
+
+# Load shared config
+[[ -f "$BSP_ECOSYSTEM_CONF" ]] && source "$BSP_ECOSYSTEM_CONF"
+
+# Set default priorities if not set
+BSP_BALANCE_PRIORITY="${BSP_BALANCE_PRIORITY:-90}"
+BSP_DESKTOPS_PRIORITY="${BSP_DESKTOPS_PRIORITY:-85}"
+BSP_ASPECT_PRIORITY="${BSP_ASPECT_PRIORITY:-50}"
+BSP_FLAG_PRIORITY="${BSP_FLAG_PRIORITY:-45}"
+BSP_FLOATING_BORDERS_PRIORITY="${BSP_FLOATING_BORDERS_PRIORITY:-30}"
+BSP_VENTILATE_PRIORITY="${BSP_VENTILATE_PRIORITY:-25}"
+
+# Set default event filters if not set
+BSP_BALANCE_EVENTS="${BSP_BALANCE_EVENTS:-node_add node_remove node_geometry}"
+BSP_DESKTOPS_EVENTS="${BSP_DESKTOPS_EVENTS:-node_add node_remove}"
+BSP_ASPECT_EVENTS="${BSP_ASPECT_EVENTS:-node_geometry node_state}"
+BSP_FLAG_EVENTS="${BSP_FLAG_EVENTS:-node_flag}"
+BSP_FLOATING_BORDERS_EVENTS="${BSP_FLOATING_BORDERS_EVENTS:-node_state node_flag}"
+BSP_VENTILATE_EVENTS="${BSP_VENTILATE_EVENTS:-node_add node_remove node_geometry}"
+
+# ------------------------------
+
+_bsp_ecosystem_init() {
+    
+    log-info "initializing ecosystem communication"
+    
+    # Create IPC directory structure
+    mkdir -p "$BSP_IPC_DIR" "$BSP_LOCK_DIR"
+    
+    # Create events FIFO
+    [[ ! -p "$BSP_EVENTS_FIFO" ]] && mkfifo "$BSP_EVENTS_FIFO"
+    
+    # Initialize state file
+    _bsp_ecosystem_state_init
+    
+}
+
+_bsp_ecosystem_state_init() {
+    
+    cat > "$BSP_STATE_FILE" << EOF
+{
+    "active_tools": [],
+    "event_queue": [],
+    "mutex_locks": {},
+    "last_event": null,
+    "coordination_mode": "normal"
+}
+EOF
+    
+}
+
+_bsp_ecosystem_register_tool() {
+    
+    local tool_name="$1"
+    local tool_pid="$2"
+    local priority="${3:-50}"
+    
+    log-debug "registering tool: %s (pid: %s, priority: %s)" "$tool_name" "$tool_pid" "$priority"
+    
+    # Add to active tools in state
+    local current_state=$(cat "$BSP_STATE_FILE")
+    local updated_state=$(echo "$current_state" | jq --arg name "$tool_name" --arg pid "$tool_pid" --argjson priority "$priority" \
+        '.active_tools += [{"name": $name, "pid": $pid, "priority": $priority, "registered_at": now}]')
+    
+    echo "$updated_state" > "$BSP_STATE_FILE"
+    
+}
+
+_bsp_ecosystem_unregister_tool() {
+    
+    local tool_name="$1"
+    
+    log-debug "unregistering tool: %s" "$tool_name"
+    
+    # Remove from active tools
+    local current_state=$(cat "$BSP_STATE_FILE")
+    local updated_state=$(echo "$current_state" | jq --arg name "$tool_name" \
+        '.active_tools = [.active_tools[] | select(.name != $name)]')
+    
+    echo "$updated_state" > "$BSP_STATE_FILE"
+    
+    # Release any mutex locks held by this tool
+    _bsp_ecosystem_release_locks "$tool_name"
+    
+}
+
+_bsp_ecosystem_acquire_lock() {
+    
+    local lock_name="$1"
+    local tool_name="$2"
+    local timeout="${3:-5}"
+    
+    local lock_file="$BSP_LOCK_DIR/$lock_name"
+    local count=0
+    
+    while [[ $count -lt $timeout ]]; do
+        
+        if (set -C; echo "$tool_name:$$" > "$lock_file") 2>/dev/null; then
+            log-debug "acquired lock %s for %s" "$lock_name" "$tool_name"
+            return 0
+        fi
+        
+        sleep 0.1
+        ((count++))
+        
+    done
+    
+    log-warn "failed to acquire lock %s for %s (timeout)" "$lock_name" "$tool_name"
+    return 1
+    
+}
+
+_bsp_ecosystem_release_lock() {
+    
+    local lock_name="$1"
+    local tool_name="$2"
+    
+    local lock_file="$BSP_LOCK_DIR/$lock_name"
+    
+    if [[ -f "$lock_file" ]]; then
+        local lock_owner=$(cat "$lock_file" 2>/dev/null | cut -d: -f1)
+        if [[ "$lock_owner" == "$tool_name" ]]; then
+            rm -f "$lock_file"
+            log-debug "released lock %s for %s" "$lock_name" "$tool_name"
+        fi
+    fi
+    
+}
+
+_bsp_ecosystem_release_locks() {
+    
+    local tool_name="$1"
+    
+    for lock_file in "$BSP_LOCK_DIR"/*; do
+        [[ -f "$lock_file" ]] || continue
+        
+        local lock_owner=$(cat "$lock_file" 2>/dev/null | cut -d: -f1)
+        if [[ "$lock_owner" == "$tool_name" ]]; then
+            rm -f "$lock_file"
+            log-debug "released lock %s for %s" "$(basename "$lock_file")" "$tool_name"
+        fi
+    done
+    
+}
+
+_bsp_ecosystem_coordinate_event() {
+    
+    local event="$1"
+    local tool_name="$2"
+    
+    # Check if this event requires coordination
+    case "$event" in
+        node_geometry)
+            # Sequential processing for geometry events
+            _bsp_ecosystem_acquire_lock "geometry" "$tool_name" 10 || return 1
+            ;;
+        node_add|node_remove)
+            # Mutex for layout managers
+            if _bsp_ecosystem_is_layout_manager "$tool_name"; then
+                _bsp_ecosystem_acquire_lock "layout_managers" "$tool_name" 5 || return 1
+            fi
+            ;;
+    esac
+    
+    # Send event to coordination FIFO
+    echo "$event:$tool_name:$(date +%s.%N)" >> "$BSP_EVENTS_FIFO" &
+    
+}
+
+_bsp_ecosystem_is_layout_manager() {
+    
+    local tool_name="$1"
+    
+    case "$tool_name" in
+        bsp-balance|bsp-desktops|bsp-ventilate) return 0 ;;
+        *) return 1 ;;
+    esac
+    
+}
+
+_bsp_ecosystem_get_tool_priority() {
+    
+    local tool_name="$1"
+    
+    case "$tool_name" in
+        bsp-balance) echo "$BSP_BALANCE_PRIORITY" ;;
+        bsp-desktops) echo "$BSP_DESKTOPS_PRIORITY" ;;
+        bsp-aspect) echo "$BSP_ASPECT_PRIORITY" ;;
+        bsp-flag) echo "$BSP_FLAG_PRIORITY" ;;
+        bsp-floating-borders) echo "$BSP_FLOATING_BORDERS_PRIORITY" ;;
+        bsp-ventilate) echo "$BSP_VENTILATE_PRIORITY" ;;
+        *) echo "50" ;;
+    esac
+    
+}
+
+_bsp_ecosystem_should_handle_event() {
+    
+    local event="$1"
+    local tool_name="$2"
+    
+    # Get allowed events for this tool
+    local allowed_events
+    case "$tool_name" in
+        bsp-balance) allowed_events="$BSP_BALANCE_EVENTS" ;;
+        bsp-desktops) allowed_events="$BSP_DESKTOPS_EVENTS" ;;
+        bsp-aspect) allowed_events="$BSP_ASPECT_EVENTS" ;;
+        bsp-flag) allowed_events="$BSP_FLAG_EVENTS" ;;
+        bsp-floating-borders) allowed_events="$BSP_FLOATING_BORDERS_EVENTS" ;;
+        bsp-ventilate) allowed_events="$BSP_VENTILATE_EVENTS" ;;
+        *) return 0 ;;  # Unknown tools handle all events
+    esac
+    
+    # Check if event is in allowed list
+    [[ " $allowed_events " == *" $event "* ]]
+    
+}
+
+_bsp_ecosystem_debounce_event() {
+    
+    local event="$1"
+    local debounce_time="${BSP_DEBOUNCE_TIME:-100}"
+    
+    local last_event_file="$BSP_IPC_DIR/last_$event"
+    local current_time=$(date +%s%3N)
+    
+    if [[ -f "$last_event_file" ]]; then
+        local last_time=$(cat "$last_event_file")
+        local diff=$((current_time - last_time))
+        
+        if [[ $diff -lt $debounce_time ]]; then
+            return 1  # Skip this event
+        fi
+    fi
+    
+    echo "$current_time" > "$last_event_file"
+    return 0
+    
+}
+
+# ------------------------------
+
+case "$1" in
+    init) _bsp_ecosystem_init ;;
+    register) _bsp_ecosystem_register_tool "$2" "$3" "$4" ;;
+    unregister) _bsp_ecosystem_unregister_tool "$2" ;;
+    coordinate) _bsp_ecosystem_coordinate_event "$2" "$3" ;;
+    acquire-lock) _bsp_ecosystem_acquire_lock "$2" "$3" "$4" ;;
+    release-lock) _bsp_ecosystem_release_lock "$2" "$3" ;;
+    should-handle) _bsp_ecosystem_should_handle_event "$2" "$3" ;;
+    debounce) _bsp_ecosystem_debounce_event "$2" ;;
+    get-priority) _bsp_ecosystem_get_tool_priority "$2" ;;
+    *) 
+        echo "Usage: $0 {init|register|unregister|coordinate|acquire-lock|release-lock|should-handle|debounce|get-priority}"
+        exit 1
+        ;;
+esac

@@ -1,0 +1,7 @@
+github.com:
+    users:
+        {{ pass "app/github-cli/user"}}:
+            oauth_token: {{ pass "app/github-cli/oauth_token" }}
+    git_protocol: ssh
+    oauth_token: {{ pass "app/github-cli/oauth_token" }}
+    user: {{ pass "app/github-cli/user" }}

@@ -1,0 +1,222 @@
+#!/usr/bin/env zsh
+
+icon=${icon:=""}
+name=${name:="media-upload"}
+version="0.0.1"
+
+# =======================================
+
+shopt -s extglob 
+
+# =======================================
+
+source $(which _jq)
+source $(which _log)
+source $(which _onexit)
+source $(which _notify)
+
+# =======================================
+
+root=${root:-"/.pool/local/media"}
+
+# =======================================
+
+audio_format=${audio_format:-"MPEG"}
+audio_filter=${audio_filter:-"*.mp3"}
+audio_bit_depth_max=${audio_bit_depth_max:-"8"}
+audio_bit_rate_max=${audio_bit_rate_max:-"128000"} # 1024 to allow for conversion slipage
+
+video_format=${video_format:-"HEVC"}
+video_filter=${video_filter:-"*.mp4"}
+video_bit_depth_max=${video_bit_depth_max:-"10"}
+video_bit_rate_max=${video_bit_rate_max:-"1500000"} # 1024 to allow for conversion slipage
+video_height_max=${video_height_max:-"720"}
+video_width_max=${video_width_max:-"1356"}
+
+# =======================================
+
+
+
+_query() {
+    qry=$1
+    jq -r "${qry}"
+}
+
+# =======================================
+
+_build_operation() {
+    subroot=$1
+    subroot_name=$2
+    cat <<EOF
+    {
+        "srcFs": "${subroot}",
+        "dstFs": "${subroot_name}:",
+        "deleteEmptySrcDirs": true
+    }
+EOF
+}
+
+_build_options() {
+    file=$1
+    cat <<EOF
+    {
+        "filter": {
+            "FilterFrom": ["${file}"] 
+        },
+        "main": {
+            "TPSLimit": 3,
+            "Transfers": 1
+        }
+    }
+EOF
+}
+
+# =======================================
+
+_subroot_file() {
+    fp=$1
+    echo "$1" | sed -r "s|${root}/[^\/]{1,}/(.*)$|\1|"
+}
+
+_subroot_name() {
+    fp=$1
+    echo "$1" | sed -r "s|${root}/([^\/]{1,})(/.*)?$|\1|"
+}
+
+_subroot_path() {
+    fp=$1
+    echo "${fp}" | sed -r "s|(${root}/[^\/]{1,})(/.*)?$|\1|"
+}
+
+# =======================================
+
+_filter() {
+
+    subroot_name=$1
+
+    while read file; do
+    
+        ((++count))
+
+        if [[ -z ${filterFrom} ]]; then
+            filterFrom=$(mktemp /tmp/${name}.XXXXXXXX)
+        fi
+
+        subroot_file=$(_subroot_file "${file}")
+
+        echo "+ /${subroot_file}" >> "${filterFrom}"
+
+        log-info "%8s | %-10s | %-100s" "filter" "${subroot_name}" "${subroot_file}" &
+
+    done
+
+    if [[ $count -gt 0 ]]; then
+        echo "- **"  >> "${filterFrom}"
+        echo "${filterFrom}"
+    fi
+
+}
+
+_scan() {
+
+    subroot=$1
+    filter=$2
+
+    while read file; do
+
+        log-info "%8s | %-150s" "scan" "${file}" &
+        echo ${file}
+
+    done < <(find "${subroot}" -type f -name "${filter}")
+
+}
+
+_transfer () {
+
+    subroot=$1
+    subroot_name=$2
+    subroot_path=$3
+
+    while read file; do
+
+        _log "%8s | %-30s" "transfer" "${file}" &
+
+        # operations=$(_build_operations "${file}")
+        # options=$(_build_options "${_subroot}" "${_subroot_name}")
+        
+        # rclone rc "options/set" --json "${options}"
+        # rclone rc "sync/move" --json "${operation}"
+
+        rclone --config /home/andronics/.config/cloud/cloud.conf move --filter-from "${file}" "${subroot}" "${subroot_name}:" --progress --delete-empty-src-dirs
+
+        rm "${file}"
+
+    done
+
+}
+
+_validate() {
+
+    type=$1
+    required_format=$2
+    max_height=$3
+    max_width=$4
+    max_bit_depth=$5
+    max_bit_rate=$6
+
+    while read file; do
+
+        v=$(mediainfo --Output=JSON "${file}" | _query 'first(.media.track[] | select(.["@type"]=="'${type}'") | .)')
+
+        format=$(_query '.Format' <<< "${v}")
+        height=$(_query '.Height' <<< "${v}")
+        width=$(_query '.Width' <<< "${v}")
+        bitdepth=$(_query '.BitDepth' <<< "${v}")
+        bitrate=$(_query '.BitRate' <<< "${v}")
+
+        validated=0
+
+        if [[ \
+            "${format}" =~ "${required_format}"  && \
+            "${height}" -le "${max_height}" && \
+            "${width}" -le "${max_width}" && \
+            "${bitdepth}" -le "${max_bit_depth}" && \
+            "${bitrate}" -le "${max_bit_rate}"
+        ]]; then
+            
+            validated=1
+            echo ${file}
+        
+        fi
+
+        log-info "%8s | %-150s | %4s | %4s | %4s | %2s | %7s | %1s " "validate" "${file}" "${format}" "${height}" "${width}" "${bitdepth}" "${bitrate}" "${validated}" &
+
+    done
+}
+
+# =======================================
+
+
+while read subroot; do
+
+    subroot_name=$(_subroot_name "${subroot}")
+    subroot_path=$(_subroot_path "${subroot}")
+
+    case "$subroot_name" in
+        audiobooks)
+            continue ;;
+        music)
+            _scan "${subroot}" "${audio_filter}" | \
+            _validate "Audio" "${audio_format}" "${audio_height_max}" "${audio_width_max}" "${audio_bit_depth_max}" "${audio_bit_rate_max}" | \
+            _filter "${subroot_name}" | \
+            _transfer "${subroot}" "${subroot_name}" "${subroot_path}" ;;
+        photos)
+            continue ;;
+        *)
+            _scan "${subroot}" "${video_filter}" | \
+            _validate "Video" "${video_format}" "${video_height_max}" "${video_width_max}" "${video_bit_depth_max}" "${video_bit_rate_max}" | \
+            _filter "${subroot_name}" | \
+            _transfer "${subroot}" "${subroot_name}" "${subroot_path}" ;;
+    esac
+
+done < <(find "${root}" -mindepth 1 -maxdepth 1 -type d | sort)

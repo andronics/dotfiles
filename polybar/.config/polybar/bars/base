@@ -31,13 +31,13 @@ font-7 = "Roboto Mono for Powerline:size=10:weight=medium;2"
 font-8 = "Source Code Pro:style=2048-em:size=12"
 
 height = 30
-width = 100%
+width = 3840
 
 line-size = 2
 module-margin-left = 0
 module-margin-right = 0
-offset-x = 0
-offset-y = 0
+offset-x = 640
+offset-y = 10
 padding-left = 0
 padding-right = 0
 radius = 0

@@ -1,0 +1,32 @@
+{
+  "enabled": false,
+  "description": "Sandbox mode for testing remote operations without making actual changes",
+  "features": {
+    "dry_run_default": false,
+    "log_all_operations": true,
+    "prevent_destructive_ops": true
+  },
+  "test_credentials": {
+    "example@test.com": {
+      "client_id": "test-client-id",
+      "client_secret": "test-client-secret",
+      "scope": "drive",
+      "token": "{\"access_token\":\"test-token\",\"expiry\":\"2099-12-31T23:59:59.999999999Z\"}"
+    }
+  },
+  "test_units": {
+    "test-unit": {
+      "credentials": "example@test.com",
+      "mountpoint": "test/sandbox",
+      "drive_id": "test-drive-id",
+      "uid": "1000",
+      "gid": "1000"
+    }
+  },
+  "notes": [
+    "Sandbox mode allows testing without affecting production mounts",
+    "Use 'remote sandbox <command>' to run commands in sandbox mode",
+    "Or use 'remote --dry-run <command>' for dry-run mode",
+    "Sandbox mode automatically enables dry-run for all destructive operations"
+  ]
+}

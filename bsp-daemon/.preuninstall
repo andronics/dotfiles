@@ -1,0 +1,33 @@
+#!/usr/bin/env zsh
+
+# Pre-uninstall script for bsp-daemon
+# Stops service and cleans up systemd integration
+
+name=$(basename $0)
+
+# ------------------------------
+
+source $(which _log)
+
+# ------------------------------
+
+log-info "cleaning up bsp-daemon before uninstall"
+
+# Stop and disable systemd service
+if systemctl --user is-active bsp-service &>/dev/null; then
+    systemctl --user stop bsp-service &>/dev/null
+    log-info "stopped bsp-service"
+fi
+
+if systemctl --user is-enabled bsp-service &>/dev/null; then
+    systemctl --user disable bsp-service &>/dev/null
+    log-info "disabled bsp-service"
+fi
+
+# Stop service process directly if still running
+if pgrep -x bsp-service >/dev/null 2>&1; then
+    pkill -x bsp-service &>/dev/null
+    log-info "terminated bsp-service process"
+fi
+
+log-info "bsp-daemon cleanup complete"

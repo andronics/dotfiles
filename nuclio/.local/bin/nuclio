@@ -1,0 +1,82 @@
+#!/usr/bin/env zsh
+
+name=$(basename $0)
+
+# ------------------------------
+
+source "$(which _log)"
+
+# ------------------------------
+
+nuclio_cache_dir="${XDG_CACHE_HOME}/${name}"
+nuclio_config_dir="${XDG_CONFIG_HOME}/${name}"
+nuclio_data_dir="${XDG_DATA_HOME}/${name}"
+
+# ------------------------------
+
+nuclio_containers="${nuclio_cache_dir}/containers.json"
+nuclio_template="${nuclio_data_dir}/traefik.tmpl"
+
+# ------------------------------
+
+source "$(which _args)"
+
+# ------------------------------
+
+[[ ! -d "${nuclio_cache_dir}" ]] && mkdir -p "${nuclio_cache_dir}"
+[[ ! -d "${nuclio_data_dir}" ]] && mkdir -p "${nuclio_data_dir}"
+
+# ------------------------------
+
+_nuclio() {
+    
+    [[ $# -eq 0 ]] && {
+        log-error "command not specified"
+        return 1
+    }
+
+    _command=$1
+    shift 2>/dev/null
+
+    case "${_command}" in
+        
+        render) _nuclio_render "$@" ;;
+        watch) _nuclio_watch "$@" ;;
+        
+        *) log-warning "command '%s' unsupported" "${_command}" ;;
+
+    esac
+}
+
+# ------------------------------
+
+_nuclio_render() {
+
+    dock containers-list > "${nuclio_containers}"
+    gomplate -f "${nuclio_template}" -d "docker=${nuclio_containers}"
+    
+    # export data=$(curl --unix-socket /var/run/docker.sock http://localhost/containers/json)
+    # gomplate -f "${nuclio_template}" -d docker="env://data"
+   
+
+}
+
+_nuclio_watch() {
+
+    [[ `pgrep "polybar"` ]] && {
+        log-debug "reveaing polybar"
+        polybar-msg cmd show
+    }
+
+    _nodes=$(bspc query -N -n .leaf -d focused)
+
+    for _node in ${_nodes}; do
+        log-info "revealing node '%s'" "${_node}"
+        bspc node "${_node}" -g hidden=off
+    done
+
+}
+
+# ------------------------------
+
+_nuclio "$@"

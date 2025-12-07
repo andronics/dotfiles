@@ -1,0 +1,294 @@
+#!/bin/bash
+
+# ai-config - Configuration management command
+# Handles: ai config <operation>
+
+# Load shared libraries
+LIBEXEC_DIR=$(dirname "$(readlink -f "$0")")/../libexec/ai
+source "$LIBEXEC_DIR/ai-common"
+source "$LIBEXEC_DIR/ai-ui"
+
+# Initialize
+ai_init
+
+# Configuration file
+AI_CONFIG_FILE="$AI_CONFIG_DIR/config"
+
+# Default configuration
+create_default_config() {
+    cat > "$AI_CONFIG_FILE" << 'EOF'
+# ai configuration file
+
+[core]
+    tracking = true
+    use_colors = true
+    debug = false
+
+[cache]
+    enabled = true
+    ttl = 300
+
+[agent]
+    default = analyzer
+
+[model]
+    default = opus
+
+[output]
+    format = text
+EOF
+    ai_success "Created default configuration at $AI_CONFIG_FILE"
+}
+
+# Configuration operations
+cmd_config_get() {
+    local key="$1"
+    
+    if [[ ! -f "$AI_CONFIG_FILE" ]]; then
+        ai_warning "Configuration file not found. Creating default configuration."
+        create_default_config
+    fi
+    
+    if [[ -z "$key" ]]; then
+        # Show all configuration
+        ai_print_header "ai Configuration"
+        cat "$AI_CONFIG_FILE" | grep -v '^#' | grep -v '^$'
+        return
+    fi
+    
+    # Get specific key
+    local section=$(echo "$key" | cut -d. -f1)
+    local option=$(echo "$key" | cut -d. -f2)
+    
+    local value
+    value=$(awk -v section="$section" -v option="$option" '
+        /^\[/ { current_section = substr($0, 2, length($0)-2); next }
+        current_section == section && $1 == option { 
+            sub(/^[^=]*=[ \t]*/, ""); 
+            print $0 
+        }
+    ' "$AI_CONFIG_FILE")
+    
+    if [[ -n "$value" ]]; then
+        echo "$value"
+    else
+        ai_error "Configuration key '$key' not found"
+    fi
+}
+
+cmd_config_set() {
+    local key="$1"
+    local value="$2"
+    
+    if [[ -z "$key" || -z "$value" ]]; then
+        ai_error "Both key and value required\nUsage: ai config set <key> <value>"
+    fi
+    
+    if [[ ! -f "$AI_CONFIG_FILE" ]]; then
+        create_default_config
+    fi
+    
+    local section=$(echo "$key" | cut -d. -f1)
+    local option=$(echo "$key" | cut -d. -f2)
+    
+    # Check if section exists
+    if ! grep -q "^\[$section\]" "$AI_CONFIG_FILE"; then
+        echo "" >> "$AI_CONFIG_FILE"
+        echo "[$section]" >> "$AI_CONFIG_FILE"
+    fi
+    
+    # Update or add the option
+    if grep -q "^\s*$option\s*=" "$AI_CONFIG_FILE"; then
+        # Update existing
+        sed -i "/^\[$section\]/,/^\[/ s/^\s*$option\s*=.*/$option = $value/" "$AI_CONFIG_FILE"
+    else
+        # Add new option after section header
+        sed -i "/^\[$section\]/a\\    $option = $value" "$AI_CONFIG_FILE"
+    fi
+    
+    ai_success "Set $key = $value"
+}
+
+cmd_config_unset() {
+    local key="$1"
+    
+    if [[ -z "$key" ]]; then
+        ai_error "Key required\nUsage: ai config unset <key>"
+    fi
+    
+    if [[ ! -f "$AI_CONFIG_FILE" ]]; then
+        ai_error "Configuration file not found"
+    fi
+    
+    local section=$(echo "$key" | cut -d. -f1)
+    local option=$(echo "$key" | cut -d. -f2)
+    
+    # Remove the option
+    sed -i "/^\[$section\]/,/^\[/ /^\s*$option\s*=/d" "$AI_CONFIG_FILE"
+    
+    ai_success "Unset $key"
+}
+
+cmd_config_list() {
+    if [[ ! -f "$AI_CONFIG_FILE" ]]; then
+        ai_warning "Configuration file not found. Available options:"
+        echo ""
+        echo "  core.docker_sock         Docker socket path"
+        echo "  core.performance_tracking   Enable performance tracking"
+        echo "  core.use_colors         Enable colored output"
+        echo "  core.debug              Enable debug mode"
+        echo "  cache.enabled           Enable caching"
+        echo "  cache.ttl               Cache time-to-live (seconds)"
+        echo "  ai.default_agent        Default AI agent"
+        echo "  ai.claude_enabled       Enable Claude AI features"
+        echo "  output.format           Output format (table|json)"
+        echo "  output.show_performance Show performance statistics"
+        echo "  output.show_urls        Show service URLs"
+        return
+    fi
+    
+    ai_print_header "Configuration Options"
+    
+    # Parse and display configuration in a formatted way
+    awk '
+        /^\[/ { 
+            section = substr($0, 2, length($0)-2)
+            printf "\n%s:\n", section
+            next 
+        }
+        /^[[:space:]]*[^#]/ && NF > 0 { 
+            sub(/^[[:space:]]*/, "")
+            printf "  %s\n", $0 
+        }
+    ' "$AI_CONFIG_FILE"
+    echo ""
+}
+
+cmd_config_edit() {
+    if [[ ! -f "$AI_CONFIG_FILE" ]]; then
+        create_default_config
+    fi
+    
+    local editor="${EDITOR:-nano}"
+    
+    if ! ai_check_command "$editor"; then
+        editor="nano"
+        if ! ai_check_command "$editor"; then
+            editor="vi"
+        fi
+    fi
+    
+    ai_info "Opening configuration in $editor..."
+    "$editor" "$AI_CONFIG_FILE"
+}
+
+cmd_config_reset() {
+    local confirm="$1"
+    
+    if [[ "$confirm" != "--confirm" ]]; then
+        ai_warning "This will reset all configuration to defaults."
+        ai_info "Use 'ai config reset --confirm' to proceed."
+        return 1
+    fi
+    
+    if [[ -f "$AI_CONFIG_FILE" ]]; then
+        cp "$AI_CONFIG_FILE" "${AI_CONFIG_FILE}.backup"
+        ai_info "Backed up existing configuration to ${AI_CONFIG_FILE}.backup"
+    fi
+    
+    create_default_config
+}
+
+cmd_config_path() {
+    echo "Configuration file: $AI_CONFIG_FILE"
+    echo "Configuration directory: $AI_CONFIG_DIR"
+    echo "Cache directory: $AI_CACHE_DIR"
+    echo ""
+    echo "Status:"
+    if [[ -f "$AI_CONFIG_FILE" ]]; then
+        echo "  Configuration file: ✅ exists"
+    else
+        echo "  Configuration file: ❌ not found"
+    fi
+    
+    if [[ -d "$AI_CONFIG_DIR" ]]; then
+        echo "  Configuration directory: ✅ exists"
+    else
+        echo "  Configuration directory: ❌ not found"
+    fi
+    
+    if [[ -d "$AI_CACHE_DIR" ]]; then
+        echo "  Cache directory: ✅ exists"
+    else
+        echo "  Cache directory: ❌ not found"
+    fi
+}
+
+# Main command dispatcher
+main() {
+    local operation="$1"
+    shift
+    
+    case "$operation" in
+        get)
+            cmd_config_get "$@"
+            ;;
+        set)
+            cmd_config_set "$@"
+            ;;
+        unset)
+            cmd_config_unset "$@"
+            ;;
+        list)
+            cmd_config_list "$@"
+            ;;
+        edit)
+            cmd_config_edit "$@"
+            ;;
+        reset)
+            cmd_config_reset "$@"
+            ;;
+        path)
+            cmd_config_path "$@"
+            ;;
+        help|--help|-h)
+            cat << 'EOF'
+ai-config - Configuration management
+
+Usage: ai config <operation> [options]
+
+Operations:
+  get [key]               Show configuration (all or specific key)
+  set <key> <value>       Set configuration option
+  unset <key>             Remove configuration option
+  list                    List all available configuration options
+  edit                    Edit configuration file in $EDITOR
+  reset --confirm         Reset configuration to defaults
+  path                    Show configuration file paths
+
+Examples:
+  ai config get                    # Show all configuration
+  ai config get core.docker_sock   # Show specific value
+  ai config set core.debug true    # Set debug mode
+  ai config unset cache.enabled    # Remove cache setting
+  ai config list                   # Show available options
+  ai config edit                   # Edit in text editor
+
+Configuration keys follow the format: section.option
+Available sections: core, cache, ai, output
+EOF
+            ;;
+        "")
+            ai_error "Configuration operation required. Use 'ai config help' for usage information."
+            ;;
+        *)
+            ai_error "Unknown configuration operation '$operation'"
+            echo ""
+            echo "Use 'ai config help' for available operations."
+            return 1
+            ;;
+    esac
+}
+
+# Execute main function
+main "$@"

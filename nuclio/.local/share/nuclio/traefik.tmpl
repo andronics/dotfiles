@@ -1,0 +1,33 @@
+http:
+  routers:
+
+{{- range $container := (datasource "docker")}}
+  
+  {{- with $container.Config.Labels }}
+    {{- if index . "nuclio.io/function-name" }}
+      {{ $functionName := index . "nuclio.io/function-name" -}}
+      {{ $namespace := index . "nuclio.io/namespace" -}}
+      {{ $namespace }}-{{ $functionName }}:
+        rule: "Host('cloud.andronics.io') && PathPrefix('/{{ $namespace }}/{{ $functionName }}')"
+        entrypoints:
+          - https-internal
+          - https-external
+        service: "{{ $namespace }}-{{ $functionName }}"
+    {{- end }}
+  {{- end }}
+{{- end }}
+  services:
+
+{{- range $container := (datasource "docker") }}
+  {{- $ipAddress := $container.NetworkSettings.IPAddress }}
+  {{- with $container.Config.Labels }}
+    {{- if index . "nuclio.io/function-name" }}
+      {{ $functionName := index . "nuclio.io/function-name" -}}
+      {{ $namespace := index . "nuclio.io/namespace" -}}
+      {{ $namespace }}-{{ $functionName }}:
+        loadbalancer:
+          servers:
+            - url: "http://{{ $ipAddress }}:8080"
+    {{- end }}
+  {{- end }}
+{{- end }}

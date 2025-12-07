@@ -1,0 +1,520 @@
+#!/usr/bin/env zsh
+
+name=$(basename $0)
+
+# ------------------------------
+
+source $(which _log)
+source $(which _args) 
+source $(which _jq)
+
+# ------------------------------
+
+# Configuration
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/bsp-daemon"
+LAYOUTS_DIR="$CONFIG_DIR/layouts"
+RULES_FILE="$CONFIG_DIR/rules.conf"
+LOG_FILE="$CONFIG_DIR/bspc-manager.log"
+
+# ------------------------------
+
+# Check dependencies
+_bspc_manager_check() {
+    if ! command -v bspc >/dev/null 2>&1; then
+        log-error "bspc not found. Please install bspwm"
+        return 1
+    fi
+}
+
+# Initialize configuration
+_bspc_manager_init() {
+    mkdir -p "$CONFIG_DIR" "$LAYOUTS_DIR"
+    touch "$RULES_FILE" "$LOG_FILE"
+    log-info "configuration initialized at $CONFIG_DIR"
+}
+
+# Core bspc wrapper functions
+_bspc_manager_focus() {
+    local selector="${1:-focused}"
+    if bspc node "$selector" -f; then
+        log-info "focused node: $selector"
+    else
+        log-warn "could not focus node: $selector"
+    fi
+}
+
+_bspc_manager_move() {
+    local direction="$1"
+    if bspc node -s "$direction"; then
+        log-info "moved node $direction"
+    else
+        log-warn "could not move node $direction"
+    fi
+}
+
+_bspc_manager_resize() {
+    local direction="$1"
+    local amount="${2:-20}"
+    
+    case "$direction" in
+        left) bspc node -z left -"$amount" 0 || bspc node -z right -"$amount" 0 ;;
+        right) bspc node -z right "$amount" 0 || bspc node -z left "$amount" 0 ;;
+        up) bspc node -z top 0 -"$amount" || bspc node -z bottom 0 -"$amount" ;;
+        down) bspc node -z bottom 0 "$amount" || bspc node -z top 0 "$amount" ;;
+        *) log-warn "invalid resize direction: $direction"; return 1 ;;
+    esac
+    
+    log-info "resized node $direction by $amount"
+}
+
+_bspc_manager_state() {
+    local state="$1"
+    local node="${2:-focused}"
+    if bspc node "$node" -t "$state"; then
+        log-info "set node state to $state"
+    else
+        log-warn "could not set node state to $state"
+    fi
+}
+
+# Desktop management functions
+_bspc_manager_create_desktop() {
+    local name="$1"
+    local monitor="${2:-focused}"
+    if bspc monitor "$monitor" -a "$name"; then
+        log-info "created desktop: $name"
+    else
+        log-warn "could not create desktop: $name"
+    fi
+}
+
+_bspc_manager_focus_desktop() {
+    local desktop="$1"
+    if bspc desktop "$desktop" -f; then
+        log-info "focused desktop: $desktop"
+    else
+        log-warn "could not focus desktop: $desktop"
+    fi
+}
+
+_bspc_manager_rename_desktop() {
+    local old_name="$1"
+    local new_name="$2"
+    if bspc desktop "$old_name" -n "$new_name"; then
+        log-info "renamed desktop from $old_name to $new_name"
+    else
+        log-warn "could not rename desktop: $old_name"
+    fi
+}
+
+_bspc_manager_set_layout() {
+    local layout="$1"
+    local desktop="${2:-focused}"
+    if bspc desktop "$desktop" -l "$layout"; then
+        log-info "set desktop layout to $layout"
+    else
+        log-warn "could not set desktop layout to $layout"
+    fi
+}
+
+# Preselection functions
+_bspc_manager_presel_dir() {
+    local direction="$1"
+    local node="${2:-focused}"
+    if bspc node "$node" -p "$direction"; then
+        log-info "preselected direction: $direction"
+    else
+        log-warn "could not preselect direction: $direction"
+    fi
+}
+
+_bspc_manager_presel_ratio() {
+    local ratio="$1"
+    local node="${2:-focused}"
+    if bspc node "$node" -o "$ratio"; then
+        log-info "set preselection ratio: $ratio"
+    else
+        log-warn "could not set preselection ratio: $ratio"
+    fi
+}
+
+_bspc_manager_cancel_presel() {
+    local node="${1:-focused}"
+    if bspc node "$node" -p cancel; then
+        log-info "cancelled preselection"
+    else
+        log-warn "could not cancel preselection"
+    fi
+}
+
+# Rule management
+_bspc_manager_add_rule() {
+    local class="$1"
+    local options="$2"
+    
+    if bspc rule -a "$class" $options; then
+        log-info "added rule for class: $class"
+        echo "$class $options" >> "$RULES_FILE"
+    else
+        log-warn "could not add rule for class: $class"
+    fi
+}
+
+_bspc_manager_remove_rule() {
+    local class="$1"
+    if bspc rule -r "$class"; then
+        log-info "removed rule for class: $class"
+        # Remove from rules file
+        grep -v "^$class " "$RULES_FILE" > "$RULES_FILE.tmp" && mv "$RULES_FILE.tmp" "$RULES_FILE"
+    else
+        log-warn "could not remove rule for class: $class"
+    fi
+}
+
+_bspc_manager_list_rules() {
+    echo "Active bspwm rules:"
+    bspc rule -l
+    echo ""
+    echo "Saved rules in $RULES_FILE:"
+    if [[ -s "$RULES_FILE" ]]; then
+        cat "$RULES_FILE"
+    else
+        echo "(none)"
+    fi
+}
+
+# Load saved rules
+_bspc_manager_load_rules() {
+    if [[ -s "$RULES_FILE" ]]; then
+        log-info "loading saved rules..."
+        while IFS= read -r line; do
+            [[ "$line" =~ ^[[:space:]]*$ ]] && continue
+            [[ "$line" =~ ^# ]] && continue
+            local class=$(echo "$line" | cut -d' ' -f1)
+            local options=$(echo "$line" | cut -d' ' -f2-)
+            bspc rule -a "$class" $options
+        done < "$RULES_FILE"
+        log-info "loaded rules from $RULES_FILE"
+    fi
+}
+
+# Layout management functions
+_bspc_manager_save_layout() {
+    local name="$1"
+    local desktop="${2:-$(bspc query -D -d focused --names)}"
+    local monitor="${3:-$(bspc query -M -m focused --names)}"
+    
+    if [[ -z "$desktop" ]]; then
+        log-error "could not determine desktop name"
+        return 1
+    fi
+    
+    local layout_file="$LAYOUTS_DIR/$name.json"
+    local tree_data
+    
+    tree_data=$(bspc query -T -d "$desktop")
+    if [[ -n "$tree_data" ]]; then
+        echo "$tree_data" > "$layout_file"
+        log-info "saved layout '$name' for desktop '$desktop'"
+        
+        # Save metadata
+        cat > "$LAYOUTS_DIR/$name.meta" << EOF
+desktop=$desktop
+monitor=$monitor
+timestamp=$(date)
+EOF
+    else
+        log-error "could not get tree data for desktop: $desktop"
+        return 1
+    fi
+}
+
+_bspc_manager_list_layouts() {
+    echo "Available layouts:"
+    for layout in "$LAYOUTS_DIR"/*.json; do
+        if [[ -f "$layout" ]]; then
+            local name=$(basename "$layout" .json)
+            local meta_file="$LAYOUTS_DIR/$name.meta"
+            
+            echo -n "  $name"
+            if [[ -f "$meta_file" ]]; then
+                local desktop=$(grep "^desktop=" "$meta_file" | cut -d'=' -f2)
+                local timestamp=$(grep "^timestamp=" "$meta_file" | cut -d'=' -f2-)
+                echo " (desktop: $desktop, saved: $timestamp)"
+            else
+                echo ""
+            fi
+        fi
+    done
+}
+
+# Receptacle management
+_bspc_manager_create_receptacle() {
+    local node="${1:-focused}"
+    if bspc node "$node" -i; then
+        log-info "created receptacle"
+    else
+        log-warn "could not create receptacle"
+    fi
+}
+
+# Layout templates
+_bspc_manager_template() {
+    local template="$1"
+    local desktop="${2:-$(bspc query -D -d focused --names)}"
+    
+    # Focus the desktop
+    bspc desktop "$desktop" -f
+    
+    case "$template" in
+        "split-vertical")
+            bspc node -p east -o 0.5
+            _bspc_manager_create_receptacle
+            log-info "created vertical split layout template"
+            ;;
+        "split-horizontal") 
+            bspc node -p south -o 0.5
+            _bspc_manager_create_receptacle
+            log-info "created horizontal split layout template"
+            ;;
+        "triple-column")
+            # Create three columns
+            bspc node -p east -o 0.33
+            _bspc_manager_create_receptacle
+            bspc node -p east -o 0.5
+            _bspc_manager_create_receptacle
+            log-info "created triple column layout template"
+            ;;
+        "quad")
+            # Create 2x2 grid
+            bspc node -p east -o 0.5
+            _bspc_manager_create_receptacle
+            bspc node @parent -p south -o 0.5
+            _bspc_manager_create_receptacle
+            bspc node @east -p south -o 0.5
+            _bspc_manager_create_receptacle
+            log-info "created quad layout template"
+            ;;
+        *)
+            log-warn "unknown template: $template"
+            echo "Available templates: split-vertical, split-horizontal, triple-column, quad"
+            return 1
+            ;;
+    esac
+}
+
+# Process assignment functions
+_bspc_manager_assign_desktop() {
+    local class="$1"
+    local desktop="$2"
+    _bspc_manager_add_rule "$class" "desktop=$desktop"
+}
+
+_bspc_manager_assign_node() {
+    local class="$1"
+    local node="$2"
+    _bspc_manager_add_rule "$class" "node=$node"
+}
+
+_bspc_manager_assign_position() {
+    local class="$1"
+    local monitor="$2"
+    local desktop="$3"
+    local direction="${4:-east}"
+    local ratio="${5:-0.5}"
+    
+    # Create preselection on target desktop
+    bspc desktop "$desktop" -f
+    _bspc_manager_presel_dir "$direction"
+    _bspc_manager_presel_ratio "$ratio"
+    
+    # Add rule to send process to preselected area
+    _bspc_manager_add_rule "$class" "monitor=$monitor desktop=$desktop"
+}
+
+# Window information
+_bspc_manager_info() {
+    local node="${1:-focused}"
+    local window_id
+    window_id=$(bspc query -N -n "$node")
+    
+    if [[ -n "$window_id" ]]; then
+        echo "Node ID: $window_id"
+        echo "Class: $(xprop -id "$window_id" WM_CLASS 2>/dev/null | cut -d'"' -f4 || echo "unknown")"
+        echo "Title: $(xprop -id "$window_id" WM_NAME 2>/dev/null | cut -d'"' -f2 || echo "unknown")"
+        echo "Desktop: $(bspc query -D -n "$node" --names)"
+        echo "Monitor: $(bspc query -M -n "$node" --names)"
+        echo "State: $(bspc query -T -n "$node" | jq-query '.client.state')"
+    else
+        log-warn "could not get window information"
+    fi
+}
+
+# Help function
+_bspc_manager_help() {
+    cat << 'EOF'
+bspc-manager - Manual bspwm layout and process management tool
+
+USAGE:
+    bspc-manager <command> [options]
+
+NODE MANAGEMENT:
+    focus <selector>                Focus a node
+    move <direction>                Move node in direction (north/south/east/west)
+    resize <direction> [amount]     Resize node (left/right/up/down)
+    state <state>                   Set node state (tiled/pseudo_tiled/floating/fullscreen)
+    info [node]                     Show window information
+
+DESKTOP MANAGEMENT:
+    create-desktop <name> [monitor] Create new desktop
+    focus-desktop <name>            Focus desktop
+    rename-desktop <old> <new>      Rename desktop
+    layout <layout> [desktop]       Set desktop layout (tiled/monocle)
+
+LAYOUT TEMPLATES:
+    template <type> [desktop]       Create layout template
+                                   Types: split-vertical, split-horizontal, triple-column, quad
+
+PRESELECTION:
+    presel <direction> [node]       Preselect direction for next window
+    presel-ratio <ratio> [node]     Set preselection ratio (0.0-1.0)
+    presel-cancel [node]            Cancel preselection
+
+LAYOUT MANAGEMENT:
+    save-layout <name> [desktop]    Save current desktop layout
+    list-layouts                    List saved layouts
+
+PROCESS ASSIGNMENT:
+    assign-desktop <class> <desktop>              Assign process class to desktop
+    assign-node <class> <node>                    Assign process class to node
+    assign-position <class> <mon> <desk> [dir] [ratio]  Assign to specific position
+
+RULE MANAGEMENT:
+    add-rule <class> <options>      Add bspwm rule
+    remove-rule <class>             Remove rule
+    list-rules                      List all rules
+    load-rules                      Load saved rules
+
+UTILITY:
+    init                           Initialize configuration
+    help                           Show this help
+
+EXAMPLES:
+    # Create a development layout
+    bspc-manager template triple-column dev
+    bspc-manager assign-desktop firefox dev
+    bspc-manager assign-position code primary dev east 0.6
+
+    # Quick window management
+    bspc-manager focus west
+    bspc-manager resize right 50
+    bspc-manager state floating
+
+    # Save and restore layouts
+    bspc-manager save-layout my-workspace
+EOF
+}
+
+# Main command dispatcher
+_bspc_manager() {
+    _bspc_manager_check || return 1
+    
+    case "${1:-help}" in
+        # Node management
+        focus) _bspc_manager_focus "${2:-focused}" ;;
+        move) 
+            [[ -z "$2" ]] && { log-error "direction required"; return 1; }
+            _bspc_manager_move "$2" 
+            ;;
+        resize) 
+            [[ -z "$2" ]] && { log-error "direction required"; return 1; }
+            _bspc_manager_resize "$2" "${3:-20}" 
+            ;;
+        state) 
+            [[ -z "$2" ]] && { log-error "state required"; return 1; }
+            _bspc_manager_state "$2" "${3:-focused}" 
+            ;;
+        info) _bspc_manager_info "${2:-focused}" ;;
+        
+        # Desktop management
+        create-desktop) 
+            [[ -z "$2" ]] && { log-error "name required"; return 1; }
+            _bspc_manager_create_desktop "$2" "${3:-focused}" 
+            ;;
+        focus-desktop) 
+            [[ -z "$2" ]] && { log-error "desktop required"; return 1; }
+            _bspc_manager_focus_desktop "$2" 
+            ;;
+        rename-desktop) 
+            [[ -z "$2" || -z "$3" ]] && { log-error "old name and new name required"; return 1; }
+            _bspc_manager_rename_desktop "$2" "$3" 
+            ;;
+        layout) 
+            [[ -z "$2" ]] && { log-error "layout required"; return 1; }
+            _bspc_manager_set_layout "$2" "${3:-focused}" 
+            ;;
+        
+        # Layout templates
+        template) 
+            [[ -z "$2" ]] && { log-error "template type required"; return 1; }
+            _bspc_manager_template "$2" "$3" 
+            ;;
+        
+        # Preselection
+        presel) 
+            [[ -z "$2" ]] && { log-error "direction required"; return 1; }
+            _bspc_manager_presel_dir "$2" "${3:-focused}" 
+            ;;
+        presel-ratio) 
+            [[ -z "$2" ]] && { log-error "ratio required"; return 1; }
+            _bspc_manager_presel_ratio "$2" "${3:-focused}" 
+            ;;
+        presel-cancel) _bspc_manager_cancel_presel "${2:-focused}" ;;
+        
+        # Layout management
+        save-layout) 
+            [[ -z "$2" ]] && { log-error "name required"; return 1; }
+            _bspc_manager_save_layout "$2" "$3" 
+            ;;
+        list-layouts) _bspc_manager_list_layouts ;;
+        
+        # Process assignment
+        assign-desktop) 
+            [[ -z "$2" || -z "$3" ]] && { log-error "class and desktop required"; return 1; }
+            _bspc_manager_assign_desktop "$2" "$3" 
+            ;;
+        assign-node) 
+            [[ -z "$2" || -z "$3" ]] && { log-error "class and node required"; return 1; }
+            _bspc_manager_assign_node "$2" "$3" 
+            ;;
+        assign-position) 
+            [[ -z "$2" || -z "$3" || -z "$4" ]] && { log-error "class, monitor and desktop required"; return 1; }
+            _bspc_manager_assign_position "$2" "$3" "$4" "${5:-east}" "${6:-0.5}" 
+            ;;
+        
+        # Rule management
+        add-rule) 
+            [[ -z "$2" || -z "$3" ]] && { log-error "class and options required"; return 1; }
+            _bspc_manager_add_rule "$2" "$3" 
+            ;;
+        remove-rule) 
+            [[ -z "$2" ]] && { log-error "class required"; return 1; }
+            _bspc_manager_remove_rule "$2" 
+            ;;
+        list-rules) _bspc_manager_list_rules ;;
+        load-rules) _bspc_manager_load_rules ;;
+        
+        # Utility
+        init) _bspc_manager_init ;;
+        help|--help|-h) _bspc_manager_help ;;
+        
+        *)
+            log-error "unknown command: ${1}. Use 'bspc-manager help' for usage information"
+            return 1
+            ;;
+    esac
+}
+
+# ------------------------------
+
+_bspc_manager "$@"

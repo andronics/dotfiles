@@ -6,11 +6,13 @@ name=$(basename $0)
 
 _polybar_reload() {
 
-    flock 200
+    PROC="polybar --reload $1"
 
-    killall -q polybar
+    # flock -s 200
 
-    while pgrep -u $UID -x polybar > /dev/null; do sleep 0.5; done
+    pgrep -f "$PROC" | xargs -I{} kill -9 {} 2>/dev/null
+
+    while pgrep -u $UID -f "$PROC" > /dev/null; do sleep 0.5; done
 
     polybar --reload $1 & </dev/null >/tmp/polybar-$$.log 2>&2 200>&- &
 

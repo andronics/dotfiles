@@ -1,0 +1,7 @@
+mkcd() {
+    mkdir -p "$1" && cd "$1"
+}
+
+reds() {
+    find ${1:-.} -type d -empty -exec rm -d {} +
+}

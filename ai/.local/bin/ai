@@ -1,0 +1,108 @@
+#!/bin/bash
+
+# ai - Main dispatcher
+# Routes commands to specialized executables
+
+# Basic path setup
+BIN_DIR=$(dirname "$(readlink -f "$0")")
+LIBEXEC_DIR="$BIN_DIR/../libexec/ai"
+
+# Load common utilities for error handling and basic functions
+if [[ -f "$LIBEXEC_DIR/ai-common" ]]; then
+    source "$LIBEXEC_DIR/ai-common"
+else
+    # Fallback error handling if common library is missing
+    echo "Error: dckr installation appears to be incomplete" >&2
+    echo "Missing: $LIBEXEC_DIR/ai-common" >&2
+    exit 1
+fi
+
+# Command lookup and execution
+ai_find_command() {
+    local command="$1"
+    local cmd_path="$BIN_DIR/ai-$command"
+    
+    if [[ -x "$cmd_path" ]]; then
+        echo "$cmd_path"
+        return 0
+    fi
+    
+    return 1
+}
+
+ai_execute_command() {
+    local command="$1"
+    shift
+    
+    local cmd_path
+    cmd_path=$(ai_find_command "$command")
+    
+    if [[ -n "$cmd_path" ]]; then
+        exec "$cmd_path" "$@"
+    else
+        ai_error "Unknown command: $command"
+        echo ""
+        ai_show_usage
+        exit 1
+    fi
+}
+
+# List available commands
+ai_list_commands() {
+    echo "Available commands:"
+    for cmd in "$BIN_DIR"/ai-*; do
+        if [[ -x "$cmd" && "$cmd" != "$0" ]]; then
+            local cmd_name
+            cmd_name=$(basename "$cmd" | sed 's/^ai-//')
+            echo "  $cmd_name"
+        fi
+    done
+}
+
+
+
+# Special command handling
+handle_special_commands() {
+    local command="$1"
+    
+    case "$command" in
+        ""|help|--help|-h)
+            ai_show_usage
+            exit 0
+            ;;
+        version|--version|-v)
+            ai_show_version
+            exit 0
+            ;;
+        commands)
+            ai_list_commands
+            exit 0
+            ;;
+    esac
+    
+    return 1
+}
+
+# Debug mode
+if [[ "${AI_DEBUG:-}" == "1" ]]; then
+    echo "Debug: ai called with args: $*" >&2
+    echo "Debug: BIN_DIR=$BIN_DIR" >&2
+    echo "Debug: LIBEXEC_DIR=$LIBEXEC_DIR" >&2
+fi
+
+# Main execution
+main() {
+    local command="$1"
+    shift
+    
+    # Handle special commands first
+    if handle_special_commands "$command"; then
+        return
+    fi
+    
+    # Try to execute the command
+    ai_execute_command "$command" "$@"
+}
+
+# Execute main with all arguments
+main "$@"

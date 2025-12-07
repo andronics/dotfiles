@@ -1,0 +1,41 @@
+{
+    "artwork": {
+        "filename": "(banner|coverart|fanart|poster).jpg$",
+        "mimetype": "image/jpeg"
+    },
+    "audiobooks": {
+        "audio": {
+            "bit_rate": "128000",
+            "format": "MPEG"
+        },
+        "filename": ".m4b$",
+        "mimetype": "video/mp4"
+    },
+    "music": {
+        "audio": {
+            "bit_rate": "128000",
+            "format": "^MPEG$"
+        },
+        "filename": ".mp3$",
+        "mimetype": "audio/mpeg"
+    },
+    "metadata": {
+        "filename": "(movie|tvshow).nfo$",
+        "mimetype": "text/html"
+    },
+    "subtitles": {
+        "filename": ".(srt|sub)$",
+        "mimetype": "application/x-subrip"
+    },
+    "videos": {
+        "filename": ".mp4$",
+        "mimetype": "video/mp4",
+        "video": {
+            "bit_depth": "8",
+            "bit_rate": "128000",
+            "format": "^MPEG$",
+            "height": "720",
+            "width": "1356"
+        }
+    }
+}

@@ -1,0 +1,288 @@
+#!/bin/bash
+
+# dckr-stack - Stack operations command
+# Handles: dckr stack list, dckr stack <name>
+
+# Load shared libraries
+LIBEXEC_DIR=$(dirname "$(readlink -f "$0")")/../libexec/dckr
+source "$LIBEXEC_DIR/dckr-common"
+source "$LIBEXEC_DIR/dckr-docker-api"
+source "$LIBEXEC_DIR/dckr-ui"
+
+# Initialize
+dckr_init
+dckr_api_init
+
+# Command: stack list
+cmd_stack_list() {
+    dckr_print_header "Available Docker Stacks"
+    
+    # Single API call to get all containers
+    local containers
+    containers=$(dckr_load_all_containers)
+    
+    if [[ -z "$containers" ]]; then
+        dckr_warning "No Docker Compose stacks found"
+        exit 0
+    fi
+    
+    # Extract and count stacks efficiently
+    local stacks
+    if dckr_check_command jq; then
+        stacks=$(echo "$containers" | jq -r '.Labels."com.docker.compose.project" // empty' | sort | uniq -c | awk '{print $2"|"$1}')
+    else
+        stacks=$(echo "$containers" | grep -o "\"com.docker.compose.project\":\"[^\"]*\"" | cut -d'"' -f4 | sort | uniq -c | awk '{print $2"|"$1}')
+    fi
+    
+    dckr_print_table_header "%-25s %s" "STACK NAME" "SERVICES"
+    
+    echo "$stacks" | while IFS='|' read -r stack count; do
+        [[ -z "$stack" ]] && continue
+        dckr_print_table_row "${CYAN}%-25s${NC} ${GREEN}%s${NC}" "$stack" "$count"
+    done
+    
+    echo ""
+    local total=$(echo "$stacks" | grep -c .)
+    dckr_success "✓ Total: ${total} stack(s)"
+    
+    dckr_show_performance_stats
+}
+
+# Command: stack info (OPTIMIZED)
+cmd_stack_info() {
+    local stack_name="$1"
+    
+    if [[ -z "$stack_name" ]]; then
+        dckr_error "Stack name required" 1
+    fi
+    
+    # Load all containers for this stack in ONE API call
+    local containers
+    containers=$(dckr_load_all_containers "$stack_name")
+    
+    if [[ -z "$containers" ]]; then
+        dckr_error "Stack '$stack_name' not found"
+        echo ""
+        dckr_warning "Available stacks:"
+        local all_containers
+        all_containers=$(dckr_load_all_containers)
+        if dckr_check_command jq; then
+            echo "$all_containers" | jq -r '.Labels."com.docker.compose.project" // empty' | sort -u
+        else
+            echo "$all_containers" | grep -o "\"com.docker.compose.project\":\"[^\"]*\"" | cut -d'"' -f4 | sort -u
+        fi
+        exit 1
+    fi
+    
+    local container_count
+    container_count=$(echo "$containers" | wc -l)
+    
+    dckr_print_header "Stack: ${stack_name}"
+    dckr_info "Services: ${container_count}"
+    echo ""
+    
+    # Summary table using data from initial API call
+    dckr_print_table_header "%-20s %-15s %-30s %-15s" "SERVICE" "STATUS" "IMAGE" "PORTS"
+    
+    # Process containers for summary
+    echo "$containers" | while read -r container_json; do
+        [[ -z "$container_json" ]] && continue
+        
+        local service image state ports
+        service=$(dckr_extract_container_data "$container_json" "service")
+        state=$(dckr_extract_container_data "$container_json" "state")
+        image=$(dckr_extract_container_data "$container_json" "image")
+        ports=$(dckr_extract_container_data "$container_json" "ports")
+        
+        local short_image port_list status
+        short_image=$(echo "$image" | sed -E 's|.*/||; s|:.*||')
+        port_list=$(echo "$ports" | tr '\n' ',' | sed 's/,$//')
+        [[ -z "$port_list" ]] && port_list="none"
+        
+        status=$(dckr_format_status "$state")
+        
+        dckr_print_table_row "${CYAN}%-20s${NC} %-24s ${MAGENTA}%-30s${NC} ${YELLOW}%-15s${NC}" \
+            "$service" "$(echo -e "$status")" "$short_image" "$port_list"
+    done
+    
+    dckr_print_section_divider
+    dckr_print_subheader "Detailed Service Information"
+    echo ""
+    
+    # Detailed view - fetch details in parallel using background jobs
+    local pids=()
+    local temp_dir
+    temp_dir=$(mktemp -d)
+    
+    # Convert containers to array to avoid subshell issues
+    local -a container_array
+    while IFS= read -r line; do
+        [[ -n "$line" ]] && container_array+=("$line")
+    done <<< "$containers"
+    
+    local index=0
+    for container_json in "${container_array[@]}"; do
+        [[ -z "$container_json" ]] && continue
+        
+        (
+            local id name image service status
+            id=$(dckr_extract_container_data "$container_json" "id")
+            name=$(dckr_extract_container_data "$container_json" "name")
+            image=$(dckr_extract_container_data "$container_json" "image")
+            service=$(dckr_extract_container_data "$container_json" "service")
+            status=$(dckr_extract_container_data "$container_json" "status")
+            
+            # Fetch detailed info
+            local details networks ips ports_host port_map
+            details=$(dckr_get_container_details "$id")
+            networks=$(dckr_extract_detail "$details" "networks")
+            ips=$(dckr_extract_detail "$details" "ips")
+            ports_host=$(dckr_extract_detail "$details" "ports_host")
+            port_map=$(dckr_extract_detail "$details" "port_map")
+            
+            # Build output
+            {
+                echo "HEADER|${name}|${stack_name}|${service}"
+                echo "ID|${id:0:12}"
+                echo "IMAGE|${image}"
+                echo "STATUS|${status}"
+                [[ -n "$networks" ]] && echo "NETWORKS|${networks}"
+                [[ -n "$ips" ]] && echo "IPS|${ips}"
+                
+                if [[ -n "$ports_host" ]]; then
+                    echo "PORTS_START"
+                    echo "$ports_host" | while read -r port; do
+                        [[ -z "$port" ]] && continue
+                        local port_desc mapped
+                        port_desc=$(dckr_get_port_description "$port")
+                        mapped=$(echo "$port_map" | grep "^${port}:" | cut -d':' -f2)
+                        if [[ -n "$mapped" && "$mapped" != "$port" ]]; then
+                            echo "PORT|${port}|${mapped}|${port_desc}"
+                        else
+                            echo "PORT|${port}||${port_desc}"
+                        fi
+                    done
+                    echo "PORTS_END"
+                    
+                    # URLs
+                    echo "URLS_START"
+                    local ip_list="${ips},localhost"
+                    IFS=',' read -ra IPS <<< "$ip_list"
+                    for ip in "${IPS[@]}"; do
+                        [[ -z "$ip" ]] && continue
+                        echo "$ports_host" | while read -r port; do
+                            [[ -z "$port" ]] && continue
+                            echo "URL|http|${ip}|${port}"
+                            echo "URL|https|${ip}|${port}"
+                        done
+                    done
+                    echo "URLS_END"
+                fi
+            } > "${temp_dir}/${index}"
+        ) &
+        
+        pids+=($!)
+        ((index++))
+    done
+    
+    # Wait for all background jobs
+    for pid in "${pids[@]}"; do
+        wait "$pid" 2>/dev/null
+    done
+    
+    # Display results in order
+    for ((i=0; i<index; i++)); do
+        if [[ -f "${temp_dir}/${i}" ]]; then
+            local in_ports=false in_urls=false
+            
+            while IFS='|' read -r type data1 data2 data3 data4; do
+                case "$type" in
+                    HEADER)
+                        dckr_print_container_header "$data1" "$data2" "$data3"
+                        ;;
+                    ID)
+                        dckr_print_container_field "Container ID" "$data1"
+                        ;;
+                    IMAGE)
+                        dckr_print_container_field "Image" "$data1"
+                        ;;
+                    STATUS)
+                        dckr_print_container_field "Status" "$data1" "$GREEN"
+                        ;;
+                    NETWORKS)
+                        dckr_print_container_field "Networks" "$data1"
+                        ;;
+                    IPS)
+                        dckr_print_container_field "IPs" "$data1" "$GREEN"
+                        ;;
+                    PORTS_START)
+                        echo -e "${CYAN}╠══${NC} Ports:"
+                        in_ports=true
+                        ;;
+                    PORT)
+                        dckr_print_port "$data1" "$data2" "$data3"
+                        ;;
+                    PORTS_END)
+                        in_ports=false
+                        ;;
+                    URLS_START)
+                        dckr_print_container_separator "URLs"
+                        in_urls=true
+                        ;;
+                    URL)
+                        dckr_print_url "$data1" "$data2" "$data3"
+                        ;;
+                    URLS_END)
+                        in_urls=false
+                        ;;
+                esac
+            done < "${temp_dir}/${i}"
+            echo ""
+        fi
+    done
+    
+    # Cleanup
+    rm -rf "$temp_dir"
+    
+    dckr_show_performance_stats
+}
+
+# Main command dispatcher
+main() {
+    local subcommand="$1"
+    shift
+    
+    case "$subcommand" in
+        list)
+            cmd_stack_list "$@"
+            ;;
+        help|--help|-h)
+            cat << 'EOF'
+dckr-stack - Docker stack operations
+
+Usage: dckr stack <command> [options]
+
+Commands:
+  list                    List all Docker Compose stacks
+  <stack_name>            Show detailed information for a stack
+
+Examples:
+  dckr stack list
+  dckr stack media
+  dckr stack authentik
+
+This command provides comprehensive information about Docker Compose stacks,
+including service status, networking, and port mappings.
+EOF
+            ;;
+        "")
+            dckr_error "Stack command required. Use 'dckr stack help' for usage information."
+            ;;
+        *)
+            cmd_stack_info "$subcommand" "$@"
+            ;;
+    esac
+}
+
+# Execute main function
+main "$@"

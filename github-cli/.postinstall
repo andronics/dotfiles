@@ -1,0 +1,4 @@
+#!/usr/bin/env sh
+gomplate --config "${dotfiles_source_root}/.gomplate/plugins.yml" \
+    -f "${dotfiles_target_root}/.config/gh/hosts.yml.tmpl" \
+    -o "${dotfiles_target_root}/.config/gh/hosts.yml" 

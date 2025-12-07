@@ -1,0 +1,162 @@
+#!/bin/bash
+
+# ai-config - Configuration management command
+# Handles: ai config <operation>
+
+# Load shared libraries
+LIBEXEC_DIR=$(dirname "$(readlink -f "$0")")/../libexec/ai
+source "$LIBEXEC_DIR/ai-common"
+source "$LIBEXEC_DIR/ai-ui"
+
+# Initialize
+ai_init
+
+
+cmd_agent_create() {
+    ai_info "Creating agent.."
+    ai_warning "Not yet implemented"
+}
+
+cmd_agent_disable() {
+    ai_info "Disabling agents.."
+    ai_warning "Not yet implemented"
+}
+
+cmd_agent_enable() {
+    ai_info "Enabling agents.."
+    ai_warning "Not yet implemented"
+}
+
+cmd_agent_list() {
+    ai_info "Listing agents..."
+    ai_warning "Not yet implemented"
+}
+
+cmd_agent_edit() {
+    if [[ ! -f "$AI_CONFIG_FILE" ]]; then
+        create_default_config
+    fi
+    
+        local editor="${EDITOR:-nano}"
+    
+    if ! ai_check_command "$editor"; then
+        editor="nano"
+        if ! ai_check_command "$editor"; then
+            editor="vi"
+        fi
+    fi
+    
+    
+    "$editor" "$AI_CONFIG_FILE"
+}
+
+cmd_agent_reset() {
+    local confirm="$1"
+    
+    if [[ "$confirm" != "--confirm" ]]; then
+        ai_warning "This will reset all configuration to defaults."
+        ai_info "Use 'ai config reset --confirm' to proceed."
+        return 1
+    fi
+    
+    if [[ -f "$AI_CONFIG_FILE" ]]; then
+        cp "$AI_CONFIG_FILE" "${AI_CONFIG_FILE}.backup"
+        ai_info "Backed up existing configuration to ${AI_CONFIG_FILE}.backup"
+    fi
+    
+    create_default_config
+}
+
+cmd_agent_path() {
+    echo "Configuration file: $AI_CONFIG_FILE"
+    echo "Configuration directory: $AI_CONFIG_DIR"
+    echo "Cache directory: $AI_CACHE_DIR"
+    echo ""
+    echo "Status:"
+    if [[ -f "$AI_CONFIG_FILE" ]]; then
+        echo "  Configuration file: ✅ exists"
+    else
+        echo "  Configuration file: ❌ not found"
+    fi
+    
+    if [[ -d "$AI_CONFIG_DIR" ]]; then
+        echo "  Configuration directory: ✅ exists"
+    else
+        echo "  Configuration directory: ❌ not found"
+    fi
+    
+    if [[ -d "$AI_CACHE_DIR" ]]; then
+        echo "  Cache directory: ✅ exists"
+    else
+        echo "  Cache directory: ❌ not found"
+    fi
+}
+
+# Main command dispatcher
+main() {
+    local operation="$1"
+    shift
+    
+    case "$operation" in
+        get)
+            cmd_agent_get "$@"
+            ;;
+        set)
+            cmd_agent_set "$@"
+            ;;
+        unset)
+            cmd_agent_unset "$@"
+            ;;
+        list)
+            cmd_agent_list "$@"
+            ;;
+        edit)
+            cmd_agent_edit "$@"
+            ;;
+        reset)
+            cmd_agent_reset "$@"
+            ;;
+        path)
+            cmd_agent_path "$@"
+            ;;
+        help|--help|-h)
+            cat << 'EOF'
+ai-config - Configuration management
+
+Usage: ai config <operation> [options]
+
+Operations:
+  get [key]               Show configuration (all or specific key)
+  set <key> <value>       Set configuration option
+  unset <key>             Remove configuration option
+  list                    List all available configuration options
+  edit                    Edit configuration file in $EDITOR
+  reset --confirm         Reset configuration to defaults
+  path                    Show configuration file paths
+
+Examples:
+  ai config get                    # Show all configuration
+  ai config get core.docker_sock   # Show specific value
+  ai config set core.debug true    # Set debug mode
+  ai config unset cache.enabled    # Remove cache setting
+  ai config list                   # Show available options
+  ai config edit                   # Edit in text editor
+
+Configuration keys follow the format: section.option
+Available sections: core, cache, ai, output
+EOF
+            ;;
+        "")
+            ai_error "Configuration operation required. Use 'ai config help' for usage information."
+            ;;
+        *)
+            ai_error "Unknown configuration operation '$operation'"
+            echo ""
+            echo "Use 'ai config help' for available operations."
+            return 1
+            ;;
+    esac
+}
+
+# Execute main function
+main "$@"

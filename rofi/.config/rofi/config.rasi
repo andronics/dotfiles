@@ -6,8 +6,8 @@
 }
 
 configuration {
-	display-drun: ">";
-	display-clipboard: ">";
+	display-drun: "#";
+	display-clipboard: "#";
 	drun-display-format: "{name}";
 	modi: "drun";
 }
@@ -70,14 +70,20 @@ listview {
 element {
 	background-color: rgba(0,0,0,0);
 	padding: 2 0 2 0;
+	margin: 4 0 4 0;
+}
+
+element-icon {
+    size: 1.5em;
 }
 
 element-text {
 	background-color: inherit;
 	text-color: inherit;
 	expand: true;
+	margin: 0 0 0 50;
 	horizontal-align: 0;
-	vertical-align: 0.5;
+	vertical-align: 0.3;
 }
 
 element.normal.normal {

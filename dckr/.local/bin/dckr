@@ -1,0 +1,150 @@
+#!/bin/bash
+
+# dckr - Main dispatcher (git-like architecture)
+# Routes commands to specialized executables
+
+# Basic path setup
+BIN_DIR=$(dirname "$(readlink -f "$0")")
+LIBEXEC_DIR="$BIN_DIR/../libexec/dckr"
+
+# Load common utilities for error handling and basic functions
+if [[ -f "$LIBEXEC_DIR/dckr-common" ]]; then
+    source "$LIBEXEC_DIR/dckr-common"
+else
+    # Fallback error handling if common library is missing
+    echo "Error: dckr installation appears to be incomplete" >&2
+    echo "Missing: $LIBEXEC_DIR/dckr-common" >&2
+    exit 1
+fi
+
+# Command lookup and execution
+dckr_find_command() {
+    local command="$1"
+    local cmd_path="$BIN_DIR/dckr-$command"
+    
+    if [[ -x "$cmd_path" ]]; then
+        echo "$cmd_path"
+        return 0
+    fi
+    
+    return 1
+}
+
+dckr_execute_command() {
+    local command="$1"
+    shift
+    
+    local cmd_path
+    cmd_path=$(dckr_find_command "$command")
+    
+    if [[ -n "$cmd_path" ]]; then
+        exec "$cmd_path" "$@"
+    else
+        dckr_error "Unknown command: $command"
+        echo ""
+        dckr_show_usage
+        exit 1
+    fi
+}
+
+# List available commands
+dckr_list_commands() {
+    echo "Available commands:"
+    for cmd in "$BIN_DIR"/dckr-*; do
+        if [[ -x "$cmd" && "$cmd" != "$0" ]]; then
+            local cmd_name
+            cmd_name=$(basename "$cmd" | sed 's/^dckr-//')
+            echo "  $cmd_name"
+        fi
+    done
+}
+
+# Enhanced usage with dynamic command detection
+dckr_show_usage() {
+    cat << 'EOF'
+Docker Stack Manager - Enterprise Edition v2.0.0
+
+Usage: dckr <command> [options]
+
+Core Commands:
+  stack list              List all Docker Compose stacks
+  stack <name>            Show detailed information for a stack
+  ai <command> [args]     AI-powered stack management and troubleshooting
+  config <operation>      Configuration management
+
+Utility Commands:
+  help                    Show this help message
+  version                 Show version information
+
+Examples:
+  dckr stack list
+  dckr stack media
+  dckr ai analyze-stack media
+  dckr ai debug-stack authentik network
+  dckr config get core.docker_sock
+
+AI Features:
+  • Intelligent stack analysis and optimization
+  • Automated troubleshooting and debugging
+  • AI-powered configuration generation
+  • Performance monitoring and recommendations
+
+Architecture:
+  • Modular design following git-like patterns
+  • Shared libraries for optimal performance
+  • Extensible command structure
+  • Configuration management system
+
+For command-specific help: dckr <command> help
+EOF
+    
+    echo ""
+    echo "Available command modules:"
+    dckr_list_commands
+}
+
+# Special command handling
+handle_special_commands() {
+    local command="$1"
+    
+    case "$command" in
+        ""|help|--help|-h)
+            dckr_show_usage
+            exit 0
+            ;;
+        version|--version|-v)
+            dckr_show_version
+            exit 0
+            ;;
+        commands)
+            dckr_list_commands
+            exit 0
+            ;;
+    esac
+    
+    return 1
+}
+
+# Debug mode
+if [[ "${DCKR_DEBUG:-}" == "1" ]]; then
+    echo "Debug: dckr called with args: $*" >&2
+    echo "Debug: BIN_DIR=$BIN_DIR" >&2
+    echo "Debug: LIBEXEC_DIR=$LIBEXEC_DIR" >&2
+fi
+
+# Main execution
+main() {
+    local command="$1"
+    shift
+    
+    # Handle special commands first
+    if handle_special_commands "$command"; then
+        return
+    fi
+    
+    # Try to execute the command
+    dckr_execute_command "$command" "$@"
+}
+
+# Execute main with all arguments
+main "$@"

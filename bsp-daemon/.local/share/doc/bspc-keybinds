@@ -1,0 +1,106 @@
+#!/bin/bash
+
+# bspc-manager keybinding helper script
+# Integrate with sxhkd for keyboard shortcuts
+
+BSPC_MANAGER="$(dirname "$(dirname "$(dirname "$(realpath "${BASH_SOURCE[0]}")")")")/.local/bin/bspc-manager"
+
+case "$1" in
+    # Layout templates
+    "template-split-v")
+        $BSPC_MANAGER template split-vertical
+        ;;
+    "template-split-h")
+        $BSPC_MANAGER template split-horizontal
+        ;;
+    "template-triple")
+        $BSPC_MANAGER template triple-column
+        ;;
+    "template-quad")
+        $BSPC_MANAGER template quad
+        ;;
+    
+    # Window states cycling
+    "cycle-state")
+        current_state=$(bspc query -T -n | grep -o '"state":"[^"]*"' | cut -d'"' -f4)
+        case "$current_state" in
+            "tiled") $BSPC_MANAGER state floating ;;
+            "floating") $BSPC_MANAGER state fullscreen ;;
+            "fullscreen") $BSPC_MANAGER state tiled ;;
+            *) $BSPC_MANAGER state tiled ;;
+        esac
+        ;;
+    
+    # Quick desktop assignments
+    "assign-current-firefox")
+        desktop=$(bspc query -D -d focused --names)
+        $BSPC_MANAGER assign-desktop firefox "$desktop"
+        ;;
+    "assign-current-code")
+        desktop=$(bspc query -D -d focused --names)
+        $BSPC_MANAGER assign-desktop code "$desktop"
+        ;;
+    
+    # Smart preselection (toggles directions)
+    "smart-presel-h")
+        if bspc query -N -n focused.automatic; then
+            $BSPC_MANAGER presel-cancel
+        else
+            $BSPC_MANAGER presel east -o 0.5
+        fi
+        ;;
+    "smart-presel-v")
+        if bspc query -N -n focused.automatic; then
+            $BSPC_MANAGER presel-cancel
+        else
+            $BSPC_MANAGER presel south -o 0.5
+        fi
+        ;;
+    
+    # Layout operations
+    "save-current-layout")
+        desktop=$(bspc query -D -d focused --names)
+        timestamp=$(date +%Y%m%d_%H%M)
+        $BSPC_MANAGER save-layout "${desktop}_${timestamp}"
+        notify-send "Layout Saved" "Saved layout: ${desktop}_${timestamp}"
+        ;;
+    
+    # Development workspace quick setup
+    "dev-setup")
+        /home/andronics/bspc-dev-setup
+        notify-send "Workspace Ready" "Development workspace has been set up"
+        ;;
+    
+    # Window info display
+    "window-info")
+        info=$($BSPC_MANAGER info)
+        notify-send "Window Info" "$info"
+        ;;
+    
+    # Focus cycling with wraparound
+    "focus-next")
+        $BSPC_MANAGER focus next || $BSPC_MANAGER focus first
+        ;;
+    "focus-prev")
+        $BSPC_MANAGER focus prev || $BSPC_MANAGER focus last
+        ;;
+    
+    *)
+        echo "bspc-keybinds: Keybinding helper for bspc-manager"
+        echo "Usage: $0 <action>"
+        echo ""
+        echo "Available actions:"
+        echo "  template-split-v      Create vertical split template"
+        echo "  template-split-h      Create horizontal split template" 
+        echo "  template-triple       Create triple column template"
+        echo "  template-quad         Create quad template"
+        echo "  cycle-state           Cycle window state (tiled->floating->fullscreen)"
+        echo "  assign-current-*      Assign app to current desktop"
+        echo "  smart-presel-h        Toggle horizontal preselection"
+        echo "  smart-presel-v        Toggle vertical preselection"
+        echo "  save-current-layout   Save current desktop layout"
+        echo "  dev-setup             Run development workspace setup"
+        echo "  window-info           Show current window information"
+        echo "  focus-next/prev       Focus next/previous window with wraparound"
+        ;;
+esac

@@ -1,0 +1,62 @@
+#!/bin/env bash
+
+# Configuration (Default values - can be overridden via environment variables)
+DEFAULT_FILE_PATTERN="*.mp4"
+
+# Rofi Configuration
+ROFI_THEME="sidebar"
+ROFI_PATH="$HOME/.config/mpv/paths" # Store folder paths
+
+# Function to load folder paths into Rofi
+load_folder_paths() {
+  if [[ -f "$ROFI_PATH" ]]; then
+    local choices=$(cat "$ROFI_PATH" | grep -v '^#' | sort)
+    echo "$choices"
+  else
+    echo "No folder paths found. Please add paths to $ROFI_PATH"
+    echo "Example paths:"
+    echo "# /home/user/movies"
+    echo "# /mnt/external_drive"
+    return 1 # Indicate error
+  fi
+}
+
+# Function to display folder selection using Rofi
+select_folder() {
+  local choices=$(load_folder_paths)
+
+  if [[ $? -ne 0 ]]; then
+    return 1
+  fi
+
+  local selected_folder=$(rofi -dmenu -theme "$ROFI_THEME" -lines 5 -font "Monaco12" -print -line1 "$choices")
+
+  if [[ -z "$selected_folder" ]]; then
+    return 1 # Indicate no selection
+  fi
+
+  echo "$selected_folder"
+}
+
+
+# Main Script Logic
+select_folder
+
+if [[ $? -ne 0 ]]; then
+  echo "Folder selection failed."
+  exit 1
+fi
+
+FILE_SEARCH_DIR=$(select_folder)
+
+if [[ -z "$FILE_SEARCH_DIR" ]]; then
+  echo "No folder selected. Exiting."
+  exit 1
+fi
+
+# Construct the command
+find "$FILE_SEARCH_DIR" -name "$DEFAULT_FILE_PATTERN" -print0 | while IFS= read -r -d 
+```\0' file; do
+  echo "$file"
+  # Do something with the file
+done

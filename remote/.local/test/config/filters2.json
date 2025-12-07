@@ -1,0 +1,18 @@
+{
+  "\\.mp3$": [
+    ["mimetype", "eq", "audio/mpeg"],
+    ["audio_format", "eq", "MPEG Audio"],
+    ["audio_bitrate", "le", "320000"]
+  ],
+  "\\.mp4$": [
+    ["mimetype", "eq", "video/mp4"],
+    ["video_width", "le", "1920"],
+    ["video_height", "le", "1080"]
+  ],
+  "\\.jpg$": [
+    ["mimetype", "eq", "image/jpeg"]
+  ],
+  "test-.*\\.txt$": [
+    ["mimetype", "eq", "text/plain"]
+  ]
+}

@@ -1,0 +1,107 @@
+{
+    "archive_code": {
+        "credentials": "stevie@andronics.io",
+        "drive_id": "0AMN8oIdNrZNRUk9PVA",
+        "mountpoint": "archive/code"
+    },
+    "archive_databases": {
+        "credentials": "stevie@andronics.io",
+        "drive_id": "0APceCTPYS7TWUk9PVA",
+        "mountpoint": "archive/databases"
+    },
+    "archive_vaults": {
+        "credentials": "stevie@andronics.io",
+        "drive_id": "0ACb2yOcTuiJRUk9PVA",
+        "mountpoint": "archive/vaults"
+    },
+    "archive_volumes": {
+        "credentials": "stevie@andronics.io",
+        "drive_id": "0AMIVKA3NTddpUk9PVA",
+        "mountpoint": "archive/volumes"
+    },
+    "documents_live": {
+        "credentials": "andronics@gmail.com",
+        "mountpoint": "documents/live",
+        "root_folder_id": "1wD4ySd5U1bYQsCdGPE9CcXIxP9sCOyD3"
+    },
+    "media_adult": {
+        "credentials": "stevie@andronics.io",
+        "drive_id": "0AGxPmBlhop0sUk9PVA",
+        "mountpoint": "media/adult"
+    },
+    "media_audiobooks": {
+        "credentials": "stevie@andronics.io",
+        "drive_id": "0AKt8-k3Md30NUk9PVA",
+        "mountpoint": "media/audiobooks"
+    },
+    "media_ebooks": {
+        "credentials": "stevie@andronics.io",
+        "drive_id": "0APewWtC6aSPXUk9PVA",
+        "mountpoint": "media/ebooks"
+    },
+    "media_movies": {
+        "credentials": "stevie@andronics.io",
+        "drive_id": "0ALyonjJNrlRoUk9PVA",
+        "filters": ["artwork","metadata","subtitles","videos"],
+        "sfilters": ["artwork","metadata","subtitles","videos"],
+        "mountpoint": "media/movies"
+    },
+    "media_music": {
+        "credentials": "stevie@andronics.io",
+        "drive_id": "0AISKLrkHRzwVUk9PVA",
+        "filters": ["artwork","audio","metadata"],
+        "mountpoint": "media/music"
+    },
+    "media_other": {
+        "credentials": "stevie@andronics.io",
+        "drive_id": "0AOIRi6eDa52tUk9PVA",
+        "mountpoint": "media/other"
+    },
+    "media_photos": {
+        "credentials": "stevie@andronics.io",
+        "drive_id": "0ANcVmFjcatTKUk9PVA",
+        "mountpoint": "media/photos"
+    },
+    "media_standup": {
+        "credentials": "stevie@andronics.io",
+        "drive_id": "0AADBSzPZztTmUk9PVA",
+        "filters": ["artwork","metadata","subtitles","videos"],
+        "mountpoint": "media/standup"
+    },
+    "media_tv": {
+        "credentials": "stevie@andronics.io",
+        "drive_id": "0AEBmM5-iPnADUk9PVA",
+        "filters": ["artwork","metadata","videos"],
+        "mountpoint": "media/tv"
+    },
+    "org_808_foundation": {
+        "credentials": "stevie@andronics.io",
+        "drive_id": "0AMOIbb7nDcOAUk9PVA",
+        "mountpoint": "orgs/808-foundation"
+    },
+    "org_andronics": {
+        "credentials": "stevie@andronics.io",
+        "drive_id": "0ADDbjfD-sCrpUk9PVA",
+        "mountpoint": "orgs/andronics"
+    },
+    "org_foxie_systems": {
+        "credentials": "stevie@andronics.io",
+        "drive_id": "0AGlcHl_7Owg6Uk9PVA",
+        "mountpoint": "orgs/foxie-systems"
+    },
+    "org_maiden_city_eldercare": {
+        "credentials": "stevie@andronics.io",
+        "drive_id": "APsptGdmkqPOUk9PVA",
+        "mountpoint": "orgs/maiden-city-eldercare"
+    },
+    "org_playschule": {
+        "credentials": "stevie@andronics.io",
+        "drive_id": "0AK5Atx40p3z1Uk9PVA",
+        "mountpoint": "orgs/playschule"
+    },
+    "org_wee_community": {
+        "credentials": "stevie@andronics.io",
+        "drive_id": "0ACKhS_LNx7VkUk9PVA",
+        "mountpoint": "orgs/wee-community"
+    }
+}

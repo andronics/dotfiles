@@ -15,7 +15,7 @@ history_data_dir="${XDG_DATA_HOME}/${name}"
 
 # ------------------------------
 
-rofi_config="${history_data_dir}/theme.rasi"
+ROFI_CONFIG="${history_data_dir}/theme.rasi"
 
 # ------------------------------
 

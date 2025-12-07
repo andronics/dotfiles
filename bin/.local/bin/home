@@ -1,0 +1,70 @@
+#!/usr/bin/bash
+
+# ==============================
+
+home_backup() {
+    
+    archive_folder=/mnt/archive/home
+    archive_file=$(whoami).v$(date +%F).tar.gz
+    home_folder=/home/$(whoami)
+    
+    if [ ! -d "$home_folder" ]; then
+    
+        printf "folder [%s] does not exist\n" $home_folder
+    
+    else
+
+        if [ ! -d "$archive_folder" ]; then
+            printf "creating folder [%s]\n" $archive_folder
+            mkdir -p "$archive_folder"
+        fi
+
+        printf "archiving home [%s] to file [%s/%s]\n" $home_folder $archive_folder $archive_file
+        
+        # z : Compress the backup file with ‘gzip’ to make it small size.
+        # c : Create a new backup archive.
+        # v : verbosely list files which are processed.
+        # p : Preserves the permissions of the files put in the archive for later restoration.
+        # f : use archive file or device ARCHIVE.
+        
+        tar -zcpf "$archive_folder/$archive_file" \
+            --warning="no-file-changed" \
+            --exclude-vcs-ignores \
+            --exclude="$home_folder/.cache" \
+            --exclude="$home_folder/.config/google-chrome" \
+            --exclude="$home_folder/.dbus" \
+            --exclude="$home_folder/.gvfs" \
+            --exclude="$home_folder/.local/share/Colossal Order" \
+            --exclude="$home_folder/.local/share/gvfs-metadata" \
+            --exclude="$home_folder/.local/share/Steam" \
+            --exclude="$home_folder/.local/share/Trash" \
+            --exclude="$home_folder/.npm" \
+            --exclude="$home_folder/.nuget" \
+            --exclude="$home_folder/.nvm" \
+            --exclude="$home_folder/.paradoxlauncher" \
+            --exclude="$home_folder/.steam" \
+            --exclude="$home_folder/Downloads" \
+            "$home_folder" &>/dev/null
+        
+        archive_size=$(du -h "$archive_folder/$archive_file" | awk '{ print $1; }')
+        printf "archive complete [size %s]\n" $archive_size
+    
+    fi
+
+}
+
+# ==============================
+
+home_snapshot() {
+	echo here
+}
+
+# ==============================
+
+command=$1
+shift
+
+case "$command" in
+    backup) home_backup "$@" ;;
+    snapshot) home_snapshot "$@" ;;
+esac

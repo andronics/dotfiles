@@ -1,0 +1,328 @@
+#!/usr/bin/env zsh
+
+name=$(basename $0)
+
+# ------------------------------
+
+source "$(which _func)"
+source "$(which _log)"
+
+# ------------------------------
+
+project_cache_dir="${XDG_CACHE_HOME}/${name}"
+project_config_dir="${XDG_CONFIG_HOME}/${name}"
+project_data_dir="${XDG_DATA_HOME}/${name}"
+project_runtime_dir=${XDG_RUNTIME_DIR}/${name}
+
+# ------------------------------
+
+source "$(which _args)"
+
+# ------------------------------
+
+_project() {
+
+    [[ $# -eq 0 ]] && {
+        log-error "command not specified"
+        return 1
+    }
+
+    _command=$1
+    shift 2>/dev/null
+
+    case "${_command}" in
+        
+        archive) _project_archive "$@" ;;
+        clone) _project_clone "$@" ;;
+        commit) _project_commit "$@" ;;
+        get) _project_get "$@" ;;
+        increment) _project_increment "$@" ;;
+        init) _project_init "$@" ;;
+        root) _project_root "$@" ;;
+        restore) _project_restore "$@" ;;
+        set) _project_set "$@" ;;
+
+        *) log-warning "command '%s' unsupported" "${_command}" ;;
+
+    esac
+
+}
+
+# ------------------------------
+
+_project_archive() {
+    
+    local _folder=$(project_root)
+
+    if [[ "$folder" == "" ]]; then
+    
+        info "no project root\n"
+    
+    else
+        
+        local name=$(project get -i name)
+        local version=$(project get -i version)
+        local archive="/storage/archive/project/$(echo $name | sed -e "s/^@//g" -e "s/\//-/g")-v$version.tar.gz"
+        local archive_folder=$(dirname "$archive")
+
+        if [ ! -d "$archive_folder" ]; then
+            mkdir -p "$archive_folder"
+        fi
+            
+        tar -zcpf "$archive" \
+            --warning="no-file-changed" \
+            --exclude-vcs-ignores \
+            --exclude="$folder/.git" \
+            --exclude="$folder/*.log" \
+            --exclude="$folder/node_modules" \
+            "$folder" &>/dev/null
+    
+        local size=$(du -h "$archive" | awk '{ print $1; }')
+        
+        info "    name    : %s\n" $name
+        printf "    version : %s\n" $version
+        printf "    root    : %s\n" $folder
+        printf "    archive : %s\n" $archive
+        printf "    size    : %s\n" $size
+    
+     fi
+}
+
+# ------------------------------
+
+_project_clone() {
+    _func_unimplemented
+}
+
+# ------------------------------
+
+_project_commit() {
+    _func_unimplemented
+}
+
+# ------------------------------
+
+_project_init() {
+    
+    log-info "initiating project"
+
+    mkdir /storage/
+    pushd /storage/projects
+
+    git init
+    git add .
+    git commit -m "project initiation"
+
+    repo_name=${2:="default repo desc"}
+    repo_org=${2:="default repo desc"}
+    repo_desc=${2:="default repo desc"}
+    repo_homepage=${2:="default repo desc"}
+
+    repo_url=$(hub create -p -d $repo_desc -h $repo_homepage  )
+
+    git push -u 
+}
+
+# ------------------------------
+
+_project_get() {
+
+    local dir=$(project root)
+    local file="package.json"
+    local identity="name"
+
+    while [ "${1:0:1}" == "-" ]; do
+        case "$1" in
+            "-d"|"--dir")
+                dir=$(project root -d "$2")
+                shift
+                ;;
+            "-f"|"--file")
+                file="$2"
+                shift
+                ;;
+            "-i"|"--identity")
+                identity="$2"
+                shift
+                ;;
+            "--")
+                shift
+                break
+                ;;
+            *)
+                printf "unsupported flag: %s\n" "$1"
+                shift
+                ;;
+        esac
+        shift
+    done
+
+    local result=$(jq -r ".$identity" "$dir/$file")
+    echo $result
+
+}
+
+# ------------------------------
+
+_project_increment() {
+    
+    # https://stackoverflow.com/questions/8653126/how-to-increment-version-number-in-a-shell-script
+    
+    local usage=" USAGE: $FUNCNAME [-l] [-t] <version> [<position>] [<leftmost>]
+        
+        -l          : remove leading zeros
+        -t          : drop trailing zeros
+        
+        <version>   : The version string.
+        <position>  : Optional. The position (starting with one) of the number 
+                      within <version> to increment.  If the position does not 
+                      exist, it will be created.  Defaults to last position.
+        <leftmost>  : The leftmost position that can be incremented.  If does not
+                      exist, position will be created.  This right-padding will
+                      occur even to right of <position>, unless passed the -t flag."
+
+    # Get flags
+    
+    local flag_remove_leading_zeros=0
+    local flag_drop_trailing_zeros=0
+    
+    while [ "${1:0:1}" == "-" ]; do
+        if [ "$1" == "--" ]; then
+            shift
+            break
+        elif [ "$1" == "-l" ]; then
+            flag_remove_leading_zeros=1I would like to creat a functon that acc
+        elif [ "$1" == "-t" ]; then
+            flag_drop_trailing_zeros=1
+        else
+            echo -e "unsupported flag: ${1}\n$usage"
+            return 1
+        fi
+        shift
+    done
+
+    # Get arguments.
+    if [ ${#@} -lt 1 ]; then
+        echo "$usage"
+        return 1
+    fi
+    
+    local v="${1}"             # version string
+    local targetPos=${2-last}  # target position
+    local minPos=${3-${2-0}}   # minimum position
+
+    # Split version string into array using its periods. 
+    
+    local IFSbak; IFSbak=IFS; IFS='.' # IFS restored at end of func to                     
+    read -ra v <<< "$v"               #  avoid breaking other scripts.
+
+    # Determine target position.
+    if [ "${targetPos}" == "last" ]; then 
+        if [ "${minPos}" == "last" ]; then
+            minPos=0
+        fi
+        targetPos=$((${#v[@]}>${minPos}?${#v[@]}:$minPos))
+    fi
+
+    #debug info 
+    # printf "v = %s | tp = %s | mp = %s\n" "$v" "$targetPos" "$minPos"
+
+    if [[ ! ${targetPos} -gt 0 ]]; then
+        echo -e "Invalid position: '$targetPos'\n$usage"
+        return 1
+    fi
+    (( targetPos--  )) || true # offset to match array index
+
+    # Make sure minPosition exists.
+    while [ ${#v[@]} -lt ${minPos} ]; do
+        v+=("0")
+    done
+
+    # Increment target position.
+    v[$targetPos]=`printf %0${#v[$targetPos]}d $((10#${v[$targetPos]}+1))`;
+
+    # Remove leading zeros, if -l flag passed.
+    if [ $flag_remove_leading_zeros == 1 ]; then
+        for (( pos=0; $pos<${#v[@]}; pos++ )); do
+            v[$pos]=$((${v[$pos]}*1))
+        done
+    fi
+
+    # If targetPosition was not at end of array, reset following positions to
+    #   zero (or remove them if -t flag was passed).
+    if [[ ${flag_drop_trailing_zeros} -eq "1" ]]; then
+        for (( p=$((${#v[@]}-1)); $p>$targetPos; p-- )); do
+            unset v[$p]
+        done
+    else
+        for (( p=$((${#v[@]}-1)); $p>$targetPos; p-- )); do
+            v[$p]=0
+        done
+    fi
+
+    echo "${v[*]}"
+    IFS=IFSbak
+    return 0
+
+}
+
+# ------------------------------
+
+_project_root() { 
+
+    local _dir="$(pwd)"
+    local _file="package.json"
+
+    while [ "${1:0:1}" == "-" ]; do
+        printf "arg1 : %s | arg2: %s\n" "$1" "$2"
+        if [ "$1" == "--" ]; then
+            shift
+            break
+        elif [[ "$1" == "-d" || "$1" == "--dir" ]]; then
+            _dir=$(readlink -f "$2")
+            shift
+        elif [[ "$1" == "-f"  || "$1" == "--file" ]]; then
+            _file=$2
+            shift
+        else
+            echo -e "invalid flag: ${1}\n"
+            return 1
+        fi
+        shift
+    done
+
+    while [[ "${_dir}" != "/" ]]; do
+        local _path=$(find "${_dir}" -maxdepth 1 -mindepth 1 -iname "${_file}")
+        if [[ "${_path}" != "" ]]; then
+            echo $(dirname "${_path}")
+            return 0
+        else
+            _dir=$(readlink -f "${_dir}/..")
+        fi
+    done
+    
+    return 1
+
+}
+
+# ------------------------------
+
+_project_restore() {
+    _func_unimplemented
+}
+
+# ------------------------------
+
+_project_set() {
+    local filter=${1:-"."}
+    local value=${2:-""}
+    local file=${3:-"package.json"}
+    local root=$(project_root . $file)
+    local result=$(jq -r "'.$filter |= '$value'" "$root/$file")
+    echo $result
+    # echo $result > "$root/$file"
+}
+
+# ------------------------------
+
+_project "$@"

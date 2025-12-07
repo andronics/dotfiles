@@ -1,0 +1,653 @@
+#!/usr/bin/env zsh
+
+name=$(basename $0)
+
+# ------------------------------
+
+source $(which _log)
+source $(which _args)
+source $(which _jq)
+
+# ------------------------------
+
+# Configuration
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/bsp-daemon"
+SOCKET_FILE="$CONFIG_DIR/service.sock" 
+SERVICE_SCRIPT="$(dirname "${BASH_SOURCE[0]}")/bsp-service"
+RESPONSE_TIMEOUT=5
+
+# ------------------------------
+
+# Check if service is running
+_bspc_request_check_service() {
+    if ! pgrep -x bsp-service >/dev/null 2>&1; then
+        log-warn "service not running, starting service..."
+        if "$SERVICE_SCRIPT" &>/dev/null &; then
+            sleep 3  # Give service time to initialize ecosystem
+            log-info "service started with ecosystem"
+        else
+            log-error "failed to start service"
+            return 1
+        fi
+    fi
+}
+
+# Send request to service via IPC
+_bspc_request_send() {
+    local request="$1"
+    
+    if [[ ! -p "$SOCKET_FILE" ]]; then
+        log-error "service socket not available"
+        return 1
+    fi
+    
+    # Send request
+    echo "$request" > "$SOCKET_FILE" &
+    local send_pid=$!
+    
+    # Wait for response with timeout
+    if timeout "$RESPONSE_TIMEOUT" wait $send_pid 2>/dev/null; then
+        log-info "request sent: $request"
+    else
+        log-warn "request may have timed out"
+    fi
+}
+
+# Enhanced window operations with service integration
+_bspc_request_focus() {
+    local selector="${1:-focused}"
+    if bspc node "$selector" -f; then
+        log-info "focused node: $selector"
+    else
+        log-warn "could not focus node: $selector"
+    fi
+}
+
+_bspc_request_move() {
+    local direction="$1"
+    if bspc node -s "$direction"; then
+        log-info "moved node $direction"
+        _bspc_request_send "manual_move $direction"
+    else
+        log-warn "could not move node $direction"
+    fi
+}
+
+_bspc_request_resize() {
+    local direction="$1"
+    local amount="${2:-20}"
+    
+    case "$direction" in
+        left) bspc node -z left -"$amount" 0 || bspc node -z right -"$amount" 0 ;;
+        right) bspc node -z right "$amount" 0 || bspc node -z left "$amount" 0 ;;
+        up) bspc node -z top 0 -"$amount" || bspc node -z bottom 0 -"$amount" ;;
+        down) bspc node -z bottom 0 "$amount" || bspc node -z top 0 "$amount" ;;
+        *) log-warn "invalid resize direction: $direction"; return 1 ;;
+    esac
+    
+    log-info "resized node $direction by $amount"
+}
+
+_bspc_request_state() {
+    local state="$1"
+    local node="${2:-focused}"
+    
+    if bspc node "$node" -t "$state"; then
+        log-info "set node state to $state"
+        _bspc_request_send "state_change $node $state"
+    else
+        log-warn "could not set node state to $state"
+    fi
+}
+
+# Smart layout requests that work with ecosystem
+_bspc_request_layout() {
+    local layout_type="$1"
+    local desktop="${2:-$(bspc query -D -d focused --names)}"
+    
+    case "$layout_type" in
+        "auto-balance")
+            _bspc_request_send "balance_desktop $desktop"
+            log-info "requested auto-balance for desktop: $desktop (will coordinate with bsp-balance)"
+            ;;
+        "triple-column")
+            _bspc_request_send "apply_layout $desktop dev-triple"
+            log-info "requested triple-column layout for desktop: $desktop"
+            ;;
+        "master-stack")
+            _bspc_request_send "apply_layout $desktop master-stack"
+            log-info "requested master-stack layout for desktop: $desktop"
+            ;;
+        "smart")
+            _bspc_request_send "smart_layout $desktop"
+            log-info "requested smart layout for desktop: $desktop"
+            ;;
+        *)
+            log-warn "unknown layout type: $layout_type"
+            echo "Available types: auto-balance, triple-column, master-stack, smart"
+            return 1
+            ;;
+    esac
+}
+
+# Desktop management with service integration
+_bspc_request_create_desktop() {
+    local name="$1"
+    local layout_type="${2:-smart}"
+    local monitor="${3:-focused}"
+    
+    if bspc monitor "$monitor" -a "$name"; then
+        log-info "created desktop: $name"
+        
+        # Configure auto-layout for this desktop
+        _bspc_request_send "enable_auto_layout $name $layout_type"
+        log-info "enabled $layout_type auto-layout for desktop: $name"
+    else
+        log-warn "could not create desktop: $name (may be managed by bsp-desktops)"
+    fi
+}
+
+_bspc_request_focus_desktop() {
+    local desktop="$1"
+    if bspc desktop "$desktop" -f; then
+        log-info "focused desktop: $desktop"
+        _bspc_request_send "desktop_focus $desktop"
+    else
+        log-warn "could not focus desktop: $desktop"
+    fi
+}
+
+# Rule management with service integration
+_bspc_request_add_rule() {
+    local class="$1"
+    local options="$2"
+    
+    # Add to bspwm immediately
+    if bspc rule -a "$class" $options; then
+        log-info "added rule for class: $class"
+        
+        # Update service configuration
+        echo "$class $options" >> "$CONFIG_DIR/rules.conf"
+        _bspc_request_send "reload"
+        log-info "rule added to service configuration"
+    else
+        log-warn "could not add rule for class: $class"
+    fi
+}
+
+_bspc_request_remove_rule() {
+    local class="$1"
+    
+    if bspc rule -r "$class"; then
+        log-info "removed rule for class: $class"
+        
+        # Remove from service configuration
+        if [[ -f "$CONFIG_DIR/rules.conf" ]]; then
+            grep -v "^$class " "$CONFIG_DIR/rules.conf" > "$CONFIG_DIR/rules.conf.tmp" && 
+            mv "$CONFIG_DIR/rules.conf.tmp" "$CONFIG_DIR/rules.conf"
+        fi
+        
+        _bspc_request_send "reload"
+        log-info "rule removed from service configuration"
+    else
+        log-warn "could not remove rule for class: $class"
+    fi
+}
+
+# Workspace management
+_bspc_request_workspace() {
+    local workspace_name="$1"
+    shift
+    local apps=("$@")
+    
+    log-info "creating workspace: $workspace_name"
+    
+    # Create desktop with smart layout
+    _bspc_request_create_desktop "$workspace_name" "smart"
+    
+    # Add rules for applications
+    for app in "${apps[@]}"; do
+        _bspc_request_add_rule "$app" "desktop=$workspace_name"
+    done
+    
+    log-info "workspace '$workspace_name' created with ${#apps[@]} application rules"
+}
+
+# Auto-configuration patterns
+_bspc_request_auto_config() {
+    local pattern="$1"
+    
+    case "$pattern" in
+        "developer")
+            log-info "setting up developer workspace configuration"
+            
+            _bspc_request_create_desktop "code" "dev-triple"
+            _bspc_request_create_desktop "web" "master-stack"
+            _bspc_request_create_desktop "terminal" "balanced"
+            
+            _bspc_request_add_rule "code" "desktop=code"
+            _bspc_request_add_rule "vim" "desktop=code"
+            _bspc_request_add_rule "emacs" "desktop=code"
+            _bspc_request_add_rule "firefox" "desktop=web"
+            _bspc_request_add_rule "chromium" "desktop=web"
+            _bspc_request_add_rule "alacritty" "desktop=terminal"
+            _bspc_request_add_rule "kitty" "desktop=terminal"
+            
+            log-info "developer workspace configured"
+            ;;
+            
+        "media")
+            log-info "setting up media workspace configuration"
+            
+            _bspc_request_create_desktop "media" "balanced"
+            
+            _bspc_request_add_rule "vlc" "desktop=media state=floating"
+            _bspc_request_add_rule "mpv" "desktop=media"
+            _bspc_request_add_rule "spotify" "desktop=media"
+            _bspc_request_add_rule "gimp" "desktop=media state=floating"
+            _bspc_request_add_rule "krita" "desktop=media"
+            
+            log-info "media workspace configured"
+            ;;
+            
+        "communication")
+            log-info "setting up communication workspace configuration"
+            
+            _bspc_request_create_desktop "chat" "balanced"
+            
+            _bspc_request_add_rule "discord" "desktop=chat"
+            _bspc_request_add_rule "slack" "desktop=chat"
+            _bspc_request_add_rule "signal" "desktop=chat"
+            _bspc_request_add_rule "thunderbird" "desktop=chat"
+            _bspc_request_add_rule "telegram" "desktop=chat"
+            
+            log-info "communication workspace configured"
+            ;;
+            
+        *)
+            log-warn "unknown configuration pattern: $pattern"
+            echo "Available patterns: developer, media, communication"
+            return 1
+            ;;
+    esac
+}
+
+# Ecosystem management commands
+_bspc_request_ecosystem() {
+    local action="$1"
+    
+    case "$action" in
+        start)
+            _bspc_request_send "ecosystem start"
+            log-info "requested ecosystem startup"
+            ;;
+        stop)
+            _bspc_request_send "ecosystem stop"
+            log-info "requested ecosystem shutdown"
+            ;;
+        restart)
+            _bspc_request_send "ecosystem restart"
+            log-info "requested ecosystem restart"
+            ;;
+        status)
+            log-info "ecosystem status:"
+            
+            # Check individual tools
+            local tools=("bsp-balance" "bsp-desktops" "bsp-aspect" "bsp-flag" "bsp-floating-borders" "bsp-ventilate")
+            
+            for tool in "${tools[@]}"; do
+                if pgrep -x "$tool" >/dev/null 2>&1; then
+                    echo "  ✓ $tool: running"
+                else
+                    echo "  ✗ $tool: not running"
+                fi
+            done
+            
+            # Show ecosystem coordination status
+            if command -v bsp-ecosystem >/dev/null 2>&1; then
+                echo ""
+                echo "Ecosystem coordination: ✓ available"
+                
+                local state_file="${BSP_IPC_DIR:-/tmp/bsp-ecosystem}/state"
+                if [[ -f "$state_file" ]]; then
+                    local active_tools=$(cat "$state_file" 2>/dev/null | jq -r '.active_tools | length' 2>/dev/null || echo "0")
+                    echo "  Active coordinated tools: $active_tools"
+                else
+                    echo "  Active coordinated tools: 0"
+                fi
+            else
+                echo ""
+                echo "Ecosystem coordination: ✗ not available"
+            fi
+            ;;
+        coordination)
+            if command -v bsp-ecosystem >/dev/null 2>&1; then
+                log-info "ecosystem coordination details:"
+                local state_file="${BSP_IPC_DIR:-/tmp/bsp-ecosystem}/state"
+                if [[ -f "$state_file" ]] && command -v jq >/dev/null 2>&1; then
+                    echo ""
+                    echo "Registered tools:"
+                    cat "$state_file" | jq -r '.active_tools[] | "  • \(.name) (PID: \(.pid), Priority: \(.priority))"' 2>/dev/null || echo "  No tools registered"
+                    
+                    echo ""
+                    echo "Mutex locks:"
+                    local lock_dir="${BSP_LOCK_DIR:-/tmp/bsp-ecosystem/locks}"
+                    if [[ -d "$lock_dir" ]]; then
+                        local lock_count=$(find "$lock_dir" -type f 2>/dev/null | wc -l)
+                        if (( lock_count > 0 )); then
+                            find "$lock_dir" -type f -exec basename {} \; 2>/dev/null | while read lock_name; do
+                                local lock_owner=$(cat "$lock_dir/$lock_name" 2>/dev/null | cut -d: -f1)
+                                echo "  • $lock_name (held by: $lock_owner)"
+                            done
+                        else
+                            echo "  No active locks"
+                        fi
+                    else
+                        echo "  Lock directory not available"
+                    fi
+                else
+                    echo "  No coordination state available"
+                fi
+            else
+                log-warn "ecosystem coordination not available"
+            fi
+            ;;
+        *)
+            log-warn "unknown ecosystem action: $action"
+            echo "Available actions: start, stop, restart, status, coordination"
+            return 1
+            ;;
+    esac
+}
+
+# Tool management commands
+_bspc_request_tool() {
+    local action="$1"
+    local tool_name="$2"
+    
+    case "$action" in
+        start)
+            if [[ -z "$tool_name" ]]; then
+                log-error "tool name required"
+                return 1
+            fi
+            _bspc_request_send "tool start $tool_name"
+            log-info "requested start of tool: $tool_name"
+            ;;
+        stop)
+            if [[ -z "$tool_name" ]]; then
+                log-error "tool name required"
+                return 1
+            fi
+            _bspc_request_send "tool stop $tool_name"
+            log-info "requested stop of tool: $tool_name"
+            ;;
+        restart)
+            if [[ -z "$tool_name" ]]; then
+                log-error "tool name required"
+                return 1
+            fi
+            _bspc_request_send "tool restart $tool_name"
+            log-info "requested restart of tool: $tool_name"
+            ;;
+        list)
+            echo "Managed tools:"
+            echo "  • bsp-balance (layout balancer)"
+            echo "  • bsp-desktops (desktop manager)"  
+            echo "  • bsp-aspect (aspect ratio manager)"
+            echo "  • bsp-flag (flag manager)"
+            echo "  • bsp-floating-borders (border manager)"
+            echo "  • bsp-ventilate (spacing manager)"
+            ;;
+        *)
+            log-warn "unknown tool action: $action"
+            echo "Available actions: start, stop, restart, list"
+            return 1
+            ;;
+    esac
+}
+
+# Service control
+_bspc_request_service() {
+    local action="$1"
+    
+    case "$action" in
+        start)
+            if pgrep -x bsp-service >/dev/null 2>&1; then
+                log-info "service already running"
+            else
+                "$SERVICE_SCRIPT" &
+                log-info "service started with ecosystem"
+            fi
+            ;;
+        stop)
+            if pkill -x bsp-service; then
+                log-info "service stopped (ecosystem will be stopped too)"
+            else
+                log-warn "service was not running"
+            fi
+            ;;
+        restart)
+            _bspc_request_service stop
+            sleep 2
+            _bspc_request_service start
+            ;;
+        status)
+            if pgrep -x bsp-service >/dev/null 2>&1; then
+                log-info "service is running"
+                _bspc_request_send "stats"
+            else
+                log-warn "service is not running"
+            fi
+            ;;
+        reload)
+            _bspc_request_send "reload"
+            log-info "service configuration reloaded"
+            ;;
+        *)
+            log-warn "unknown service action: $action"
+            return 1
+            ;;
+    esac
+}
+
+# Get service statistics
+_bspc_request_stats() {
+    log-info "bsp ecosystem statistics:"
+    _bspc_request_service status
+    
+    if [[ -f "$CONFIG_DIR/service.log" ]]; then
+        echo ""
+        log-info "recent service activity:"
+        tail -5 "$CONFIG_DIR/service.log" | while IFS= read -r line; do
+            echo "  $line"
+        done
+    fi
+    
+    # Show ecosystem status
+    echo ""
+    _bspc_request_ecosystem status
+    
+    _bspc_request_send "stats"
+}
+
+# Window info display
+_bspc_request_info() {
+    local node="${1:-focused}"
+    local window_id=$(bspc query -N -n "$node")
+    
+    if [[ -n "$window_id" ]]; then
+        echo "Node ID: $window_id"
+        echo "Class: $(xprop -id "$window_id" WM_CLASS 2>/dev/null | cut -d'"' -f4 || echo "unknown")"
+        echo "Title: $(xprop -id "$window_id" WM_NAME 2>/dev/null | cut -d'"' -f2 || echo "unknown")"
+        echo "Desktop: $(bspc query -D -n "$node" --names)"
+        echo "Monitor: $(bspc query -M -n "$node" --names)"
+        echo "State: $(bspc query -T -n "$node" | jq-query '.client.state')"
+    else
+        log-warn "could not get window information"
+    fi
+}
+
+# Help function
+_bspc_request_help() {
+    cat << 'EOF'
+bspc-request - Client for bsp-service ecosystem management
+
+USAGE:
+    bspc-request <command> [options]
+
+WINDOW MANAGEMENT:
+    focus <selector>                Focus a node
+    move <direction>                Move node (notifies service)
+    resize <direction> [amount]     Resize node 
+    state <state> [node]           Set node state (notifies service)
+    info [node]                    Show window information
+
+SMART LAYOUT MANAGEMENT:
+    layout <type> [desktop]        Request smart layout (coordinates with bsp-balance)
+                                  Types: auto-balance, triple-column, master-stack, smart
+    create-desktop <name> [layout] Create desktop with auto-layout
+    focus-desktop <name>          Focus desktop (with service notification)
+
+RULE MANAGEMENT:
+    add-rule <class> <options>     Add rule (updates service config)
+    remove-rule <class>           Remove rule (updates service config)
+
+WORKSPACE MANAGEMENT:
+    workspace <name> <app1> [app2...] Create workspace with app assignments
+    auto-config <pattern>         Auto-configure for usage patterns
+                                 Patterns: developer, media, communication
+
+ECOSYSTEM MANAGEMENT:
+    ecosystem <action>            Manage the entire bsp ecosystem
+                                 Actions: start, stop, restart, status, coordination
+    tool <action> [name]         Manage individual tools
+                                Actions: start, stop, restart, list
+
+SERVICE CONTROL:
+    service <action>              Control service (start/stop/restart/status/reload)
+    stats                        Show ecosystem statistics
+
+EXAMPLES:
+    # Basic window management
+    bspc-request focus west
+    bspc-request move east
+    bspc-request resize right 50
+    
+    # Smart layout management (works with bsp-balance)
+    bspc-request layout triple-column dev
+    bspc-request create-desktop work master-stack
+    
+    # Workspace creation
+    bspc-request workspace development code vim terminal
+    
+    # Ecosystem management
+    bspc-request ecosystem status
+    bspc-request tool restart bsp-balance
+    bspc-request ecosystem start
+    
+    # Auto-configuration
+    bspc-request auto-config developer
+    
+    # Service management
+    bspc-request service status
+    bspc-request stats
+
+INTEGRATION:
+    This tool communicates with bsp-service which orchestrates your entire
+    bsp-* ecosystem (bsp-balance, bsp-desktops, bsp-aspect, bsp-flag, etc.)
+    for seamless window management automation.
+EOF
+}
+
+# Main command dispatcher
+_bspc_request() {
+    # Ensure service is running for service-dependent commands
+    case "${1:-help}" in
+        service|help|ecosystem|tool) ;;  # Commands that don't need service check
+        *) _bspc_request_check_service || return 1 ;;
+    esac
+    
+    case "${1:-help}" in
+        # Window management
+        focus) _bspc_request_focus "${2:-focused}" ;;
+        move) 
+            [[ -z "$2" ]] && { log-error "direction required"; return 1; }
+            _bspc_request_move "$2" 
+            ;;
+        resize) 
+            [[ -z "$2" ]] && { log-error "direction required"; return 1; }
+            _bspc_request_resize "$2" "${3:-20}" 
+            ;;
+        state) 
+            [[ -z "$2" ]] && { log-error "state required"; return 1; }
+            _bspc_request_state "$2" "${3:-focused}" 
+            ;;
+        info) _bspc_request_info "${2:-focused}" ;;
+        
+        # Smart layout management
+        layout) 
+            [[ -z "$2" ]] && { log-error "layout type required"; return 1; }
+            _bspc_request_layout "$2" "$3" 
+            ;;
+        create-desktop) 
+            [[ -z "$2" ]] && { log-error "name required"; return 1; }
+            _bspc_request_create_desktop "$2" "${3:-smart}" "${4:-focused}" 
+            ;;
+        focus-desktop) 
+            [[ -z "$2" ]] && { log-error "desktop required"; return 1; }
+            _bspc_request_focus_desktop "$2" 
+            ;;
+        
+        # Rule management
+        add-rule) 
+            [[ -z "$2" || -z "$3" ]] && { log-error "class and options required"; return 1; }
+            _bspc_request_add_rule "$2" "$3" 
+            ;;
+        remove-rule) 
+            [[ -z "$2" ]] && { log-error "class required"; return 1; }
+            _bspc_request_remove_rule "$2" 
+            ;;
+        
+        # Workspace management
+        workspace) 
+            [[ $# -lt 2 ]] && { log-error "workspace requires name and at least one application"; return 1; }
+            local workspace_name="$2"
+            shift 2
+            _bspc_request_workspace "$workspace_name" "$@"
+            ;;
+        auto-config) 
+            [[ -z "$2" ]] && { log-error "pattern required"; return 1; }
+            _bspc_request_auto_config "$2" 
+            ;;
+        
+        # Ecosystem management
+        ecosystem) 
+            [[ -z "$2" ]] && { log-error "action required"; return 1; }
+            _bspc_request_ecosystem "$2" 
+            ;;
+        tool) 
+            [[ -z "$2" ]] && { log-error "action required"; return 1; }
+            _bspc_request_tool "$2" "$3" 
+            ;;
+        
+        # Service control
+        service) 
+            [[ -z "$2" ]] && { log-error "action required"; return 1; }
+            _bspc_request_service "$2" 
+            ;;
+        stats) _bspc_request_stats ;;
+        
+        # Help
+        help|--help|-h) _bspc_request_help ;;
+        
+        *)
+            log-error "unknown command: ${1}. Use 'bspc-request help' for usage information"
+            return 1
+            ;;
+    esac
+}
+
+# ------------------------------
+
+_bspc_request "$@"

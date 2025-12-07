@@ -1,0 +1,46 @@
+#!/usr/bin/env zsh
+
+name=$(basename $0)
+
+# ------------------------------
+
+source "$(which _log)"
+
+# ------------------------------
+
+keep_cache_dir="${XDG_CACHE_HOME}/${name}"
+keep_config_dir="${XDG_CONFIG_HOME}/${name}"
+keep_data_dir="${XDG_DATA_HOME}/${name}"
+keep_runtime_dir=${XDG_RUNTIME_DIR}/${name}
+
+# ------------------------------
+
+source "$(which _args)"
+
+# ------------------------------
+
+_keep() {
+
+    [[ $# -eq 0 ]] && {
+        log-error "command not specified"
+        return 1
+    }
+
+    _command=$1
+    shift 2>/dev/null
+
+    case "${_command}" in
+        
+        mount) _remote_mount "$@" ;;
+        unmount) _remote_unmount "$@" ;;
+        upload) _remote_upload "$@" ;;
+
+        *) log-warning "command '%s' unsupported" "${_command}" ;;
+
+    esac
+
+}
+
+# ------------------------------
+
+_keep "$@"

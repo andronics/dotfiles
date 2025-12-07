@@ -1,7 +1,7 @@
 # /home/andronics/.config/tmuxinator/media.yml
 
 name: media
-root: /.pool/nvme/media
+root: /.pool/local/media
 
 # Optional tmux socket
 # socket_name: foo

@@ -1,0 +1,176 @@
+#!/usr/bin/env zsh
+
+# BSP Ecosystem Integration Wrapper
+# Source this in existing bsp-* tools to enable ecosystem coordination
+
+# ------------------------------
+
+# Tool identification
+BSP_TOOL_NAME="${BSP_TOOL_NAME:-$(basename $0)}"
+BSP_TOOL_PID="$$"
+
+# ------------------------------
+
+# Initialize ecosystem integration
+_bsp_ecosystem_wrapper_init() {
+    
+    if command -v bsp-ecosystem >/dev/null 2>&1; then
+        # Register this tool with the ecosystem
+        local priority=$(bsp-ecosystem get-priority "$BSP_TOOL_NAME")
+        bsp-ecosystem register "$BSP_TOOL_NAME" "$BSP_TOOL_PID" "$priority"
+        
+        # Set up cleanup on exit
+        trap '_bsp_ecosystem_wrapper_cleanup' EXIT TERM INT
+        
+        log-debug "ecosystem integration enabled for $BSP_TOOL_NAME"
+        return 0
+    else
+        log-debug "ecosystem not available, running standalone"
+        return 1
+    fi
+    
+}
+
+# Cleanup ecosystem integration
+_bsp_ecosystem_wrapper_cleanup() {
+    
+    if command -v bsp-ecosystem >/dev/null 2>&1; then
+        bsp-ecosystem unregister "$BSP_TOOL_NAME"
+        log-debug "unregistered $BSP_TOOL_NAME from ecosystem"
+    fi
+    
+}
+
+# Enhanced event subscription with ecosystem coordination
+_bsp_ecosystem_subscribe() {
+    
+    local events="$1"
+    local handler_func="$2"
+    
+    bspc subscribe $events | while IFS= read -r line; do
+        
+        # Parse event
+        local event_parts=("${(@s/ /)line}")
+        local event="${event_parts[1]}"
+        local args=("${event_parts[@]:2}")
+        
+        # Check if we should handle this event
+        if command -v bsp-ecosystem >/dev/null 2>&1; then
+            
+            # Check event filtering
+            if ! bsp-ecosystem should-handle "$event" "$BSP_TOOL_NAME"; then
+                log-debug "skipping event $event (filtered by ecosystem)"
+                continue
+            fi
+            
+            # Apply debouncing
+            if ! bsp-ecosystem debounce "$event"; then
+                log-debug "skipping event $event (debounced)"
+                continue
+            fi
+            
+            # Coordinate with other tools
+            bsp-ecosystem coordinate "$event" "$BSP_TOOL_NAME"
+            
+        fi
+        
+        # Call the original handler
+        if [[ -n "$handler_func" ]] && typeset -f "$handler_func" >/dev/null; then
+            "$handler_func" "$line" "$event" "${args[@]}"
+        fi
+        
+    done
+    
+}
+
+# Coordinated lock acquisition for critical sections
+_bsp_ecosystem_with_lock() {
+    
+    local lock_name="$1"
+    local timeout="${2:-5}"
+    shift 2
+    local command=("$@")
+    
+    if command -v bsp-ecosystem >/dev/null 2>&1; then
+        if bsp-ecosystem acquire-lock "$lock_name" "$BSP_TOOL_NAME" "$timeout"; then
+            # Execute command with lock held
+            "${command[@]}"
+            local result=$?
+            # Release lock
+            bsp-ecosystem release-lock "$lock_name" "$BSP_TOOL_NAME"
+            return $result
+        else
+            log-warn "failed to acquire lock $lock_name, skipping operation"
+            return 1
+        fi
+    else
+        # No ecosystem, just run the command
+        "${command[@]}"
+    fi
+    
+}
+
+# Check if another tool is handling this functionality
+_bsp_ecosystem_check_conflict() {
+    
+    local functionality="$1"
+    
+    if command -v bsp-ecosystem >/dev/null 2>&1; then
+        # Check if a higher priority tool is handling this
+        local state_file="${BSP_IPC_DIR:-/tmp/bsp-ecosystem}/state"
+        if [[ -f "$state_file" ]]; then
+            local my_priority=$(bsp-ecosystem get-priority "$BSP_TOOL_NAME")
+            # Future: implement conflict detection logic
+            log-debug "checking conflicts for $functionality (priority: $my_priority)"
+        fi
+    fi
+    
+    return 0  # No conflicts detected
+    
+}
+
+# Notify ecosystem about state changes
+_bsp_ecosystem_notify() {
+    
+    local event_type="$1"
+    shift
+    local args=("$@")
+    
+    if command -v bsp-ecosystem >/dev/null 2>&1; then
+        bsp-ecosystem coordinate "$event_type" "$BSP_TOOL_NAME"
+        log-debug "notified ecosystem: $event_type ${args[*]}"
+    fi
+    
+}
+
+# Enhanced logging that includes ecosystem context
+_bsp_ecosystem_log() {
+    
+    local level="$1"
+    local message="$2"
+    shift 2
+    local args=("$@")
+    
+    # Prepare ecosystem context
+    local context=""
+    if command -v bsp-ecosystem >/dev/null 2>&1; then
+        local priority=$(bsp-ecosystem get-priority "$BSP_TOOL_NAME" 2>/dev/null || echo "unknown")
+        context="[eco:$priority]"
+    fi
+    
+    # Use standard logging with context
+    case "$level" in
+        debug) log-debug "$context $message" "${args[@]}" ;;
+        info) log-info "$context $message" "${args[@]}" ;;
+        warn) log-warn "$context $message" "${args[@]}" ;;
+        error) log-error "$context $message" "${args[@]}" ;;
+    esac
+    
+}
+
+# ------------------------------
+
+# Auto-initialize if this script is sourced
+if [[ "${BASH_SOURCE[0]}" != "${0}" ]] || [[ "${ZSH_EVAL_CONTEXT}" =~ :file$ ]]; then
+    _bsp_ecosystem_wrapper_init
+fi

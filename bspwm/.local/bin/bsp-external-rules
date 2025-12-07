@@ -8,6 +8,10 @@ source $(which _log)
 
 # ------------------------------
 
+LOG_LEVEL=4
+
+# ------------------------------
+
 _bsp_external_rules() {
 
 	_window=$1
@@ -16,16 +20,27 @@ _bsp_external_rules() {
 	_tags=$4
 
 	_random_id=$(tr -dc a-z0-9 </dev/urandom | head -c 10)
+	_role=$(_bsp_wininfo "$_window" "WM_WINDOW_ROLE")
 	_title=$(xtitle "${_window}")
 
-	log-info "[rid] %s [wid] %s [title] %s [class] %s [instance] %s [tags] %s" \
-		"${_random_id}" \
-		"${_window}" \
-		"${_title}" \
-		"${_class}" \
-		"${_instance}" \
-		"${_tags}"
 
+	log-debug "role(): window: %s  | role: %s" "${_window}" "${_role}"
+	log-debug "class(): window: %s  | class: %s" "${_window}" "${_class}"
+
+	# Browser Pass
+	[[ "${_role}" == "pop-up" ]]  && [[ "${_instance}" == "crx_naepdomgkenhinolocfifgehidddafch" ]] && {
+		[ "$state" ] || echo "state=floating"
+		exit
+	}
+
+	[[ "${_role}" == "pop-up" ]] && {
+		log-info "pop-up(): closing window: ${_window}"
+		wmctrl -ic ${_window}
+	}
+
+	log-debug "class(): window: %s | class: %s" \
+		"${_window}" \
+		"${_class}"
 
 	case "${_class}" in
 		terminal-draw)
@@ -40,6 +55,16 @@ _bsp_external_rules() {
 
 }
 
+_bsp_wininfo() {
+    _window=$1
+    _prop=$2
+    value=$(xprop -id "$_window" "$_prop" 2>/dev/null)
+    if [[ $? -ne 0 || -z "$value" || "$value" == *"not found"* ]]; then
+        echo "n/a"
+    else
+        echo "$value" | cut -d'"' -f2 || echo "unknown"
+    fi
+}
 # ------------------------------
 
 _bsp_external_rules "$@"

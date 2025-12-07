@@ -1,0 +1,40 @@
+#!/bin/sh
+
+# ======================================================================
+
+command=$1
+shift
+
+case $command in
+    down-speed)
+        speedtest-cli --no-upload | grep -E "Download"  | awk '{print $2 " mb/s"}'
+        ;;
+    ip)
+        interface=$(ip route | awk '/^default/{ print $5 }')
+        state=$(cat "/sys/class/net/$interface/operstate")
+
+        if [[ "$STATE" = "down" ]]; then
+            echo 0.0.0.0
+        else
+            ip addr show $interface | awk '/inet /{ print $2 }' | sed 's/\/.*//'
+        fi
+        ;;
+    is-down)
+        if [[ "$(cat "/sys/class/net/$1/operstate")" = 'down' ]]; then
+            echo 1
+        else
+            echo 0
+        fi
+        ;;
+    up-speed)
+        speedtest-cli --no-download | grep -E "Upload"  | awk '{print $2 " mb/s"}'
+        ;;
+    wifi-login)
+        curl -s -F "username=andronics@gmail.com" -F "password=H3at-Wav3" -w "%{http_code}" "https://www.btwifi.com:8443/tbbLogon"
+        ;;
+    wifi-power)
+        grep $1 /proc/net/wireless | awk '{ print int($3 * 100 / 70) }'
+        ;;
+    wifi-ssid)
+        nmcli -t -f active,ssid dev wifi | egrep '^yes' | cut -d ":" -f2
+esac

@@ -1,0 +1,183 @@
+#!/usr/bin/env zsh
+
+name=$(basename $0)
+
+# ------------------------------
+
+source "$(which _func)"
+source "$(which _jq)"
+source "$(which _log)"
+source "$(which _string)"
+
+# ------------------------------
+
+gpgcmd_cache_dir="${XDG_CACHE_HOME}/${name}"
+gpgcmd_config_dir="${XDG_CONFIG_HOME}/${name}"
+gpgcmd_data_dir="${XDG_DATA_HOME}/${name}"
+
+# ------------------------------
+
+gpgcmd_export_dir="${HOME}/.gnupg/exported"
+
+# ------------------------------
+
+source "$(which _args)"
+
+# ------------------------------
+
+_gpgcmd() {
+
+    [[ $# -eq 0 ]] && {
+        log-error "command not specified"
+        return 1
+    }
+
+    _command=$1
+    shift 2>/dev/null
+
+    case "${_command}" in
+        
+        key-delete) _gpgcmd_key_delete "$@" ;;
+        key-edit) _gpgcmd_key_edit "$@" ;;
+        key-export-private) _gpgcmd_key_export_private "$@" ;;
+        key-export-public) _gpgcmd_key_export_public "$@" ;;
+        key-export-ssh) _gpgcmd_key_export_ssh "$@" ;;
+        key-generate) _gpgcmd_key_generate "$@" ;;
+
+        list-private) _gpgcmd_list_private_keys "$@" ;;
+        list-public) _gpgcmd_list_public_keys "$@" ;;
+
+        meta-email) _gpgcmd_meta_email "$@" ;;
+        meta-name) _gpgcmd_meta_name "$@" ;;
+
+        subkey-delete) _gpgcmd_subkey_delete "$@" ;;
+        subkey-export-private) _gpgcmd_subkey_export_private "$@" ;;
+        subkey-export-public) _gpgcmd_subkey_export_public "$@" ;;
+        subkey-export-ssh) _gpgcmd_subkey_export_ssh "$@" ;;
+
+        *) log-warning "command '%s' unsupported" "${_command}" ;;
+
+    esac
+
+}
+
+# ------------------------------
+
+_gpgcmd_meta_email() {
+
+    _id=$1
+    gpg --list-keys --with-colons ${_id} | grep uid | cut -d '<' -f 2 | cut -d '>' -f 1
+
+}
+
+_gpgcmd_meta_name() {
+
+    _id=$1
+    gpg --list-keys --with-colons ${_id}  | grep uid | cut -d ':' -f 5
+
+
+
+}
+
+# ------------------------------
+
+_gpgcmd_key_edit() {
+
+    _id=$1
+
+    gpg2 --edit-key "${_id}"
+
+}
+
+_gpgcmd_key_export_private() {
+
+    [[ ! -d "${gpgcmd_export_dir}" ]] && mkdir -p "${gpgcmd_export_dir}"
+
+    _id=$1
+    _path="${gpgcmd_export_dir}/key.${_id}.private.asc"
+
+    gpg2 --export-secret-keys --armor  ${_id} > "${_path}" && {
+        log-info "key '%s' successfully exported to '%s'" "${_id}" "${_path}"
+    }
+
+}
+
+_gpgcmd_key_export_public() {
+
+    [[ ! -d "${gpgcmd_export_dir}" ]] && mkdir -p "${gpgcmd_export_dir}"
+
+    _id=$1
+    _path="${gpgcmd_export_dir}/key.${_id}.public.asc"
+
+    gpg2 --export --armor  ${_id} > "${_path}" && {
+        log-info "key '%s' successfully exported to '%s'" "${_id}" "${_path}"
+    }
+
+}
+
+_gpgcmd_key_export_ssh() {
+
+    [[ ! -d "${gpgcmd_export_dir}" ]] && mkdir -p "${gpgcmd_export_dir}"
+
+    _id=$1
+    _path="${gpgcmd_export_dir}/key.${_id}.public.ssh"
+
+    gpg2 --export-ssh-key --armor  ${_id} > "${_path}" && {
+        log-info "subkey '%s' successfully exported to '%s'" "${_id}" "${_path}"
+    }
+
+}
+
+_gpgcmd_key_generate() {
+
+    gpg2 --expert --full-gen-key
+
+}
+
+# ------------------------------
+
+_gpgcmd_subkey_export_private() {
+
+    [[ ! -d "${gpgcmd_export_dir}" ]] && mkdir -p "${gpgcmd_export_dir}"
+
+    _id=$1
+    _path="${gpgcmd_export_dir}/subkey.${_id}.private.asc"
+
+    gpg2 --export-secret-subkeys --armor  ${_id} > "${_path}" && {
+        log-info "subkey '%s' successfully exported to '%s'" "${_id}" "${_path}"
+    }
+
+}
+
+_gpgcmd_subkey_export_public() {
+
+
+    [[ ! -d "${gpgcmd_export_dir}" ]] && mkdir -p "${gpgcmd_export_dir}"
+
+    _id=$1
+    _path="${gpgcmd_export_dir}/subkey.${_id}.public.asc"
+
+    gpg2 --export --armor  ${_id} > "${_path}" && {
+        log-info "key '%s' successfully exported to '%s'" "${_id}" "${_path}"
+    } 
+
+
+}
+
+# ------------------------------
+
+_gpgcmd_list_private_keys() {
+
+    gpg2 --list-secret-keys --keyid-format long
+
+}
+
+_gpgcmd_list_public_keys() {
+
+    gpg2 --list-keys --keyid-format long
+
+}
+
+# ------------------------------
+
+_gpgcmd "$@"

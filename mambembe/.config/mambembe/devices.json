@@ -1,0 +1,14 @@
+{
+  "url": "https://api.authy.com/json",
+  "device_name": "Linux (mambembi@desktop)",
+  "signature": "128f1a7d179750261c4c88e19cc3eda093c99fb1cae69bb8784b302c7153",
+  "authy_id": 8460096,
+  "request_id": null,
+  "device": {
+    "id": 778865798,
+    "secret_seed": "3b3805ff2b59e4f7e6767174615f7b30"
+  },
+  "time_sync": null,
+  "private_key": null,
+  "backup_password": "5n0wflak3"
+}

@@ -1,0 +1,46 @@
+#!/usr/bin/env zsh
+
+name=$(basename $0)
+
+# ------------------------------
+
+source "$(which _jq)"
+source "$(which _log)"
+source "$(which _math)"
+
+# ------------------------------
+
+ocr_cache_dir="${XDG_CACHE_HOME}/${name}"
+ocr_config_dir="${XDG_CONFIG_HOME}/${name}"
+ocr_data_dir="${XDG_DATA_HOME}/${name}"
+ocr_runtime_dir=${XDG_RUNTIME_DIR}/${name}
+
+# ------------------------------
+
+ocr_language="eng"
+ocr_page_segmentation_mode=1
+ocr_engine_mode=3
+ocr_resolution=3
+
+# ------------------------------
+
+source "$(which _args)"
+
+# ------------------------------
+
+_ocr() {
+    input=$1
+    output=$2
+    echo "processing: ${input}"
+    tesseract \
+        --dpi "${scanner_resolution}" \
+        -l "${ocr_language}" \
+        --oem "${ocr_engine_mode}" \
+        --psm "${ocr_page_segmentation_mode}" \
+        "${input}" \
+        "${output}"      
+}
+
+# ------------------------------
+
+_ocr "$@"

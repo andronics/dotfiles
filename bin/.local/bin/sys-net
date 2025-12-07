@@ -1,0 +1,103 @@
+#!/usr/bin/env zsh
+
+name=$(basename $0)
+
+# ------------------------------
+
+source "$(which _log)"
+source "$(which _spectrum)"
+
+# ------------------------------
+
+sys_net_interfaces=$(ls /sys/class/net/ | grep -E '^(enp)')
+sys_net_pipe="/tmp/${name}.fifo"
+
+# ------------------------------
+
+_sys_net() {
+
+  [[ -p "${sys_net_pipe}" ]] &&  unlink "${sys_net_pipe}" 
+
+  mkfifo "${sys_net_pipe}" 
+
+  # Associative array to store previous RX and TX bytes for each interface
+  declare -A _rx_bytes
+  declare -A _tx_bytes
+
+  for _interface in ${sys_net_interfaces}; do
+    
+    # Skip loopback interface and other non-physical interfaces
+    [[ ${_interface} == "lo" || ! -d "/sys/class/net/${_interface}" ]] && continue
+    
+    # Initial RX and TX bytes
+    _rx_bytes[${_interface}]=$(_sys_net_bytes ${_interface} | awk '{print $1}')
+    _tx_bytes[${_interface}]=$(_sys_net_bytes ${_interface} | awk '{print $2}')
+  
+  done
+
+  while true; do
+
+    _values=""
+
+    for _interface in ${sys_net_interfaces}; do
+        
+        # Skip loopback interface and other non-physical interfaces
+        if [[ ${_interface} == "lo" || "${_interface}" =~ ^(br|docker|veth) || ! -d "/sys/class/net/${_interface}" ]]; then
+            continue
+        fi
+
+        # Get current RX and TX bytes
+        _rx_current=$(_sys_net_bytes "${_interface}" | awk '{print $1}')
+        _tx_current=$(_sys_net_bytes "${_interface}" | awk '{print $2}')
+
+        # Calculate the differences
+        _rx_difference=$(_sys_net_differnce ${_rx_bytes[${_interface}]} ${_rx_current})
+        _tx_difference=$(_sys_net_differnce ${_tx_bytes[${_interface}]} ${_tx_current})
+
+        # Print the differences on the same line
+        
+        _values="${_values}$(echo "${_rx_difference}" | _sys_net_log10);$(echo "${_tx_difference}" | _sys_net_log10);"
+        
+
+        # Update previous RX and TX bytes
+        _rx_bytes[${_interface}]=${_rx_current}
+        _tx_bytes[${_interface}]=${_tx_current}
+
+    done
+
+    echo ${_values} | _spectrum
+
+    # Sleep for 1 second
+    sleep 1
+
+  done
+
+}
+
+_sys_net_bytes() {
+  # get the current RX bytes and TX bytes from /proc/net/dev for a given interface
+  cat /proc/net/dev | grep "$1:" | awk '{print $2, $10}'
+}
+
+_sys_net_differnce() {
+  _previous_bytes="$1"
+  _current_bytes="$2"
+  echo $((_current_bytes - _previous_bytes))
+}
+
+_sys_net_log10() {
+  awk '{ print int( log($1 + 1) / log(32) ) }'
+}
+
+# ------------------------------
+
+_sys_net "$@"
+
+
+
+
+
+
+
+
+

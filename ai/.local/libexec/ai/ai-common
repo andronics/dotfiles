@@ -1,0 +1,112 @@
+#!/bin/bash
+
+# ai-common - Shared utilities and constants
+# This file is sourced by all ai commands
+
+# Version and constants
+declare -r AI_VERSION="1.0.0"
+
+# Color codes
+declare -r GREEN='\033[0;32m'
+declare -r BLUE='\033[0;34m'
+declare -r YELLOW='\033[1;33m'
+declare -r RED='\033[0;31m'
+declare -r CYAN='\033[0;36m'
+declare -r MAGENTA='\033[0;35m'
+declare -r BOLD='\033[1m'
+declare -r NC='\033[0m'
+
+# Paths
+AI_SCRIPT_DIR=$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")
+AI_BIN_DIR=$(dirname "$(dirname "$AI_SCRIPT_DIR")")/bin
+AI_MODULE_DIR=$(dirname "$(dirname "$(dirname "$AI_SCRIPT_DIR")")")
+AI_CONFIG_DIR="$HOME/.config/ai"
+AI_CACHE_DIR="$AI_CONFIG_DIR/cache"
+AI_AGENTS_DIR="$AI_MODULE_DIR/lib/share/agents"
+AI_COMMANDS_DIR="$AI_MODULE_DIR/lib/share/commands"
+
+# Ensure config directory exists
+mkdir -p "$AI_CONFIG_DIR" "$AI_CACHE_DIR"
+
+# Error handling
+ai_error() {
+    echo -e "${RED}Error: $1${NC}" >&2
+    exit "${2:-1}"
+}
+
+ai_warning() {
+    echo -e "${YELLOW}Warning: $1${NC}" >&2
+}
+
+ai_success() {
+    echo -e "${GREEN}$1${NC}"
+}
+
+ai_info() {
+    echo -e "${BLUE}$1${NC}"
+}
+
+ai_debug() {
+    [[ "${ai_DEBUG:-}" == "1" ]] && echo -e "${CYAN}Debug: $1${NC}" >&2
+}
+
+
+# Usage functions
+ai_show_usage() {
+    cat << 'EOF'
+ai - v${AI_VERSION}
+
+Usage: ai <command> [options]
+
+Commands:
+  cmd <operations>            Commandeer
+  config <operations>         Configure Managements
+  query [args] <quert>        Provide a concise anwser to a query
+  help                        Show this help message
+  version                     Show version information
+
+Examples:
+  ai cmd --model "opus" researcher "ai coding strategries"
+  ai config get core.docker_sock
+  ai config set core.debug true
+  ai query --model "sonnet" hr "Whats my employee id?"
+ 
+AI Features:
+  • Intelligent analysis and optimization
+  • Automated troubleshooting and debugging
+  • AI-powered configuration generation
+  • Performance monitoring and recommendations
+
+Performance:
+  • Optimized with parallel processing
+  • Minimal API calls
+  • jq support for faster JSON parsing
+  • Modular architecture for faster startup
+
+For more information, see: dckr help <command>
+EOF
+}
+
+ai_show_version() {
+    echo "ai version $AI_VERSION"
+    echo "Enterprise Docker Stack Manager"
+}
+
+# Utility functions
+ai_check_command() {
+    command -v "$1" &>/dev/null
+}
+
+# Configuration loading
+ai_load_config() {
+    local config_file="$AI_CONFIG_DIR/config"
+    if [[ -f "$config_file" ]]; then
+        source "$config_file"
+    fi
+}
+
+# Initialize common environment
+ai_init() {
+    ai_load_config
+    ai_debug "Initialized ai environment"
+}

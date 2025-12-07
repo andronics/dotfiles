@@ -1,0 +1,212 @@
+#!/usr/bin/env zsh
+
+DOTS_FILES_HIDDEN=${DOT_FILES_HIDDEN:-"0"}
+
+MEDIA_ROOT=${MEDIA_ROOT:-"/mnt/media"}
+MEDIA_TV=${MEDIA_TV:-"${MEDIA_ROOT}/tv"}
+
+ROFI_WIDTH=${ROFI_WIDTH:-"250"}
+ROFI_X_OFFSET=${ROFI_X_OFFSET:-"200"}
+ROFI_Y_OFFSET=${ROFI_Y_OFFSET:-"40"}
+
+# ==============================
+
+REPOSITORIES='{
+    "books":{ "apikey": "c65ae59361b04599b002c819cabf904a", "host": "0.0.0.0", "port": "8787", provider: "readarr"  },
+    "movies":{ "apikey": "1f53552237404bf0a2a849758d1e857f", "host": "0.0.0.0", "port": "7878", provider: "radarr"  },
+    "music":{ "apikey": "6a92cbe344bc4d8ea3f55a6e6a06655c", "host": "0.0.0.0", "port": "8686", provider: "lidarr"  },
+    "tv":{ "apikey": "875739e72461402cbbf8842b8b00ff27", "host": "0.0.0.0", "port": "8989", provider: "sonarr"  }
+}'
+
+STATUS_IDS='{
+    "Connected":{ "icon": "\uF023" },
+    "Connecting":{ "icon": "\uF110" },
+    "Disconnected": { "icon": "\uF09C" },
+    "Reconnecting":{ "icon": "\uF110" }
+}'
+
+# ==============================
+# utilities
+# ==============================
+
+_withApi() {
+    curl -s -H "X-Api-Key: 875739e72461402cbbf8842b8b00ff27" "https://sonarr.andronics.io/api/v3/series" | jq -r ". | sort_by(.title)[] | select((.monitored == true) and (.statistics.sizeOnDisk > 0)) | .title" | rofi -dmenu -l 5 -p "Series"
+}
+
+_fromApi() {
+    apikey=$(_get_attr "$1" "apikey")
+    host=$(_get_attr "$1" "host")
+    port=$(_get_attr "$1" "port")
+    
+    echo curl -H "Content-Type: application/json" -X POST "http://$host:$port/"
+}
+
+_get_dirs() {
+    [[ -d "$1" ]] && ls -1 "$1"
+}
+
+_get_files() {
+    [[ -d "$1" ]] && ls -Ap "$1" | grep -v "/"
+}
+
+
+_get_api_key() {
+    echo "$REPOSITORIES" | jq -r ".\"$1\".apikey"
+}
+
+_get_attr() {
+    echo "$REPOSITORIES" | jq -r ".\"$1\".$2"
+}
+
+_rofi() {
+    rofi -dmenu -p "$1"
+}
+
+
+# ==============================
+# connection
+# ==============================
+
+_get_tv() {
+    show=$(_get_dirs "${MEDIA_TV}" | _rofi "TV Series")
+    if [ $? -eq 0 ]; then
+        local episode=$(_get_files "${MEDIA_TV}/${show}" | _rofi "Episode" )
+        local uri=${MEDIA_TV}/${show}/${episode}
+    fi
+    echo ${uri}
+}
+
+_connect() {
+    location=
+    country=$(_get_countries | _rofi "Country")
+    if [ $? -eq 0 ]; then
+        location=$country
+        city=$(_get_cities $country | _rofi "City")
+        if [ $? -eq 0 ]; then
+            location=$city
+        fi
+    fi
+    _disconnect > /dev/null
+    nordvpn c $location
+}
+
+_disconnect() {
+    nordvpn d
+}
+
+# ==============================
+# status
+# ==============================
+
+_city() {
+    echo $( _get_status "City" )
+}
+
+_country() {
+    echo $( _get_status "Country" )
+}
+
+_ip() {
+    echo $( _get_status "Your new IP" )
+}
+
+_protocol() {
+    echo $( _get_status "Current protocol" )
+}
+
+_received() {
+    echo $( _get_status "Transfer" | awk '{ print $1 " " $2 }')
+}
+
+_sent() {
+    echo $( _get_status "Transfer" | awk '{ print $4 " " $5 }')
+}
+
+_server() {
+    echo $( _get_status "Current server" )
+}
+
+_status() {
+    status=$( _get_status "Status" )
+    if [ "$status" = "Connected" ]; then
+        echo "$(_city) - $(_country)"
+    else
+        echo "$status"        
+    fi
+}
+
+_status_icon() {
+    status=$( _get_status "Status" )
+    icon=$(_get_status_icon $status)
+    echo $icon
+}
+
+_technology() {
+    echo $( _get_status "Current technology" )
+}
+
+
+_uptime() {
+    echo $( _get_status "Uptime" )
+}
+
+# ==============================
+# instance
+# ==============================
+
+_instance() {
+    instance=$(playerctl metadata | awk '/xesam:title/{ print $1 }')
+    icon=$(echo $INSTANCE_IDS | jq -r ".\"$instance\".icon")
+    echo $icon
+}
+
+_instance_icon() {
+    echo $(playerctl metadata | awk '/xesam:title/{ print $1 }' )
+}
+
+# ==============================
+
+# process global flags
+while getopts "ihqv" opt; do
+    case ${opt} in
+        i) __help "$PKG_DIR" && return 0 ;;
+        h) __help "$PKG_DIR" && return 0 ;;
+        v) __version "$PKG_DIR" && return 0 ;;
+        \?) __usage "$PKG_DIR" && return 1 ;;
+    esac
+done
+shift $((OPTIND -1))
+
+# ==============================
+
+# start initiation
+
+subcommand=$1
+shift 2>/dev/null
+
+case "$subcommand" in
+    
+    test) _fromApi tv ;;
+
+    describe) _get "$@" ;;
+    get) _get "$@" ;;
+
+    edit) _get "$@" ;;
+    launch) _get "$@" ;;
+    remove) _get "$@" ;;
+    
+    
+    get) _get "$@" ;;
+    get) _get "$@" ;;
+
+    dirs) _get_dirs "$@" ;;
+    files) _get_files "$@" ;;
+
+    audiobooks) _get_audiobooks "$@" ;;
+    ebooks) _get_ebooks "$@" ;;
+    movies) _get_movies "$@" ;;
+    tv) _get_tv "$@" ;;
+    xxx) _get_xxx "$@" ;;
+
+    *) _connect "$@" ;;
+esac

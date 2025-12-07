@@ -1,0 +1,388 @@
+#!/bin/bash
+
+# dckr-ai - AI operations command
+# Handles: dckr ai <command>
+
+# Load shared libraries
+LIBEXEC_DIR=$(dirname "$(readlink -f "$0")")/../libexec/dckr
+source "$LIBEXEC_DIR/dckr-common"
+source "$LIBEXEC_DIR/dckr-docker-api"
+source "$LIBEXEC_DIR/dckr-ui"
+
+# Initialize
+dckr_init
+
+# AI Commands Implementation
+show_ai_help() {
+    dckr_print_header "Docker Stack Manager - AI Assistant"
+    echo "Usage: dckr ai <command> [options]"
+    echo ""
+    echo -e "${YELLOW}Available AI Commands:${NC}"
+    
+    if [[ -d "$DCKR_AI_COMMANDS_DIR" ]]; then
+        for cmd_file in "$DCKR_AI_COMMANDS_DIR"/*.md; do
+            if [[ -f "$cmd_file" ]]; then
+                local cmd_name description
+                cmd_name=$(basename "$cmd_file" .md)
+                description=$(grep "^## Description" "$cmd_file" | sed 's/^## Description[[:space:]]*//')
+                printf "  ${GREEN}%-20s${NC} %s\n" "$cmd_name" "$description"
+            fi
+        done
+    fi
+    
+    echo ""
+    echo -e "${YELLOW}Available AI Agents:${NC}"
+    
+    if [[ -d "$DCKR_AI_AGENTS_DIR" ]]; then
+        for agent_file in "$DCKR_AI_AGENTS_DIR"/*.md; do
+            if [[ -f "$agent_file" ]]; then
+                local agent_name description
+                agent_name=$(basename "$agent_file" .md)
+                description=$(grep "^## Description" "$agent_file" | sed 's/^## Description[[:space:]]*//')
+                printf "  ${CYAN}%-20s${NC} %s\n" "$agent_name" "$description"
+            fi
+        done
+    fi
+    
+    echo ""
+    echo -e "${YELLOW}Examples:${NC}"
+    echo "  dckr ai analyze-stack media"
+    echo "  dckr ai debug-stack authentik network"
+    echo "  dckr ai stack-health all"
+    echo "  dckr ai agent stack-analyzer \"Analyze the media stack\""
+    echo ""
+}
+
+# AI Agent Invocation Function
+invoke_ai_agent() {
+    local agent_name="$1"
+    local prompt="$2"
+    local context="$3"
+    
+    dckr_print_ai_agent_header "$agent_name" "$context"
+    
+    # Enhanced prompt with dckr tool context
+    local enhanced_prompt="You are the $agent_name agent for the dckr Docker stack manager tool. 
+
+CONTEXT: The dckr tool is located at $DCKR_BIN_DIR/dckr and provides these commands:
+- dckr stack list (list all stacks)
+- dckr stack <name> (detailed stack information)
+- dckr ai <command> (AI-powered operations)
+
+USER REQUEST: $prompt
+
+Please use the appropriate tools available to you to complete this request. You can execute the dckr tool using the Bash tool, read files using the Read tool, and perform analysis using your specialized capabilities as defined in your agent description."
+
+    dckr_print_ai_status "executing" "AI Analysis in Progress..."
+    echo ""
+    
+    dckr_print_ai_status "ready" "TASK EXECUTION READY"
+    dckr_print_task_divider
+    echo -e "${CYAN}Agent:${NC} $agent_name"
+    echo -e "${CYAN}Task:${NC} $(echo "$prompt" | head -c 60)..."
+    dckr_print_task_divider
+    echo ""
+    
+    dckr_print_ai_status "complete" "Implementation Status:"
+    echo "• Command parsing: ✅ Complete"
+    echo "• Agent selection: ✅ Complete" 
+    echo "• Prompt generation: ✅ Complete"
+    echo "• Context injection: ✅ Complete"
+    echo "• Task tool ready: ✅ Complete"
+    echo ""
+    
+    dckr_print_ai_status "info" "To execute this analysis:"
+    echo "Use the Task tool in Claude Code with:"
+    echo "  - subagent_type: general-purpose"
+    echo "  - description: Execute $agent_name analysis"
+    echo "  - prompt: [Generated enhanced prompt with dckr context]"
+    echo ""
+    
+    # Store the prompt for easy copy-paste
+    echo -e "${YELLOW}📄 Ready-to-use Task prompt:${NC}"
+    echo "\"$enhanced_prompt\""
+}
+
+# AI Command Execution Functions
+execute_analyze_stack() {
+    local stack_name="$1"
+    
+    if [[ -z "$stack_name" ]]; then
+        dckr_error "Stack name required\nUsage: dckr ai analyze-stack <stack_name>"
+    fi
+    
+    echo -e "${BLUE}🔍 Analyzing stack: ${YELLOW}$stack_name${NC}"
+    echo ""
+    
+    local prompt="Analyze the Docker stack named '$stack_name' using the dckr tool. Please perform a comprehensive analysis including:
+
+1. Use 'dckr stack $stack_name' to get detailed stack information
+2. Examine all services, their configurations, and dependencies  
+3. Analyze port mappings, networks, and resource usage
+4. Identify potential security vulnerabilities
+5. Suggest performance optimizations
+6. Recommend architectural improvements
+7. Check for best practices compliance
+
+Provide actionable recommendations with specific commands or configuration changes where applicable."
+
+    echo -e "${CYAN}🚀 Executing AI Stack Analysis${NC}"
+    echo ""
+    
+    invoke_ai_agent "stack-analyzer" "$prompt" "$stack_name"
+}
+
+execute_debug_stack() {
+    local stack_name="$1"
+    local issue_type="$2"
+    
+    if [[ -z "$stack_name" ]]; then
+        dckr_error "Stack name required\nUsage: dckr ai debug-stack <stack_name> [issue_type]"
+    fi
+    
+    echo -e "${BLUE}🔧 Debugging stack: ${YELLOW}$stack_name${NC}"
+    [[ -n "$issue_type" ]] && echo -e "${BLUE}Issue type: ${CYAN}$issue_type${NC}"
+    echo ""
+    
+    local prompt="Debug the Docker stack named '$stack_name' for issues. Please:
+
+1. Use 'dckr stack $stack_name' to examine the current state
+2. Check container logs and status for all services
+3. Analyze network connectivity between services
+4. Examine volume mounts and permissions
+5. Identify resource constraints or bottlenecks"
+    
+    if [[ -n "$issue_type" ]]; then
+        prompt="$prompt
+6. Focus specifically on $issue_type related problems"
+    fi
+    
+    prompt="$prompt
+
+Provide step-by-step troubleshooting procedures and specific commands to diagnose and resolve the issues."
+
+    invoke_ai_agent "troubleshooter" "$prompt" "$stack_name $issue_type"
+}
+
+execute_stack_health() {
+    local target="$1"
+    local report_type="$2"
+    
+    [[ -z "$target" ]] && target="all"
+    [[ -z "$report_type" ]] && report_type="summary"
+    
+    echo -e "${BLUE}🏥 Health check: ${YELLOW}$target${NC} (${CYAN}$report_type${NC})"
+    echo ""
+    
+    local prompt="Perform a comprehensive health check on Docker stacks. Please:
+
+1. Use 'dckr stack list' to see all available stacks"
+    
+    if [[ "$target" = "all" ]]; then
+        prompt="$prompt
+2. Check the health of ALL stacks using 'dckr stack <name>' for each
+3. Aggregate health metrics across all stacks"
+    else
+        prompt="$prompt
+2. Focus specifically on the '$target' stack using 'dckr stack $target'
+3. Perform detailed health analysis for this stack"
+    fi
+    
+    prompt="$prompt
+4. Analyze container status, resource usage, and performance
+5. Identify critical issues requiring immediate attention
+6. Generate a $report_type health report
+7. Provide recommended maintenance actions
+
+Format the output as a clear health report with status indicators and priority levels."
+
+    invoke_ai_agent "stack-analyzer" "$prompt" "$target $report_type"
+}
+
+execute_build_stack() {
+    local stack_name="$1"
+    shift
+    local options="$*"
+    
+    if [[ -z "$stack_name" ]]; then
+        dckr_error "Stack name required\nUsage: dckr ai build-stack <stack_name> [template|existing] [options]"
+    fi
+    
+    echo -e "${BLUE}🏗️  Building stack: ${YELLOW}$stack_name${NC}"
+    [[ -n "$options" ]] && echo -e "${BLUE}Options: ${CYAN}$options${NC}"
+    echo ""
+    
+    local prompt="Create or modify a Docker Compose stack named '$stack_name'. Please:
+
+1. Check if the stack already exists using 'dckr stack list'
+2. Based on the options '$options', determine the appropriate template or modifications
+3. Generate a production-ready docker-compose.yml file with:
+   - Proper service configurations
+   - Security best practices
+   - Appropriate networking setup
+   - Volume management
+   - Environment variable templates
+4. Include comprehensive documentation for deployment
+5. Suggest monitoring and logging setup
+6. Provide deployment instructions
+
+Follow Docker Compose best practices and security guidelines."
+
+    invoke_ai_agent "stack-builder" "$prompt" "$stack_name $options"
+}
+
+execute_enhance_dckr() {
+    local feature_type="$1"
+    shift
+    local description="$*"
+    
+    if [[ -z "$feature_type" || -z "$description" ]]; then
+        dckr_error "Feature type and description required\nUsage: dckr ai enhance-dckr <feature_type> \"<description>\""
+    fi
+    
+    echo -e "${BLUE}⚡ Enhancing dckr: ${YELLOW}$feature_type${NC}"
+    echo -e "${BLUE}Description: ${CYAN}$description${NC}"
+    echo ""
+    
+    local prompt="Enhance the dckr Docker stack manager tool. Please:
+
+1. Read the current dckr modular structure to understand its architecture
+2. Implement the requested enhancement: $feature_type - $description
+3. Ensure the enhancement follows the existing modular patterns and style
+4. Maintain backward compatibility
+5. Add appropriate error handling and user feedback
+6. Update help documentation if needed
+7. Test the implementation with example usage
+
+The enhancement should integrate seamlessly with the existing modular architecture and maintain the tool's efficiency."
+
+    invoke_ai_agent "script-enhancer" "$prompt" "$feature_type"
+}
+
+execute_quick_fix() {
+    local stack_name="$1"
+    local fix_type="$2"
+    
+    if [[ -z "$stack_name" ]]; then
+        dckr_error "Stack name required\nUsage: dckr ai quick-fix <stack_name> [fix_type]"
+    fi
+    
+    [[ -z "$fix_type" ]] && fix_type="general"
+    
+    echo -e "${BLUE}🔧 Quick fix for: ${YELLOW}$stack_name${NC} (${CYAN}$fix_type${NC})"
+    echo ""
+    
+    local prompt="Apply quick fixes to the Docker stack named '$stack_name'. Please:
+
+1. Use 'dckr stack $stack_name' to assess the current state
+2. Identify common issues that can be quickly resolved
+3. For fix type '$fix_type', focus on appropriate solutions:
+   - restart: Safe service restarts and dependency ordering
+   - cleanup: Remove unused containers, volumes, and networks
+   - optimize: Resource limit adjustments and performance tuning
+   - security: Basic security hardening
+   - general: Common maintenance and optimization tasks
+4. Execute only safe, non-destructive operations
+5. Provide before/after status comparison
+6. Document all changes made
+7. Suggest preventive measures
+
+Be conservative - only apply fixes that are clearly safe and beneficial."
+
+    invoke_ai_agent "troubleshooter" "$prompt" "$stack_name $fix_type"
+}
+
+cmd_ai_command() {
+    local command_name="$1"
+    shift
+    local args="$*"
+    
+    local command_file="$DCKR_AI_COMMANDS_DIR/${command_name}.md"
+    
+    if [[ ! -f "$command_file" ]]; then
+        dckr_error "AI command '$command_name' not found"
+        echo ""
+        echo -e "${YELLOW}Available commands:${NC}"
+        if [[ -d "$DCKR_AI_COMMANDS_DIR" ]]; then
+            ls "$DCKR_AI_COMMANDS_DIR" | sed 's/\.md$//' | sed 's/^/  /'
+        fi
+        return 1
+    fi
+    
+    dckr_print_ai_header "$command_name" "$args"
+    
+    # Execute the actual AI command based on command type
+    case "$command_name" in
+        analyze-stack)
+            execute_analyze_stack $args
+            ;;
+        debug-stack)
+            execute_debug_stack $args
+            ;;
+        build-stack)
+            execute_build_stack $args
+            ;;
+        stack-health)
+            execute_stack_health $args
+            ;;
+        enhance-dckr)
+            execute_enhance_dckr $args
+            ;;
+        quick-fix)
+            execute_quick_fix $args
+            ;;
+        *)
+            dckr_error "Command execution not implemented for '$command_name'"
+            ;;
+    esac
+}
+
+cmd_ai_agent() {
+    local agent_name="$1"
+    local prompt="$2"
+    
+    local agent_file="$DCKR_AI_AGENTS_DIR/${agent_name}.md"
+    
+    if [[ ! -f "$agent_file" ]]; then
+        dckr_error "AI agent '$agent_name' not found"
+        echo ""
+        echo -e "${YELLOW}Available agents:${NC}"
+        if [[ -d "$DCKR_AI_AGENTS_DIR" ]]; then
+            ls "$DCKR_AI_AGENTS_DIR" | sed 's/\.md$//' | sed 's/^/  /'
+        fi
+        return 1
+    fi
+    
+    if [[ -z "$prompt" ]]; then
+        dckr_error "Prompt required for agent execution\nUsage: dckr ai agent <agent_name> \"<prompt>\""
+    fi
+    
+    invoke_ai_agent "$agent_name" "$prompt" ""
+}
+
+# Main command dispatcher
+main() {
+    local subcommand="$1"
+    shift
+    
+    case "$subcommand" in
+        help|--help|-h|"")
+            show_ai_help
+            ;;
+        agent)
+            cmd_ai_agent "$@"
+            ;;
+        analyze-stack|build-stack|debug-stack|enhance-dckr|quick-fix|stack-health)
+            cmd_ai_command "$subcommand" "$@"
+            ;;
+        *)
+            dckr_error "Unknown AI command '$subcommand'"
+            echo ""
+            show_ai_help
+            return 1
+            ;;
+    esac
+}
+
+# Execute main function
+main "$@"

@@ -1,0 +1,49 @@
+#!/usr/bin/env zsh
+
+# Post-install script for bsp-daemon
+# Automatically sets up the service and initial configuration
+
+name=$(basename $0)
+
+# ------------------------------
+
+source $(which _log)
+
+# ------------------------------
+
+log-info "configuring bsp-daemon post-install"
+
+# Create systemd user service directory if it doesn't exist
+mkdir -p ~/.config/systemd/user
+
+# Enable and start the systemd service
+if systemctl --user link ~/.dotfiles/bsp-daemon/.local/share/systemd/user/bsp-service.service &>/dev/null; then
+    log-info "linked bsp-service systemd unit"
+    
+    if systemctl --user enable bsp-service &>/dev/null; then
+        log-info "enabled bsp-service to start on login"
+    else
+        log-warn "failed to enable bsp-service"
+    fi
+else
+    log-warn "failed to link systemd service"
+fi
+
+# Initialize configuration directory
+if [[ ! -d ~/.config/bsp-daemon ]]; then
+    ~/.dotfiles/bsp-daemon/.local/bin/bspc-manager init &>/dev/null
+    log-info "initialized bsp-daemon configuration"
+fi
+
+# Start service if bspwm is running
+if pgrep -x bspwm >/dev/null 2>&1; then
+    if ! pgrep -x bsp-service >/dev/null 2>&1; then
+        ~/.dotfiles/bsp-daemon/.local/bin/bspc-service &>/dev/null &
+        log-info "started bsp-service (bspwm detected)"
+    else
+        log-info "bsp-service already running"
+    fi
+fi
+
+log-info "bsp-daemon installation complete"
+log-info "use 'bspc-request help' to get started"

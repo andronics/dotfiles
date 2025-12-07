@@ -1,0 +1,6 @@
+# Changing "ls" to "eza" (mordern exa replacement)
+alias ls='eza --icons --color=always --group-directories-first'
+alias ll='eza -alF --icons --color=always --group-directories-first'
+alias la='eza -a --icons --color=always --group-directories-first'
+alias l='eza -F --icons --color=always --group-directories-first'
+alias l.='eza -a  | grep -e "^\."'

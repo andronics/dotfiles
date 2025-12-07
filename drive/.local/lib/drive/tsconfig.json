@@ -1,0 +1,8 @@
+{
+    "compilerOptions": {
+        "module": "commonjs",         // or "esnext" depending on your setup
+        "esModuleInterop": true,      // Ensures proper imports
+        "resolveJsonModule": true,    // If you are loading JSON
+        "moduleResolution": "node"    // Ensures correct resolution of modules
+    }
+}

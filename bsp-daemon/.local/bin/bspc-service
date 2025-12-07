@@ -1,0 +1,570 @@
+#!/bin/bash
+
+# bspc-service: Proactive bspwm management daemon
+# Monitors bspwm events and automatically manages layouts and process assignments
+
+set -euo pipefail
+
+# Configuration
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/bsp-daemon"
+SOCKET_FILE="$CONFIG_DIR/service.sock"
+PID_FILE="$CONFIG_DIR/service.pid"
+LOG_FILE="$CONFIG_DIR/service.log"
+STATE_FILE="$CONFIG_DIR/service.state"
+RULES_FILE="$CONFIG_DIR/rules.conf"
+
+# Service state
+RUNNING=true
+declare -A DESKTOP_LAYOUTS
+declare -A NODE_HISTORY
+declare -A PROCESS_RULES
+declare -A AUTO_LAYOUTS
+
+# Colors for logging
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m'
+
+# Enhanced logging with timestamps
+log() {
+    local level="$1"
+    shift
+    local message="$*"
+    local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+    echo "[$timestamp] [$level] $message" >> "$LOG_FILE"
+    if [[ "$level" == "ERROR" ]]; then
+        echo -e "${RED}[$timestamp] [$level] $message${NC}" >&2
+    elif [[ "$level" == "WARN" ]]; then
+        echo -e "${YELLOW}[$timestamp] [$level] $message${NC}" >&2
+    elif [[ "$level" == "INFO" ]] && [[ "${VERBOSE:-0}" == "1" ]]; then
+        echo -e "${BLUE}[$timestamp] [$level] $message${NC}"
+    fi
+}
+
+# Signal handlers
+cleanup() {
+    log "INFO" "Service shutting down..."
+    RUNNING=false
+    rm -f "$SOCKET_FILE" "$PID_FILE"
+    save_state
+    exit 0
+}
+
+reload_config() {
+    log "INFO" "Reloading configuration..."
+    load_rules
+    load_state
+}
+
+trap cleanup SIGTERM SIGINT
+trap reload_config SIGHUP
+
+# Initialize service
+init_service() {
+    mkdir -p "$CONFIG_DIR"
+    touch "$LOG_FILE" "$RULES_FILE"
+    
+    # Check if already running
+    if [[ -f "$PID_FILE" ]]; then
+        local old_pid=$(cat "$PID_FILE")
+        if kill -0 "$old_pid" 2>/dev/null; then
+            log "ERROR" "Service already running with PID $old_pid"
+            exit 1
+        else
+            rm -f "$PID_FILE"
+        fi
+    fi
+    
+    # Create PID file
+    echo $$ > "$PID_FILE"
+    log "INFO" "Service started with PID $$"
+    
+    # Remove old socket
+    rm -f "$SOCKET_FILE"
+}
+
+# Load rules from configuration
+load_rules() {
+    PROCESS_RULES=()
+    if [[ -f "$RULES_FILE" ]]; then
+        while IFS= read -r line; do
+            [[ "$line" =~ ^[[:space:]]*$ ]] && continue
+            [[ "$line" =~ ^# ]] && continue
+            
+            local class=$(echo "$line" | cut -d' ' -f1)
+            local options=$(echo "$line" | cut -d' ' -f2-)
+            
+            PROCESS_RULES["$class"]="$options"
+            log "DEBUG" "Loaded rule: $class -> $options"
+        done < "$RULES_FILE"
+    fi
+}
+
+# Save service state
+save_state() {
+    cat > "$STATE_FILE" << EOF
+# Service state - auto-generated
+$(declare -p DESKTOP_LAYOUTS 2>/dev/null || echo "declare -A DESKTOP_LAYOUTS=()")
+$(declare -p NODE_HISTORY 2>/dev/null || echo "declare -A NODE_HISTORY=()")  
+$(declare -p AUTO_LAYOUTS 2>/dev/null || echo "declare -A AUTO_LAYOUTS=()")
+EOF
+}
+
+# Load service state
+load_state() {
+    if [[ -f "$STATE_FILE" ]]; then
+        source "$STATE_FILE" 2>/dev/null || log "WARN" "Failed to load state file"
+    fi
+}
+
+# Get window class
+get_window_class() {
+    local node_id="$1"
+    local window_id=$(bspc query -N -n "$node_id")
+    if [[ -n "$window_id" ]]; then
+        xprop -id "$window_id" WM_CLASS 2>/dev/null | cut -d'"' -f4 || echo "unknown"
+    else
+        echo "unknown"
+    fi
+}
+
+# Auto-assign process based on rules
+auto_assign_process() {
+    local node_id="$1"
+    local class=$(get_window_class "$node_id")
+    
+    if [[ -n "${PROCESS_RULES[$class]:-}" ]]; then
+        local options="${PROCESS_RULES[$class]}"
+        log "INFO" "Auto-assigning $class with options: $options"
+        
+        # Parse options and apply them
+        if [[ "$options" =~ desktop=([^ ]+) ]]; then
+            local desktop="${BASH_REMATCH[1]}"
+            bspc node "$node_id" -d "$desktop"
+            log "INFO" "Moved $class to desktop $desktop"
+        fi
+        
+        if [[ "$options" =~ state=([^ ]+) ]]; then
+            local state="${BASH_REMATCH[1]}"
+            bspc node "$node_id" -t "$state"
+            log "INFO" "Set $class state to $state"
+        fi
+        
+        if [[ "$options" =~ monitor=([^ ]+) ]]; then
+            local monitor="${BASH_REMATCH[1]}"
+            bspc node "$node_id" -m "$monitor"
+            log "INFO" "Moved $class to monitor $monitor"
+        fi
+    fi
+}
+
+# Smart layout management
+manage_desktop_layout() {
+    local desktop_id="$1"
+    local desktop_name=$(bspc query -D -d "$desktop_id" --names)
+    local node_count=$(bspc query -N -d "$desktop_id" | wc -l)
+    
+    # Auto-layout based on node count and desktop type
+    if [[ -n "${AUTO_LAYOUTS[$desktop_name]:-}" ]]; then
+        local layout_type="${AUTO_LAYOUTS[$desktop_name]}"
+        apply_auto_layout "$desktop_id" "$layout_type" "$node_count"
+    else
+        # Default smart layout
+        case "$node_count" in
+            1)
+                # Single window - no action needed
+                ;;
+            2)
+                # Two windows - create balanced split
+                auto_balance_desktop "$desktop_id"
+                ;;
+            3)
+                # Three windows - try triple layout if enabled
+                if [[ "$desktop_name" =~ ^(dev|code|work)$ ]]; then
+                    apply_triple_layout "$desktop_id"
+                fi
+                ;;
+            *)
+                # Many windows - balance periodically
+                if (( node_count % 4 == 0 )); then
+                    auto_balance_desktop "$desktop_id"
+                fi
+                ;;
+        esac
+    fi
+    
+    DESKTOP_LAYOUTS["$desktop_name"]="$node_count"
+}
+
+# Apply automatic layout
+apply_auto_layout() {
+    local desktop_id="$1"
+    local layout_type="$2" 
+    local node_count="$3"
+    
+    case "$layout_type" in
+        "dev-triple")
+            if (( node_count == 3 )); then
+                apply_triple_layout "$desktop_id"
+            fi
+            ;;
+        "balanced")
+            auto_balance_desktop "$desktop_id"
+            ;;
+        "master-stack")
+            apply_master_stack "$desktop_id"
+            ;;
+    esac
+}
+
+# Auto-balance desktop
+auto_balance_desktop() {
+    local desktop_id="$1"
+    bspc node @"$desktop_id":/ -B
+    log "INFO" "Auto-balanced desktop $desktop_id"
+}
+
+# Apply triple column layout
+apply_triple_layout() {
+    local desktop_id="$1"
+    local nodes=($(bspc query -N -d "$desktop_id"))
+    
+    if (( ${#nodes[@]} >= 3 )); then
+        # Create triple layout structure
+        bspc node "${nodes[0]}" -p east -o 0.33
+        bspc node "${nodes[1]}" -n "${nodes[0]}"
+        bspc node "${nodes[0]}" -p east -o 0.5  
+        bspc node "${nodes[2]}" -n "${nodes[0]}"
+        log "INFO" "Applied triple layout to desktop $desktop_id"
+    fi
+}
+
+# Apply master-stack layout
+apply_master_stack() {
+    local desktop_id="$1"
+    local nodes=($(bspc query -N -d "$desktop_id"))
+    
+    if (( ${#nodes[@]} >= 2 )); then
+        # First window takes 60% (master), others stack on right
+        bspc node "${nodes[0]}" -p east -o 0.6
+        for (( i=1; i<${#nodes[@]}; i++ )); do
+            bspc node "${nodes[i]}" -n "${nodes[0]}"
+        done
+        log "INFO" "Applied master-stack layout to desktop $desktop_id"
+    fi
+}
+
+# Process bspwm events
+process_event() {
+    local event="$1"
+    shift
+    local args=("$@")
+    
+    case "$event" in
+        "node_add")
+            local monitor_id="${args[0]}"
+            local desktop_id="${args[1]}" 
+            local ip_id="${args[2]}"
+            local node_id="${args[3]}"
+            
+            log "INFO" "Node added: $node_id to desktop $desktop_id"
+            
+            # Auto-assign process
+            auto_assign_process "$node_id"
+            
+            # Update layout
+            manage_desktop_layout "$desktop_id"
+            ;;
+            
+        "node_remove")
+            local monitor_id="${args[0]}"
+            local desktop_id="${args[1]}"
+            local node_id="${args[2]}"
+            
+            log "INFO" "Node removed: $node_id from desktop $desktop_id"
+            
+            # Update layout after removal
+            manage_desktop_layout "$desktop_id"
+            ;;
+            
+        "node_swap"|"node_transfer")
+            local src_desktop="${args[1]}"
+            local dst_desktop="${args[4]}"
+            
+            log "INFO" "Node $event: updating layouts"
+            
+            manage_desktop_layout "$src_desktop"
+            manage_desktop_layout "$dst_desktop"
+            ;;
+            
+        "desktop_add")
+            local monitor_id="${args[0]}"
+            local desktop_id="${args[1]}"
+            local desktop_name="${args[2]}"
+            
+            log "INFO" "Desktop added: $desktop_name"
+            
+            # Set up default layout for known desktop types
+            case "$desktop_name" in
+                dev|code|work)
+                    AUTO_LAYOUTS["$desktop_name"]="dev-triple"
+                    ;;
+                chat|comm)
+                    AUTO_LAYOUTS["$desktop_name"]="balanced"
+                    ;;
+                web|browser)
+                    AUTO_LAYOUTS["$desktop_name"]="master-stack"
+                    ;;
+            esac
+            ;;
+            
+        "desktop_focus")
+            local monitor_id="${args[0]}"
+            local desktop_id="${args[1]}"
+            
+            # Could implement focus-based optimizations here
+            ;;
+            
+        "monitor_add")
+            local monitor_id="${args[0]}"
+            local monitor_name="${args[1]}"
+            
+            log "INFO" "Monitor added: $monitor_name"
+            ;;
+    esac
+}
+
+# Event monitoring loop
+monitor_events() {
+    log "INFO" "Starting event monitoring..."
+    
+    bspc subscribe all | while IFS= read -r line; do
+        if [[ "$RUNNING" != "true" ]]; then
+            break
+        fi
+        
+        # Parse event line
+        IFS=' ' read -ra event_parts <<< "$line"
+        local event="${event_parts[0]}"
+        local args=("${event_parts[@]:1}")
+        
+        log "DEBUG" "Event: $event ${args[*]}"
+        process_event "$event" "${args[@]}"
+        
+        # Periodically save state
+        if (( RANDOM % 100 == 0 )); then
+            save_state
+        fi
+    done &
+    
+    local monitor_pid=$!
+    log "INFO" "Event monitor started with PID $monitor_pid"
+    
+    # Wait for monitoring to finish
+    wait $monitor_pid
+}
+
+# IPC server for client requests
+start_ipc_server() {
+    # Create named pipe for IPC
+    mkfifo "$SOCKET_FILE" 2>/dev/null || true
+    
+    log "INFO" "Starting IPC server on $SOCKET_FILE"
+    
+    while [[ "$RUNNING" == "true" ]]; do
+        if read -r request < "$SOCKET_FILE" 2>/dev/null; then
+            log "DEBUG" "IPC request: $request"
+            handle_ipc_request "$request"
+        fi
+    done &
+    
+    local ipc_pid=$!
+    log "INFO" "IPC server started with PID $ipc_pid"
+}
+
+# Handle IPC requests from clients
+handle_ipc_request() {
+    local request="$1"
+    local response=""
+    
+    case "$request" in
+        "status")
+            response="Service running, PID $$, monitoring events"
+            ;;
+        "reload")
+            reload_config
+            response="Configuration reloaded"
+            ;;
+        "stats")
+            local desktop_count=${#DESKTOP_LAYOUTS[@]}
+            local rules_count=${#PROCESS_RULES[@]}
+            response="Desktops: $desktop_count, Rules: $rules_count"
+            ;;
+        "enable_auto_layout "*)
+            local desktop=$(echo "$request" | cut -d' ' -f2)
+            local layout_type=$(echo "$request" | cut -d' ' -f3)
+            AUTO_LAYOUTS["$desktop"]="$layout_type"
+            response="Enabled $layout_type auto-layout for desktop $desktop"
+            ;;
+        "disable_auto_layout "*)
+            local desktop=$(echo "$request" | cut -d' ' -f2)
+            unset AUTO_LAYOUTS["$desktop"]
+            response="Disabled auto-layout for desktop $desktop"
+            ;;
+        *)
+            response="Unknown request: $request"
+            ;;
+    esac
+    
+    # Send response back (simplified - in real implementation might use different mechanism)
+    echo "$response" >> "$LOG_FILE"
+}
+
+# Show help
+show_help() {
+    cat << 'EOF'
+bspc-service - Proactive bspwm management daemon
+
+USAGE:
+    bspc-service [options] <command>
+
+COMMANDS:
+    start           Start the service daemon
+    stop            Stop the service daemon
+    restart         Restart the service daemon
+    status          Show service status
+    reload          Reload configuration
+
+OPTIONS:
+    -v, --verbose   Enable verbose logging
+    -f, --foreground Run in foreground (don't daemonize)
+    -h, --help      Show this help
+
+FEATURES:
+    - Automatic process assignment based on rules
+    - Smart layout management based on window count
+    - Real-time bspwm event monitoring
+    - IPC interface for client communication
+    - Persistent state management
+
+CONFIGURATION:
+    Service reads configuration from:
+    - ~/.config/bspc-manager/rules.conf
+    - ~/.config/bspc-manager/service.state
+
+LOGS:
+    Service logs to ~/.config/bspc-manager/service.log
+EOF
+}
+
+# Main service logic
+main() {
+    local command="start"
+    local foreground=false
+    
+    # Parse arguments
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -v|--verbose)
+                export VERBOSE=1
+                shift
+                ;;
+            -f|--foreground)
+                foreground=true
+                shift
+                ;;
+            -h|--help)
+                show_help
+                exit 0
+                ;;
+            start|stop|restart|status|reload)
+                command="$1"
+                shift
+                ;;
+            *)
+                echo "Unknown option: $1" >&2
+                exit 1
+                ;;
+        esac
+    done
+    
+    case "$command" in
+        start)
+            if [[ "$foreground" == "true" ]]; then
+                init_service
+                load_rules
+                load_state
+                start_ipc_server
+                monitor_events
+            else
+                # Daemonize
+                (
+                    init_service
+                    load_rules  
+                    load_state
+                    start_ipc_server
+                    monitor_events
+                ) &
+                disown
+                echo "Service started in background"
+            fi
+            ;;
+            
+        stop)
+            if [[ -f "$PID_FILE" ]]; then
+                local pid=$(cat "$PID_FILE")
+                if kill "$pid" 2>/dev/null; then
+                    echo "Service stopped"
+                else
+                    echo "Failed to stop service or service not running"
+                    exit 1
+                fi
+            else
+                echo "Service not running"
+                exit 1
+            fi
+            ;;
+            
+        restart)
+            $0 stop
+            sleep 1
+            $0 start
+            ;;
+            
+        status)
+            if [[ -f "$PID_FILE" ]]; then
+                local pid=$(cat "$PID_FILE")
+                if kill -0 "$pid" 2>/dev/null; then
+                    echo "Service running with PID $pid"
+                else
+                    echo "PID file exists but service not running"
+                    exit 1
+                fi
+            else
+                echo "Service not running"
+                exit 1
+            fi
+            ;;
+            
+        reload)
+            if [[ -f "$PID_FILE" ]]; then
+                local pid=$(cat "$PID_FILE")
+                if kill -HUP "$pid" 2>/dev/null; then
+                    echo "Configuration reloaded"
+                else
+                    echo "Failed to reload or service not running"
+                    exit 1
+                fi
+            else
+                echo "Service not running"
+                exit 1
+            fi
+            ;;
+    esac
+}
+
+# Run main function
+main "$@"

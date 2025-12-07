@@ -1,0 +1,51 @@
+#!/usr/bin/expect -f
+
+# Bluetooth device scanner using bluetoothctl
+# Usage: ./bt_scan.exp [scan_time]
+
+set timeout 5
+set scan_time [lindex $argv 0]
+if {$scan_time eq ""} { set scan_time 10 }
+
+# Launch bluetoothctl
+spawn bluetoothctl
+
+# Wait for initial prompt
+expect "Agent registered"
+expect "# "
+
+# Initialize controller
+send "power on\r"
+expect "Changing power on succeeded" { sleep 1 }
+expect "# "
+
+# Start scanning
+send "scan on\r"
+expect "Discovery started"
+puts "\nScanning for $scan_time seconds..."
+expect "# "
+
+# Wait for scan duration
+sleep $scan_time
+
+# Stop scanning and get devices
+send "scan off\r"
+expect "Discovery stopped"
+expect "# "
+send "devices\r"
+expect "# "
+
+# Capture and display devices
+set devices [split $expect_out(buffer) "\n"]
+puts "\nDiscovered devices:"
+
+foreach line $devices {
+    if {[regexp {Device ((?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}) (.*)} $line -> mac name]} {
+        if {$name eq ""} { set name "Unknown" }
+        puts "  - $name ($mac)"
+    }
+}
+
+# Exit cleanly
+send "quit\r"
+expect eof

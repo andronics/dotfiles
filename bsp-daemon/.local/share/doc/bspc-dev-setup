@@ -1,0 +1,53 @@
+#!/bin/bash
+
+# Example development workspace setup using bspc-manager
+# This script demonstrates creating fixed layouts and assigning processes
+
+BSPC_MANAGER="$(dirname "$(dirname "$(dirname "$(realpath "${BASH_SOURCE[0]}")")")")/.local/bin/bspc-manager"
+
+echo "Setting up development workspace..."
+
+# Initialize if needed
+$BSPC_MANAGER init
+
+# Create development desktops
+echo "Creating desktops..."
+$BSPC_MANAGER create-desktop dev
+$BSPC_MANAGER create-desktop web  
+$BSPC_MANAGER create-desktop chat
+$BSPC_MANAGER create-desktop media
+
+# Set up dev desktop with triple column layout
+echo "Setting up development layout..."
+$BSPC_MANAGER focus-desktop dev
+$BSPC_MANAGER template triple-column dev
+
+# Set up web desktop with vertical split
+echo "Setting up web layout..."
+$BSPC_MANAGER focus-desktop web
+$BSPC_MANAGER template split-vertical web
+
+# Assign applications to specific desktops
+echo "Setting up application rules..."
+$BSPC_MANAGER assign-desktop code dev
+$BSPC_MANAGER assign-desktop firefox web
+$BSPC_MANAGER assign-desktop discord chat
+$BSPC_MANAGER assign-desktop spotify media
+
+# Set specific positioning for some apps
+echo "Setting up specific positioning..."
+$BSPC_MANAGER assign-position terminal focused dev west 0.3
+$BSPC_MANAGER assign-position htop focused system east 0.7
+
+# Load any existing rules
+$BSPC_MANAGER load-rules
+
+echo "Development workspace setup complete!"
+echo "Use 'bspc-manager help' for more commands"
+
+# Show current layouts
+echo -e "\nAvailable layouts:"
+$BSPC_MANAGER list-layouts
+
+echo -e "\nActive rules:"
+$BSPC_MANAGER list-rules

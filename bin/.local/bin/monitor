@@ -1,0 +1,137 @@
+#!/usr/bin/env zsh
+
+name=$(basename $0)
+
+# ------------------------------
+
+# https://wiki.archlinux.org/title/Backlight#External_monitors
+# require the ddcci-driver-linux-dkms package
+# https://bbs.archlinux.org/viewtopic.php?id=289989
+
+# ------------------------------
+
+source $(which _jq)
+source $(which _log)
+
+# ------------------------------
+
+monitor_cache_dir="${XDG_CACHE_HOME}/${name}"
+monitor_config_dir="${XDG_CONFIG_HOME}/${name}"
+monitor_data_dir="${XDG_DATA_HOME}/${name}"
+
+# ------------------------------
+
+monitor_name="$(xrandr | grep " connected" | awk '{ print $1 }')"  
+
+# ------------------------------
+
+source "$(which _args)"
+
+# ------------------------------
+
+_monitor() {
+
+    [[ $# -eq 0 ]] && {
+        log-error "command not specified"
+        return 1
+    }
+
+    _command=$1
+    shift 2>/dev/null
+
+    case "${_command}" in
+
+        brightness-get) _monitor_brightness_get "$@" ;;
+        brightness-decrease) _monitor_brightness_decrease "$@" ;;
+        brightness-increase) _monitor_brightness_increase "$@" ;;
+        brightness-reset) _monitor_brightness_reset "$@" ;;
+
+        *) log-warning "command '%s' unsupported" "${_command}" ;;
+
+    esac
+
+
+}
+
+# ------------------------------
+
+_monitor_brightness_get() {
+
+    _program='
+        /^([a-zA-Z0-9-]+) connected/ {
+            if ($1 == monitor) {
+                found=1
+            } else {
+                found=0
+            }
+        }
+        /Brightness:/ {
+            if (found == 1) {
+                print $2
+                exit
+            }
+        }
+    '
+
+    xrandr --verbose | awk -e "${_program}" -v monitor="${monitor_name}"
+
+}
+
+_monitor_brightness_decrease() {
+
+    xrandr --output "${monitor_name}" --brightness "$CurrBright"
+    
+}
+
+_monitor_brightness_increase() {
+    echo here
+}
+
+_monitor_brightness_reset() {
+    echo here
+}
+
+# ------------------------------
+
+_monitor "$@"
+
+
+# STEP=5              # Step Up/Down brightnes by: 5 = ".05", 10 = ".10", etc.
+# MAX=155             # Max Brightness 999 = "9.99"
+
+# # ------------------------------
+
+# CurrBright=$( xrandr --verbose --current | grep ^"${monitor_name}" -A5 | tail -n1 )
+# CurrBright="${CurrBright##* }"  # Get brightness level with decimal place
+
+# Left=${CurrBright%%"."*}
+# Right=${CurrBright#*"."}
+
+# # ------------------------------
+
+# MathBright="0"
+
+# [[ "$Left" != 0 && "$STEP" -lt 10 ]] && STEP=10     # > 1.0, only .1 works
+# [[ "$Left" != 0 ]] && MathBright="$Left"00          # 1.0 becomes "100"
+# [[ "${#Right}" -eq 1 ]] && Right="$Right"0          # 0.5 becomes "50"
+
+# MathBright=$(( MathBright + Right ))
+
+# # ------------------------------
+
+
+
+# [[ "${MathBright:0:1}" == "-" ]] && MathBright=0
+# [[ "$MathBright" -gt $MAX  ]] && MathBright=$MAX
+
+# if [[ "${#MathBright}" -eq 3 ]] ; then
+#     MathBright="$MathBright"000
+#     CurrBright="${MathBright:0:1}.${MathBright:1:2}"
+# else
+#     MathBright="$MathBright"000
+#     CurrBright=".${MathBright:0:2}"
+# fi
+
+# # ------------------------------
+
+# xrandr --output "${monitor_name}" --brightness "$CurrBright"

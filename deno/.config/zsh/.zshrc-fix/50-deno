@@ -1,0 +1,7 @@
+DENO_AUTH_TOKENS=""
+# DENO_CERT=
+DENO_DIR=             
+DENO_INSTALL_ROOT=     
+DENO_NO_PACKAGE_JSON=
+DENO_REPL_HISTORY="${HOME}/.cache/deno/repl"
+

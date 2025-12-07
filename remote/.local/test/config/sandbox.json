@@ -1,0 +1,5 @@
+{
+  "enabled": false,
+  "description": "Sandbox mode for testing",
+  "test_mode": true
+}

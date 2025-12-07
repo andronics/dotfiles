@@ -1,9 +1,24 @@
-# node 
+# node
 node_modules
 
 # environs
 .env
 
-# logs / traces 
+# logs / traces
 *.log
 *.traces
+themes/.local/share/icons/hicolor/icon-theme.cache
+
+# credentials and secrets
+**/credentials.json
+**/tokens.json
+**/**/hosts.yml
+drive/.config/drive/config.json
+remote/.config/remote/config.json
+pastebin/.config/pastebin/config.json
+mambembe/.config/mambembe/tokens.json
+
+# allow template files
+!**/*.tmpl
+!**/*.example
+!**/test/config/*.json

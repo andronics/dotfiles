@@ -56,13 +56,13 @@ XF86AudioPlay
 #
 
 # desktop - previous layout
-control + Down
-  bspc desktop -l prev
+# control + Down
+#   bspc desktop -l prev
 
 
 # desktop - hide / unhide
 control + Escape 
-  { bspc-hide && audio mute, bspc-unhide && audio unmute }
+  { bsp-shroud cover && audio mute, bsp-shroud reveal && audio unmute }
 
 # desktop - focus on previous
 control + Left
@@ -81,9 +81,9 @@ control + Up
 control + n
   bspc node -d $(bspc query -D -d "next") --follow
 
-# desktop - remove
-control + r
-  bspc desktop -r
+# # desktop - remove
+# control + r
+#   bspc desktop -r
 
 # desktop - send node to previous
 control + p
@@ -118,8 +118,8 @@ super + F3
   ${HOME}/.local/bin/vpn
 
 # function - wifi
-super + F4
-  ${HOME}/.local/bin/wifi
+super + F4 + {,alt,shift}
+  ${HOME}/.local/bin/wifi {connect,disconnect}
 
 # function - search
 super + F5
@@ -127,7 +127,7 @@ super + F5
 
 # function - fullscreen
 super + F11
-  ${HOME}/.local/bin/bspc-fullscreen
+  ${HOME}/.local/bin/bsp-fullscreen
 
 #
 # Launchers
@@ -149,13 +149,14 @@ super + space + shift
 # Node
 #
 
-# # node - focus  selection
+# node - focus  selection
 super + alt + {Up, Down, Left, Right}
   bspc node -f { north, south, west, east }
-
+	
 # node - move floating window
 super + shift + {Up, Down, Left, Right}
-  xdo move { -y -20, -y +20, -x -20, -x +20 }
+  xdotool getactivewindow windowmove --relative -- { 0 -200, 0 200, -20 0, 20 0 }
+
 
 # node - balance
 super + b + {_, shift}
@@ -174,28 +175,28 @@ super + h + {_,shift}
   { bspc node --flag hidden=on, bspc node any.hidden.local --flag hidden=off}
 
 # node - locked
-super + l + {_,shift}
-  bspc node --flag locked={on,off}
+super + l
+  bspc node --flag locked
 
 # node - marked
-super + m + {_,shift}
-  bspc node --flag marked={on,off}
+super + m
+  bspc node --flag marked
 
 # node - yank to preselect
 super + n
 	bspc node newest.marked.local -n newest.!automatic.local
 
 # node - private
-super + p + {_,shift}
-  bspc node --flag private={on,off}
+super + p
+  bspc node --flag private
 
 # node - quit
 super + q + {_,shift}
   bspc node --{close,kill}
 
 # node - sticky
-super + s + {_,shift}
-  bspc node --flag sticky={on,off}
+super + s
+  bspc node --flag sticky
 
 # node - tiled / pseudo_tiled
 super + t + {_, shift}
@@ -203,7 +204,7 @@ super + t + {_, shift}
 
 # node - swap with marked
 super + x
-  bspc node -s $(bspc query -N -n .marked) && bspc node -g marked
+  bspc node -s $(bspc query -N -n .marked)
 
 #
 # Preselect
@@ -239,11 +240,12 @@ super + c
 
 # terminal - default
 super + Return
-  ${HOME}/.local/bin/terminal drop scratch
+  $TERMINAL
 
 # terminal
 super + Return + alt
-  $TERMINAL
+  ${HOME}/.local/bin/terminal drop scratch
+  
 
 # terminal - draw
 super + Return + shift
@@ -252,7 +254,6 @@ super + Return + shift
 #
 # Tree
 #
-
 
 # tree - flip vertical
 super + v + {_,shift}

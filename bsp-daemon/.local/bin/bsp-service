@@ -1,0 +1,733 @@
+#!/usr/bin/env zsh
+
+name=$(basename $0)
+
+# ------------------------------
+
+source $(which _log)
+source $(which _onexit)  
+source $(which _singleton)
+source $(which _jq)
+
+# ------------------------------
+
+# Configuration
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/bsp-daemon"
+SOCKET_FILE="$CONFIG_DIR/service.sock"
+PID_FILE="$CONFIG_DIR/service.pid" 
+STATE_FILE="$CONFIG_DIR/service.state"
+RULES_FILE="$CONFIG_DIR/rules.conf"
+ECOSYSTEM_CONFIG="$CONFIG_DIR/ecosystem.conf"
+
+# Service state
+declare -A DESKTOP_LAYOUTS
+declare -A NODE_HISTORY
+declare -A PROCESS_RULES
+declare -A AUTO_LAYOUTS
+declare -A MANAGED_TOOLS
+declare -A TOOL_PRIORITIES
+declare -A TOOL_CONFIGS
+
+# Managed tool definitions
+BSP_TOOLS=(
+    "bsp-balance:layout_balancer:high"
+    "bsp-desktops:desktop_manager:high"
+    "bsp-aspect:aspect_manager:medium" 
+    "bsp-flag:flag_manager:medium"
+    "bsp-floating-borders:border_manager:low"
+    "bsp-ventilate:spacing_manager:low"
+)
+
+# ------------------------------
+
+_singleton_terminate && [[ $? -eq 1 ]] && exit 1
+
+# ------------------------------
+
+# Initialize service
+_bsp_daemon_init() {
+    mkdir -p "$CONFIG_DIR"
+    touch "$RULES_FILE" "$ECOSYSTEM_CONFIG"
+    
+    # Initialize ecosystem communication
+    if command -v bsp-ecosystem >/dev/null 2>&1; then
+        bsp-ecosystem init
+        log-debug "ecosystem communication initialized"
+    fi
+    
+    # Initialize tool management
+    _bsp_daemon_init_tools
+    
+    log-info "bsp-daemon initialized with ecosystem management"
+}
+
+# Initialize tool ecosystem
+_bsp_daemon_init_tools() {
+    # Parse tool definitions
+    for tool_def in "${BSP_TOOLS[@]}"; do
+        local tool_name=$(echo "$tool_def" | cut -d: -f1)
+        local tool_role=$(echo "$tool_def" | cut -d: -f2) 
+        local tool_priority=$(echo "$tool_def" | cut -d: -f3)
+        
+        MANAGED_TOOLS["$tool_name"]="$tool_role"
+        TOOL_PRIORITIES["$tool_name"]="$tool_priority"
+        
+        log-debug "registered tool: $tool_name ($tool_role, priority: $tool_priority)"
+    done
+    
+    # Load ecosystem configuration
+    _bsp_daemon_load_ecosystem_config
+}
+
+# Load ecosystem configuration
+_bsp_daemon_load_ecosystem_config() {
+    if [[ -f "$ECOSYSTEM_CONFIG" ]]; then
+        while IFS= read -r line; do
+            [[ "$line" =~ ^[[:space:]]*$ ]] && continue
+            [[ "$line" =~ ^# ]] && continue
+            
+            if [[ "$line" =~ ^([^:]+):(.+)$ ]]; then
+                local tool="${BASH_REMATCH[1]}"
+                local config="${BASH_REMATCH[2]}"
+                TOOL_CONFIGS["$tool"]="$config"
+                log-debug "loaded config for $tool: $config"
+            fi
+        done < "$ECOSYSTEM_CONFIG"
+    else
+        # Create default ecosystem config
+        _bsp_daemon_create_default_ecosystem_config
+    fi
+}
+
+# Create default ecosystem configuration
+_bsp_daemon_create_default_ecosystem_config() {
+    cat > "$ECOSYSTEM_CONFIG" << 'EOF'
+# BSP Ecosystem Configuration
+# Format: tool_name:enabled|disabled:options
+
+# Layout Management
+bsp-balance:enabled:auto_balance_threshold=2
+bsp-desktops:enabled:auto_create=true:max_empty=1
+
+# Visual Management  
+bsp-aspect:enabled:default_ratio=16:9
+bsp-flag:enabled:auto_floating_borders=true
+bsp-floating-borders:enabled:border_width=2
+bsp-ventilate:enabled:default_spacing=10
+
+# Integration Settings
+daemon:coordination_mode=smart
+daemon:conflict_resolution=priority
+daemon:event_debounce=100ms
+EOF
+    
+    log-info "created default ecosystem configuration"
+}
+
+# Tool management functions
+_bsp_daemon_start_tool() {
+    local tool_name="$1"
+    
+    if [[ -z "${MANAGED_TOOLS[$tool_name]:-}" ]]; then
+        log-warn "unknown tool: $tool_name"
+        return 1
+    fi
+    
+    # Check if tool should be enabled
+    local tool_config="${TOOL_CONFIGS[$tool_name]:-enabled}"
+    if [[ "$tool_config" =~ disabled ]]; then
+        log-info "tool $tool_name is disabled in configuration"
+        return 0
+    fi
+    
+    # Check if tool is already running
+    if pgrep -x "$tool_name" >/dev/null 2>&1; then
+        log-debug "tool $tool_name already running"
+        return 0
+    fi
+    
+    # Start the tool
+    local tool_path="$HOME/.dotfiles/$tool_name/.local/bin/$tool_name"
+    if [[ -x "$tool_path" ]]; then
+        "$tool_path" &>/dev/null &
+        local tool_pid=$!
+        
+        # Wait briefly to check if it started successfully
+        sleep 0.5
+        if kill -0 "$tool_pid" 2>/dev/null; then
+            log-info "started tool: $tool_name (PID: $tool_pid)"
+            
+            # Register tool with ecosystem
+            if command -v bsp-ecosystem >/dev/null 2>&1; then
+                local priority=$(bsp-ecosystem get-priority "$tool_name")
+                bsp-ecosystem register "$tool_name" "$tool_pid" "$priority"
+            fi
+            
+            return 0
+        else
+            log-error "failed to start tool: $tool_name"
+            return 1
+        fi
+    else
+        log-warn "tool executable not found: $tool_path"
+        return 1
+    fi
+}
+
+_bsp_daemon_stop_tool() {
+    local tool_name="$1"
+    
+    if pgrep -x "$tool_name" >/dev/null 2>&1; then
+        # Unregister from ecosystem first
+        if command -v bsp-ecosystem >/dev/null 2>&1; then
+            bsp-ecosystem unregister "$tool_name"
+        fi
+        
+        if pkill -x "$tool_name"; then
+            log-info "stopped tool: $tool_name"
+            return 0
+        else
+            log-error "failed to stop tool: $tool_name"
+            return 1
+        fi
+    else
+        log-debug "tool $tool_name is not running"
+        return 0
+    fi
+}
+
+_bsp_daemon_restart_tool() {
+    local tool_name="$1"
+    
+    log-info "restarting tool: $tool_name"
+    _bsp_daemon_stop_tool "$tool_name"
+    sleep 1
+    _bsp_daemon_start_tool "$tool_name"
+}
+
+# Start all managed tools
+_bsp_daemon_start_ecosystem() {
+    log-info "starting bsp ecosystem tools"
+    
+    # Sort tools by priority (high -> medium -> low)
+    local high_priority=()
+    local medium_priority=()
+    local low_priority=()
+    
+    for tool_name in "${(@k)MANAGED_TOOLS}"; do
+        case "${TOOL_PRIORITIES[$tool_name]}" in
+            "high") high_priority+=("$tool_name") ;;
+            "medium") medium_priority+=("$tool_name") ;;
+            "low") low_priority+=("$tool_name") ;;
+        esac
+    done
+    
+    # Start in priority order
+    for tool_name in "${high_priority[@]}" "${medium_priority[@]}" "${low_priority[@]}"; do
+        _bsp_daemon_start_tool "$tool_name"
+        # Brief delay between tool starts
+        sleep 0.2
+    done
+    
+    log-info "ecosystem startup complete"
+}
+
+# Stop all managed tools
+_bsp_daemon_stop_ecosystem() {
+    log-info "stopping bsp ecosystem tools"
+    
+    # Stop in reverse priority order
+    local low_priority=()
+    local medium_priority=()  
+    local high_priority=()
+    
+    for tool_name in "${(@k)MANAGED_TOOLS}"; do
+        case "${TOOL_PRIORITIES[$tool_name]}" in
+            "high") high_priority+=("$tool_name") ;;
+            "medium") medium_priority+=("$tool_name") ;;
+            "low") low_priority+=("$tool_name") ;;
+        esac
+    done
+    
+    # Stop in reverse priority order
+    for tool_name in "${low_priority[@]}" "${medium_priority[@]}" "${high_priority[@]}"; do
+        _bsp_daemon_stop_tool "$tool_name"
+    done
+    
+    log-info "ecosystem shutdown complete"
+}
+
+# Load rules from configuration
+_bsp_daemon_load_rules() {
+    PROCESS_RULES=()
+    if [[ -f "$RULES_FILE" ]]; then
+        while IFS= read -r line; do
+            [[ "$line" =~ ^[[:space:]]*$ ]] && continue
+            [[ "$line" =~ ^# ]] && continue
+            
+            local class=$(echo "$line" | cut -d' ' -f1)
+            local options=$(echo "$line" | cut -d' ' -f2-)
+            
+            PROCESS_RULES["$class"]="$options"
+            log-debug "loaded rule: $class -> $options"
+        done < "$RULES_FILE"
+    fi
+    
+    log-info "loaded ${#PROCESS_RULES[@]} rules from configuration"
+}
+
+# Save service state
+_bsp_daemon_save_state() {
+    cat > "$STATE_FILE" << EOF
+# Service state - auto-generated
+$(declare -p DESKTOP_LAYOUTS 2>/dev/null || echo "declare -A DESKTOP_LAYOUTS=()")
+$(declare -p NODE_HISTORY 2>/dev/null || echo "declare -A NODE_HISTORY=()")  
+$(declare -p AUTO_LAYOUTS 2>/dev/null || echo "declare -A AUTO_LAYOUTS=()")
+EOF
+    log-debug "saved service state"
+}
+
+# Load service state
+_bsp_daemon_load_state() {
+    if [[ -f "$STATE_FILE" ]]; then
+        source "$STATE_FILE" 2>/dev/null || log-warn "failed to load state file"
+        log-info "loaded service state"
+    fi
+}
+
+# Get window class
+_bsp_daemon_get_window_class() {
+    local node_id="$1"
+    local window_id=$(bspc query -N -n "$node_id")
+    if [[ -n "$window_id" ]]; then
+        xprop -id "$window_id" WM_CLASS 2>/dev/null | cut -d'"' -f4 || echo "unknown"
+    else
+        echo "unknown"
+    fi
+}
+
+# Coordinated layout management - works with bsp-balance
+_bsp_daemon_coordinate_balance() {
+    local desktop_id="$1"
+    local reason="$2"
+    
+    # Check if bsp-balance is handling this
+    if pgrep -x bsp-balance >/dev/null 2>&1; then
+        # Let bsp-balance handle basic balancing, we do smart layouts
+        case "$reason" in
+            "smart_layout"|"template_applied")
+                # Apply our smart layouts after balance settles
+                (sleep 1 && _bsp_daemon_manage_layout "$desktop_id") &
+                ;;
+        esac
+    else
+        # bsp-balance not running, we handle balancing
+        bspc node @"$desktop_id":/ -B
+        _bsp_daemon_manage_layout "$desktop_id"
+    fi
+}
+
+# Enhanced desktop management - coordinates with bsp-desktops  
+_bsp_daemon_coordinate_desktops() {
+    local action="$1"
+    shift
+    local args=("$@")
+    
+    case "$action" in
+        "desktop_needed")
+            # Work with bsp-desktops if it's running
+            if pgrep -x bsp-desktops >/dev/null 2>&1; then
+                log-debug "bsp-desktops is managing desktop creation"
+                # Let bsp-desktops handle it
+                return 0
+            else
+                # We need to create desktop ourselves
+                local desktop_name="${args[1]}"
+                bspc monitor focused -a "$desktop_name"
+                log-info "created desktop: $desktop_name (bsp-desktops not active)"
+            fi
+            ;;
+    esac
+}
+
+# Auto-assign process based on rules
+_bsp_daemon_auto_assign() {
+    local node_id="$1"
+    local class=$(_bsp_daemon_get_window_class "$node_id")
+    
+    if [[ -n "${PROCESS_RULES[$class]:-}" ]]; then
+        local options="${PROCESS_RULES[$class]}"
+        log-info "auto-assigning $class with options: $options"
+        
+        # Parse options and apply them
+        if [[ "$options" =~ desktop=([^ ]+) ]]; then
+            local desktop="${BASH_REMATCH[1]}"
+            
+            # Check if desktop exists, coordinate with bsp-desktops
+            if ! bspc query -D -d "$desktop" >/dev/null 2>&1; then
+                _bsp_daemon_coordinate_desktops "desktop_needed" "$desktop"
+            fi
+            
+            bspc node "$node_id" -d "$desktop"
+            log-info "moved $class to desktop $desktop"
+        fi
+        
+        if [[ "$options" =~ state=([^ ]+) ]]; then
+            local state="${BASH_REMATCH[1]}"
+            bspc node "$node_id" -t "$state"
+            log-info "set $class state to $state"
+            
+            # Coordinate with bsp-flag if it handles floating states
+            if [[ "$state" == "floating" ]] && pgrep -x bsp-flag >/dev/null 2>&1; then
+                log-debug "coordinating floating state with bsp-flag"
+            fi
+        fi
+        
+        if [[ "$options" =~ monitor=([^ ]+) ]]; then
+            local monitor="${BASH_REMATCH[1]}"
+            bspc node "$node_id" -m "$monitor"
+            log-info "moved $class to monitor $monitor"
+        fi
+    fi
+}
+
+# Smart layout management that coordinates with ecosystem
+_bsp_daemon_manage_layout() {
+    local desktop_id="$1"
+    local desktop_name=$(bspc query -D -d "$desktop_id" --names)
+    local node_count=$(bspc query -N -d "$desktop_id" | wc -l)
+    
+    # Check if we should apply smart layouts
+    local should_apply_layout=true
+    
+    # Coordinate with bsp-balance - let it handle basic balancing
+    if pgrep -x bsp-balance >/dev/null 2>&1; then
+        # Only apply smart layouts for specific cases
+        case "$desktop_name" in
+            dev|code|work)
+                if (( node_count == 3 )); then
+                    _bsp_daemon_apply_triple_layout "$desktop_id"
+                    should_apply_layout=false
+                fi
+                ;;
+            web|browser)
+                if (( node_count >= 2 )); then
+                    _bsp_daemon_apply_master_stack "$desktop_id"
+                    should_apply_layout=false
+                fi
+                ;;
+        esac
+    fi
+    
+    # Apply auto-layout if configured and appropriate
+    if [[ "$should_apply_layout" == "true" ]] && [[ -n "${AUTO_LAYOUTS[$desktop_name]:-}" ]]; then
+        local layout_type="${AUTO_LAYOUTS[$desktop_name]}"
+        _bsp_daemon_apply_layout "$desktop_id" "$layout_type" "$node_count"
+    fi
+    
+    DESKTOP_LAYOUTS["$desktop_name"]="$node_count"
+    
+    # Notify ecosystem about layout change
+    _bsp_daemon_notify_ecosystem "layout_changed" "$desktop_id" "$desktop_name" "$node_count"
+}
+
+# Notify other tools about events
+_bsp_daemon_notify_ecosystem() {
+    local event_type="$1"
+    shift
+    local args=("$@")
+    
+    # Use ecosystem communication protocols
+    if command -v bsp-ecosystem >/dev/null 2>&1; then
+        bsp-ecosystem coordinate "$event_type" "bsp-daemon"
+        log-debug "coordinated ecosystem event: $event_type ${args[*]}"
+    else
+        log-debug "ecosystem event (no coordination): $event_type ${args[*]}"
+    fi
+}
+
+# Apply triple column layout
+_bsp_daemon_apply_triple_layout() {
+    local desktop_id="$1"
+    local nodes=($(bspc query -N -d "$desktop_id"))
+    
+    if (( ${#nodes[@]} >= 3 )); then
+        # Create triple layout structure
+        bspc node "${nodes[1]}" -p east -o 0.33
+        bspc node "${nodes[2]}" -n "${nodes[1]}"
+        bspc node "${nodes[1]}" -p east -o 0.5  
+        bspc node "${nodes[3]}" -n "${nodes[1]}"
+        log-info "applied triple layout to desktop $desktop_id"
+    fi
+}
+
+# Apply master-stack layout
+_bsp_daemon_apply_master_stack() {
+    local desktop_id="$1"
+    local nodes=($(bspc query -N -d "$desktop_id"))
+    
+    if (( ${#nodes[@]} >= 2 )); then
+        # First window takes 60% (master), others stack on right
+        bspc node "${nodes[1]}" -p east -o 0.6
+        for (( i=2; i<=${#nodes[@]}; i++ )); do
+            bspc node "${nodes[i]}" -n "${nodes[1]}"
+        done
+        log-info "applied master-stack layout to desktop $desktop_id"
+    fi
+}
+
+# Apply automatic layout
+_bsp_daemon_apply_layout() {
+    local desktop_id="$1"
+    local layout_type="$2" 
+    local node_count="$3"
+    
+    case "$layout_type" in
+        "dev-triple")
+            if (( node_count == 3 )); then
+                _bsp_daemon_apply_triple_layout "$desktop_id"
+            fi
+            ;;
+        "balanced")
+            _bsp_daemon_coordinate_balance "$desktop_id" "smart_layout"
+            ;;
+        "master-stack")
+            _bsp_daemon_apply_master_stack "$desktop_id"
+            ;;
+    esac
+}
+
+# Process bspwm events with ecosystem coordination
+_bsp_daemon_process_event() {
+    local event="$1"
+    shift
+    local args=("$@")
+    
+    case "$event" in
+        "node_add")
+            local monitor_id="${args[1]}"
+            local desktop_id="${args[2]}" 
+            local ip_id="${args[3]}"
+            local node_id="${args[4]}"
+            
+            log-info "node added: $node_id to desktop $desktop_id"
+            
+            # Auto-assign process (our primary responsibility)
+            _bsp_daemon_auto_assign "$node_id"
+            
+            # Coordinate layout management
+            (sleep 0.5 && _bsp_daemon_coordinate_balance "$desktop_id" "node_added") &
+            ;;
+            
+        "node_remove")
+            local monitor_id="${args[1]}"
+            local desktop_id="${args[2]}"
+            local node_id="${args[3]}"
+            
+            log-info "node removed: $node_id from desktop $desktop_id"
+            
+            # Let bsp-balance handle the rebalancing, we coordinate
+            _bsp_daemon_coordinate_balance "$desktop_id" "node_removed"
+            ;;
+            
+        "node_swap"|"node_transfer")
+            local src_desktop="${args[2]}"
+            local dst_desktop="${args[5]}"
+            
+            log-info "node $event: coordinating layouts"
+            
+            _bsp_daemon_coordinate_balance "$src_desktop" "node_moved"
+            _bsp_daemon_coordinate_balance "$dst_desktop" "node_moved"
+            ;;
+            
+        "desktop_add")
+            local monitor_id="${args[1]}"
+            local desktop_id="${args[2]}"
+            local desktop_name="${args[3]}"
+            
+            log-info "desktop added: $desktop_name"
+            
+            # Set up default layout for known desktop types
+            case "$desktop_name" in
+                dev|code|work)
+                    AUTO_LAYOUTS["$desktop_name"]="dev-triple"
+                    ;;
+                chat|comm)
+                    AUTO_LAYOUTS["$desktop_name"]="balanced"
+                    ;;
+                web|browser)
+                    AUTO_LAYOUTS["$desktop_name"]="master-stack"
+                    ;;
+            esac
+            ;;
+            
+        "desktop_focus")
+            local monitor_id="${args[1]}"
+            local desktop_id="${args[2]}"
+            
+            log-debug "desktop focused: $desktop_id"
+            # Notify ecosystem tools about desktop focus
+            _bsp_daemon_notify_ecosystem "desktop_focused" "$desktop_id"
+            ;;
+            
+        "monitor_add")
+            local monitor_id="${args[1]}"
+            local monitor_name="${args[2]}"
+            
+            log-info "monitor added: $monitor_name"
+            ;;
+    esac
+}
+
+# Enhanced IPC with ecosystem management
+_bsp_daemon_handle_ipc() {
+    local request="$1"
+    local response=""
+    
+    case "$request" in
+        "status")
+            local running_tools=0
+            local total_tools=${#MANAGED_TOOLS[@]}
+            for tool_name in "${(@k)MANAGED_TOOLS}"; do
+                if pgrep -x "$tool_name" >/dev/null 2>&1; then
+                    ((running_tools++))
+                fi
+            done
+            response="Service running, PID $$, ecosystem: $running_tools/$total_tools tools active"
+            ;;
+        "reload")
+            _bsp_daemon_load_rules
+            _bsp_daemon_load_state
+            _bsp_daemon_load_ecosystem_config
+            response="Configuration reloaded"
+            ;;
+        "stats")
+            local desktop_count=${#DESKTOP_LAYOUTS[@]}
+            local rules_count=${#PROCESS_RULES[@]}
+            local tools_count=${#MANAGED_TOOLS[@]}
+            response="Desktops: $desktop_count, Rules: $rules_count, Managed tools: $tools_count"
+            ;;
+        ecosystem\ start)
+            _bsp_daemon_start_ecosystem
+            response="Ecosystem started"
+            ;;
+        ecosystem\ stop)
+            _bsp_daemon_stop_ecosystem
+            response="Ecosystem stopped"
+            ;;
+        ecosystem\ restart)
+            _bsp_daemon_stop_ecosystem
+            sleep 2
+            _bsp_daemon_start_ecosystem
+            response="Ecosystem restarted"
+            ;;
+        tool\ start\ *)
+            local tool_name=$(echo "$request" | cut -d' ' -f3)
+            if _bsp_daemon_start_tool "$tool_name"; then
+                response="Started tool: $tool_name"
+            else
+                response="Failed to start tool: $tool_name"
+            fi
+            ;;
+        tool\ stop\ *)
+            local tool_name=$(echo "$request" | cut -d' ' -f3)
+            if _bsp_daemon_stop_tool "$tool_name"; then
+                response="Stopped tool: $tool_name"
+            else
+                response="Failed to stop tool: $tool_name"
+            fi
+            ;;
+        tool\ restart\ *)
+            local tool_name=$(echo "$request" | cut -d' ' -f3)
+            _bsp_daemon_restart_tool "$tool_name"
+            response="Restarted tool: $tool_name"
+            ;;
+        enable_auto_layout\ *)
+            local desktop=$(echo "$request" | cut -d' ' -f2)
+            local layout_type=$(echo "$request" | cut -d' ' -f3)
+            AUTO_LAYOUTS["$desktop"]="$layout_type"
+            response="Enabled $layout_type auto-layout for desktop $desktop"
+            ;;
+        disable_auto_layout\ *)
+            local desktop=$(echo "$request" | cut -d' ' -f2)
+            unset AUTO_LAYOUTS["$desktop"]
+            response="Disabled auto-layout for desktop $desktop"
+            ;;
+        *)
+            response="Unknown request: $request"
+            ;;
+    esac
+    
+    log-info "IPC response: $response"
+}
+
+# IPC server for client requests
+_bsp_daemon_start_ipc() {
+    # Create named pipe for IPC
+    mkfifo "$SOCKET_FILE" 2>/dev/null || true
+    
+    log-info "starting IPC server on $SOCKET_FILE"
+    
+    while true; do
+        if read -r request < "$SOCKET_FILE" 2>/dev/null; then
+            log-debug "IPC request: $request"
+            _bsp_daemon_handle_ipc "$request"
+        fi
+    done &
+}
+
+# Main daemon function
+_bsp_daemon() {
+    
+    log-info "starting bsp-daemon with ecosystem management"
+    
+    # Initialize
+    _bsp_daemon_init
+    _bsp_daemon_load_rules
+    _bsp_daemon_load_state
+    
+    # Start managed ecosystem
+    _bsp_daemon_start_ecosystem
+    
+    # Start IPC server
+    _bsp_daemon_start_ipc
+    
+    log-info "subscribing to bspwm events"
+    
+    # Event monitoring loop
+    bspc subscribe all | while IFS= read -r line; do
+        # Parse event line
+        local event_parts=("${(@s/ /)line}")
+        local event="${event_parts[1]}"
+        local args=("${event_parts[@]:2}")
+        
+        log-debug "event: $event ${args[*]}"
+        _bsp_daemon_process_event "$event" "${args[@]}"
+        
+        # Periodically save state
+        if (( RANDOM % 100 == 0 )); then
+            _bsp_daemon_save_state
+        fi
+    done
+}
+
+# Cleanup on exit
+_bsp_daemon_cleanup() {
+    log-info "cleaning up bsp-daemon"
+    
+    # Stop managed tools
+    _bsp_daemon_stop_ecosystem
+    
+    # Save state
+    _bsp_daemon_save_state
+    
+    # Remove socket
+    rm -f "$SOCKET_FILE"
+}
+
+# Set up cleanup trap
+trap _bsp_daemon_cleanup EXIT
+
+# ------------------------------
+
+_bsp_daemon "$@"

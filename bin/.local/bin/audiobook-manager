@@ -1,0 +1,159 @@
+#!/usr/bin/env zsh
+
+# Define the root directory of the audiobooks
+ROOT_DIR="$(realpath .)"
+MIN_FILE_SIZE=1024  # Minimum file size in bytes (1 KB)
+
+# Initialize an array to hold the book details
+declare -a books
+
+# Function to traverse the directories and build the books array
+traverse_directory() {
+    local current_dir="$1"
+    local author=""
+    local series=""
+
+    # echo "Traversing: $current_dir"
+
+    # Extract author and series names from the directory structure
+    if [[ "$current_dir" =~ ^$ROOT_DIR/([^/]+)(/([^/]+))?$ ]]; then
+        author="${BASH_REMATCH[1]}"
+        series="${BASH_REMATCH[3]}"
+        # echo "Found Author: $author, Series: $series"
+    fi
+
+    # Iterate over the directories in the current directory
+    for entry in "$current_dir"/*; do
+        if [[ -d "$entry" ]]; then
+            dir_name=$(basename "$entry")
+            if [[ "$dir_name" =~ ^Book[[:space:]]([0-9.]+)[[:space:]]-[[:space:]](.+)$ ]]; then
+                # Extract book ID and name for directories matching the pattern
+                book_id="${BASH_REMATCH[1]}"
+                book_name="${BASH_REMATCH[2]}"
+                # Check if the current directory contains any subdirectories or is empty
+                if [[ -n "$author" ]] && ! find "$entry" -mindepth 1 -maxdepth 1 -type d | read && [ "$(ls -A "$entry")" ]; then
+                    books+=("$author|$series|$book_id|$book_name|$(realpath "$entry")")
+                    # echo "Added Book: Author: $author, Series: $series, Book ID: $book_id, Book Name: $book_name, Path: $(realpath "$entry")"
+                fi
+            elif [[ -n "$author" ]]; then
+                if [[ -z "$series" ]]; then
+                    # Handle standalone books
+                    if ! find "$entry" -mindepth 1 -maxdepth 1 -type d | read && [ "$(ls -A "$entry")" ]; then
+                        books+=("$author|N/A|N/A|$dir_name|$(realpath "$entry")")
+                        # echo "Added Standalone Book: Author: $author, Book Name: $dir_name, Path: $(realpath "$entry")"
+                    fi
+                else
+                    # Handle series or nested books without the "Book <ID> - <Name>" pattern
+                    if ! find "$entry" -mindepth 1 -maxdepth 1 -type d | read && [ "$(ls -A "$entry")" ]; then
+                        books+=("$author|$series|N/A|$dir_name|$(realpath "$entry")")
+                        # echo "Added Series Book: Author: $author, Series: $series, Book Name: $dir_name, Path: $(realpath "$entry")"
+                    fi
+                fi
+            fi
+            # Recursively traverse subdirectories
+            traverse_directory "$entry"
+        fi
+    done
+}
+
+# Function to create chapter file in ffmetadata format
+create_chapter_file() {
+    local dir="$1"
+    local chapter_file="$dir/chapters.txt"
+    local chapter_id=0
+    local index=0
+
+    echo ";FFMETADATA1" > "$chapter_file"
+    
+    find "$dir" -type f \( -name "*.mp3" -o -name "*.m4a" -o -name "*.aac" -o -name "*.flac" -o -name "*.wav" -o -name "*.ogg" -o -name "*.wma" -o -name "*.m4b" \) | sort | while read -r file; do
+        chapter_id=$((chapter_id + 1))
+        duration=$(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$file")
+        echo "[CHAPTER]" >> "$chapter_file"
+        echo "TIMEBASE=1/1" >> "$chapter_file"
+        echo "START=$((index))" >> "$chapter_file"
+        echo "END=$((index + ${duration%.*}))" >> "$chapter_file"
+        echo "title=Chapter $chapter_id" >> "$chapter_file"
+        index=$((index + ${duration%.*}))
+    done
+}
+
+# Function to concatenate audio files in a directory into a single .m4b file
+concatenate_audio_files() {
+    local dir="$1"
+    local series="$2"
+    local book_id="$3"
+    local book_name="$4"
+    local temp_output_file
+    local final_output_file
+
+    # Set the final output file name based on series or standalone book
+    if [[ "$series" == "N/A" ]]; then
+        final_output_file="$dir/$book_name.m4b"
+    else
+        final_output_file="$dir/$series #$book_id - $book_name.m4b"
+    fi
+
+    # Set a temporary output file name
+    temp_output_file="$(mktemp --suffix=.m4b)"
+
+    # echo "Concatenating files in: $dir"
+    # echo "Temporary Output File: $temp_output_file"
+    # echo "Final Output File: $final_output_file"
+
+    temp_file_list="$dir/files.txt"
+    chapter_file="$dir/chapters.txt"
+
+    [[ -f $tmp_file_list ]] && rm $tmp_file_lists
+    [[ -f $chapter_file ]] && rm $chapter_file
+
+    # Create chapter file
+    create_chapter_file "$dir"
+
+    # Create a temporary file list with escaped file paths
+    find "$dir" -type f \( -name "*.mp3" -o -name "*.m4a" -o -name "*.aac" -o -name "*.flac" -o -name "*.wav" -o -name "*.ogg" -o -name "*.wma" -o -name "*.m4b" \) | sort | while read -r file; do
+        echo "file '$(echo $file | sed "s/'/'\\\''/g")'" >> "$temp_file_list"
+    done
+
+    # Log the files being concatenated
+    echo "Files to concatenate:"
+    cat "$temp_file_list"
+
+    read -p "Press enter to continue: $book_name - $temp_file_list"
+
+    # Use ffmpeg to concatenate the audio files into a single .m4b file with mp4 format and embed chapters
+    ffmpeg -y -f concat -safe 0 -i "$temp_file_list" -i "$chapter_file" -map_metadata 1 -b:a 64k -c copy -f mp4 -strict -1 "$temp_output_file"
+
+    # Validate that the temporary output file contains data and is of sufficient size
+    if [ -s "$temp_output_file" ] && [ "$(stat -c%s "$temp_output_file")" -ge $MIN_FILE_SIZE ]; then
+        # Rename the temporary output file to the final output file
+        mv "$temp_output_file" "$final_output_file"
+
+        # Remove only the files that were concatenated, except the output file
+        while IFS= read -r file; do
+            file=$(echo "$file" | sed "s/'\\\''/'/g" | sed "s/^file '\(.*\)'$/\1/")
+            if [[ "$file" != "$final_output_file" ]]; then
+                echo "Removing file: $file"
+                rm "$file"
+            fi
+        done < "$temp_file_list"
+    else
+        echo "Conversion failed: Temporary output file is empty or too small."
+        rm "$temp_output_file"
+    fi
+
+    # Clean up the temporary file list and chapter file
+    rm "$temp_file_list" "$chapter_file"
+}
+
+# Start the traversal from the root directory
+traverse_directory "$ROOT_DIR"
+
+# Process each book directory
+for book in "${books[@]}"; do
+    IFS='|' read -r author series book_id book_name path <<< "$book"
+    echo "$author | $series | $book_id | $book_name | $path" | sort
+    # echo "Processing: $path"
+    concatenate_audio_files "$path" "$series" "$book_id" "$book_name"
+done
+
+echo "Conversion process completed."

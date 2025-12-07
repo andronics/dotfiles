@@ -1,0 +1,38 @@
+[Unit]
+Description=Proactive bspwm layout management service
+Documentation=file://%h/.dotfiles/bsp-daemon/.local/share/doc/README.md
+After=graphical-session.target
+Wants=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=%h/.dotfiles/bsp-daemon/.local/bin/bspc-service start --foreground
+ExecReload=/bin/kill -HUP $MAINPID
+ExecStop=%h/.dotfiles/bsp-daemon/.local/bin/bspc-service stop
+Restart=on-failure
+RestartSec=5
+
+# Run as user service
+User=%i
+Group=users
+
+# Environment
+Environment=DISPLAY=:0
+Environment=XDG_CONFIG_HOME=%h/.config
+
+# Security
+NoNewPrivileges=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ReadWritePaths=%h/.config/bsp-daemon
+ReadWritePaths=%h/.cache
+ReadWritePaths=/tmp
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=bspc-service
+
+[Install]
+WantedBy=default.target

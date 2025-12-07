@@ -1,14 +1,13 @@
-#!/usr/bin/env sh
+#!/usr/bin/env zsh
 
-icon=""
 name=$(basename $0)
-version="0.0.1"
 
 # ------------------------------
 
+source "$(which _cat)"
 source "$(which _jq)"
-source "$(which _kv)"
 source "$(which _log)"
+source "$(which _math)"
 
 # ------------------------------
 
@@ -19,38 +18,288 @@ remote_runtime_dir=${XDG_RUNTIME_DIR}/${name}
 
 # ------------------------------
 
-remote_config=$(cat "${remote_config_dir}/config.json")
+remote_credentials=$(cat-touch "${remote_config_dir}/credentials.json" "{}")
+# remote_filters=$(cat-touch "${remote_config_dir}/filters.json" "{}")
+remote_filters=$(cat-touch "${remote_config_dir}/filters2.json" "{}")
+remote_roots=$(cat-touch "${remote_config_dir}/roots.json" "{}")
+remote_units=$(cat-touch "${remote_config_dir}/units.json" "{}")
+remote_sandbox=$(cat-touch "${remote_config_dir}/sandbox.json" "{\"enabled\":false}")
+
+# ------------------------------
+
+remote_media="{}"
+remote_dry_run=false
+
+# ------------------------------
+
+source "$(which _args)"
 
 # ------------------------------
 
 _remote() {
 
     [[ $# -eq 0 ]] && {
-        _log_error "command not specified"
+        log-error "command not specified"
         return 1
     }
+
+    # Check for global flags
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --dry-run)
+                remote_dry_run=true
+                log-info "DRY RUN MODE ENABLED - no changes will be made"
+                shift
+                ;;
+            *)
+                break
+                ;;
+        esac
+    done
 
     _command=$1
     shift 2>/dev/null
 
     case "${_command}" in
-        
-        mount) _remote_mount $* ;;
-        unmount) _remote_unmount $* ;;
-        upload) _remote_upload $* ;;
 
-        *) _log_warning "command '%s' unsupported" "${_command}" ;;
+        sync) _remote_sync "$@" ;;
+
+        mount) _remote_mount "$@" ;;
+        mount-all) _remote_mount_all "$@" ;;
+        unmount) _remote_unmount "$@" ;;
+        unmount-all) _remote_unmount_all "$@" ;;
+        upload) _remote_upload "$@" ;;
+
+        status) _remote_status "$@" ;;
+        list) _remote_list "$@" ;;
+        verify) _remote_verify "$@" ;;
+        cleanup) _remote_cleanup "$@" ;;
+
+        enable) _remote_enable "$@" ;;
+        enable-all) _remote_enable_all "$@" ;;
+        disable) _remote_disable "$@" ;;
+        disable-all) _remote_disable_all "$@" ;;
+        restart) _remote_restart "$@" ;;
+        restart-all) _remote_restart_all "$@" ;;
+
+        sandbox) _remote_sandbox "$@" ;;
+
+        *) log-warning "command '%s' unsupported" "${_command}" ;;
 
     esac
 
 }
 
+
 # ------------------------------
 
-_remote_cfg() {
-    
-    _filter=$1
-    echo "${remote_config}" | _jq_query "${_filter}"
+_remote_evaluate_filter() {
+    # Evaluate a single filter condition
+    # Usage: _remote_evaluate_filter "property" "operator" "expected" "actual"
+    # Returns: 0 if condition passes, 1 if fails
+
+    local _prop="$1"
+    local _op="$2"
+    local _expected="$3"
+    local _actual="$4"
+
+    case "${_op}" in
+        eq)
+            [[ "${_actual}" == "${_expected}" ]] && return 0 || return 1
+            ;;
+        ne)
+            [[ "${_actual}" != "${_expected}" ]] && return 0 || return 1
+            ;;
+        lt)
+            [[ "${_actual}" -lt "${_expected}" ]] 2>/dev/null && return 0 || return 1
+            ;;
+        le)
+            [[ "${_actual}" -le "${_expected}" ]] 2>/dev/null && return 0 || return 1
+            ;;
+        gt)
+            [[ "${_actual}" -gt "${_expected}" ]] 2>/dev/null && return 0 || return 1
+            ;;
+        ge)
+            [[ "${_actual}" -ge "${_expected}" ]] 2>/dev/null && return 0 || return 1
+            ;;
+        in)
+            # Check if actual value matches any pipe-separated option
+            [[ "${_expected}" =~ (^|\\|)"${_actual}"(\\||$) ]] && return 0 || return 1
+            ;;
+        *)
+            log-warning "Unknown operator: ${_op}"
+            return 1
+            ;;
+    esac
+}
+
+# ------------------------------
+
+_remote_check_file_filters() {
+    # Check if a file matches all filters for a given pattern
+    # Usage: _remote_check_file_filters "filename_pattern" "filepath"
+    # Returns: 0 if all filters pass, 1 if any fail
+
+    local _pattern="$1"
+    local _filepath="$2"
+
+    # Get filter rules for this pattern
+    local _filter_rules=$(_remote_query "filters" ".\"${_pattern}\"")
+    [[ "${_filter_rules}" == "null" ]] && return 1
+
+    local _filter_count=$(_remote_query "filters" ".\"${_pattern}\" | length")
+
+    for ((_i=0; _i<_filter_count; _i++)); do
+        local _prop=$(_remote_query "filters" ".\"${_pattern}\"[${_i}][0]")
+        local _op=$(_remote_query "filters" ".\"${_pattern}\"[${_i}][1]")
+        local _expected=$(_remote_query "filters" ".\"${_pattern}\"[${_i}][2]")
+
+        local _actual=""
+
+        # Extract actual value based on property type
+        case "${_prop}" in
+            mimetype)
+                _actual=$(file -b --mime-type "${_filepath}")
+                ;;
+            audio_format|audio_bitrate|video_bitdepth|video_bitrate|video_height|video_width)
+                # Use mediainfo to extract values
+                remote_media=$(mediainfo --Output=JSON "${_filepath}" 2>/dev/null)
+
+                case "${_prop}" in
+                    audio_format)
+                        _actual=$(_remote_query "media" 'first(.media.track[]? | select(.["@type"]=="Audio") | .Format // "")')
+                        ;;
+                    audio_bitrate)
+                        _actual=$(_remote_query "media" 'first(.media.track[]? | select(.["@type"]=="Audio") | .BitRate // "0")')
+                        ;;
+                    video_bitdepth)
+                        _actual=$(_remote_query "media" 'first(.media.track[]? | select(.["@type"]=="Video") | .BitDepth // "0")')
+                        ;;
+                    video_bitrate)
+                        _actual=$(_remote_query "media" 'first(.media.track[]? | select(.["@type"]=="Video") | .BitRate // "0")')
+                        ;;
+                    video_height)
+                        _actual=$(_remote_query "media" 'first(.media.track[]? | select(.["@type"]=="Video") | .Height // "0")')
+                        ;;
+                    video_width)
+                        _actual=$(_remote_query "media" 'first(.media.track[]? | select(.["@type"]=="Video") | .Width // "0")')
+                        ;;
+                esac
+                ;;
+        esac
+
+        # Evaluate the filter
+        if ! _remote_evaluate_filter "${_prop}" "${_op}" "${_expected}" "${_actual}"; then
+            log-debug "Filter failed: ${_prop} ${_op} ${_expected} (got: ${_actual})"
+            return 1
+        fi
+    done
+
+    return 0
+}
+
+# ------------------------------
+
+_remote_sync() {
+
+    [[ $# -eq 0 ]] && {
+        log-info "Error: No unit specified for syncing."
+        return 1
+    }
+
+    local _preview=false
+    [[ "$1" == "--preview" ]] && {
+        _preview=true
+        shift
+    }
+
+    _unit_name=${1}
+
+    _cfg="${remote_runtime_dir}/${_unit_name}/rclone.conf"
+
+    [[ ! -f "${_cfg}" ]] && {
+        log-info "Error: Specified unit config does not exist"
+        return 1
+    }
+
+    _unit_mountpoint=$(_remote_query "units" ".\"${_unit_name}\".mountpoint")
+    _root_local=$(_remote_query "roots" ".local")
+    _local_mount_point="${_root_local}/${_unit_mountpoint}"
+
+    [[ ! -d "${_local_mount_point}" ]] && {
+        log-error "Local mountpoint does not exist: ${_local_mount_point}"
+        return 1
+    }
+
+    # Get all filter patterns
+    local _filter_patterns=$(_remote_query "filters" ". | keys[]")
+    local _matched_files=()
+    local _total_size=0
+    local _file_count=0
+
+    log-info "Scanning files in ${_local_mount_point}..."
+
+    # Find all files and check against filters
+    while read -r _filepath; do
+        [[ ! -f "${_filepath}" ]] && continue
+
+        local _filename=$(basename "${_filepath}")
+        local _matched=false
+
+        # Check each filter pattern
+        while read -r _pattern; do
+            [[ -z "${_pattern}" ]] && continue
+
+            # Check if filename matches pattern (regex)
+            if [[ "${_filename}" =~ ${_pattern} ]]; then
+                # Check all filter conditions
+                if _remote_check_file_filters "${_pattern}" "${_filepath}"; then
+                    _matched_files+=("${_filepath}")
+                    local _size=$(stat -c%s "${_filepath}" 2>/dev/null || echo "0")
+                    _total_size=$((_total_size + _size))
+                    ((_file_count++))
+                    _matched=true
+                    log-debug "Matched: ${_filename} (pattern: ${_pattern})"
+                    break
+                fi
+            fi
+        done <<< "${_filter_patterns}"
+
+    done < <(find "${_local_mount_point}" -type f)
+
+    log-info "Found ${_file_count} file(s) matching filters ($(numfmt --to=iec ${_total_size} 2>/dev/null || echo "${_total_size} bytes"))"
+
+    if [[ "${_preview}" == "true" ]] || [[ "${remote_dry_run}" == "true" ]]; then
+        log-info "Preview mode - files that would be synced:"
+        for _f in "${_matched_files[@]}"; do
+            echo "  ${_f}"
+        done
+        return 0
+    fi
+
+    if [[ ${_file_count} -eq 0 ]]; then
+        log-info "No files to sync"
+        return 0
+    fi
+
+    # Build filter file for rclone
+    local _filter_file=$(mktemp /tmp/remote-sync.XXXXXX)
+    for _filepath in "${_matched_files[@]}"; do
+        local _relative_path="${_filepath#${_local_mount_point}/}"
+        echo "+ /${_relative_path}" >> "${_filter_file}"
+    done
+    echo "- **" >> "${_filter_file}"
+
+    log-info "Syncing ${_file_count} file(s) to ${_unit_name}..."
+
+    rclone move "${_local_mount_point}" "${_unit_name}:" \
+        --config "${_cfg}" \
+        --filter-from "${_filter_file}" \
+        --progress \
+        --delete-empty-src-dirs
+
+    rm -f "${_filter_file}"
+    log-info "Sync complete"
 
 }
 
@@ -59,19 +308,19 @@ _remote_cfg() {
 _remote_rclone_cfg() {
 
     _unit_name=${1}
-    _unit_cfg=$(_remote_cfg '.units."'${_unit_name}'"')
-    _unit_credentials=$( echo "${_unit_cfg}" | _jq_query ".credentials")
-    _unit_drive_id=$( echo "${_unit_cfg}" | _jq_query ".drive_id")
-    _unit_root_folder_id=$( echo "${_unit_cfg}" | _jq_query ".root_folder_id")
+    _unit_cfg=$(_remote_query "units" ".\"${_unit_name}\"")
+    _unit_credentials=$(_remote_query "units" ".\"${_unit_name}\".credentials")
+    _unit_drive_id=$(_remote_query "units" ".\"${_unit_name}\".drive_id")
+    _unit_root_folder_id=$(_remote_query "units" ".\"${_unit_name}\".root_folder_id")
 
     [[ "${_unit_drive_id}" == "null" ]] && _unit_drive_id=""
     [[ "${_unit_root_folder_id}" == "null" ]] && _unit_root_folder_id=""
     
-    _credentials_cfg=$(_remote_cfg '.credentials."'${_unit_credentials}'"')
-    _credentials_client_id=$( echo "${_credentials_cfg}" | _jq_query '.client_id' )
-    _credentials_client_secret=$( echo "${_credentials_cfg}" | _jq_query '.client_secret' )
-    _credentials_scope=$( echo "${_credentials_cfg}" | _jq_query '.scope' )
-    _credentials_token=$( echo "${_credentials_cfg}" | _jq_query '.token' | tr -d "\n|[:space:]")
+    _credentials_cfg=$(_remote_query "credentials" ".\"${_unit_credentials}\"")
+    _credentials_client_id=$(_remote_query "credentials" ".\"${_unit_credentials}\".client_id")
+    _credentials_client_secret=$(_remote_query "credentials" ".\"${_unit_credentials}\".client_secret")
+    _credentials_scope=$(_remote_query "credentials" ".\"${_unit_credentials}\".scope")
+    _credentials_token=$(_remote_query "credentials" ".\"${_unit_credentials}\".token" | tr -d "\n|[:space:]")
 
     cat <<EOF
 [${_unit_name}]
@@ -87,47 +336,99 @@ EOF
 
 # ------------------------------
 
+_remote_query() {
+    case $1 in
+        credentials) echo ${remote_credentials} | jq-query "$2" ;;
+        filters) echo ${remote_filters} | jq-query "$2" ;;
+        media) echo ${remote_media} | jq-query "$2" ;;
+        roots) echo ${remote_roots} | jq-query "$2" ;;
+        sandbox) echo ${remote_sandbox} | jq-query "$2" ;;
+        units) echo ${remote_units} | jq-query "$2" ;;
+    esac
+}
+
+# ------------------------------
+
+_remote_match_units() {
+    # Match unit names by pattern (glob-style or comma-separated)
+    # Usage: _remote_match_units "pattern"
+    # Returns: list of matching unit names
+
+    local _pattern="$1"
+    local _all_units=$(_remote_query "units" ". | keys[]")
+    local _matched_units=""
+
+    [[ -z "${_pattern}" ]] && {
+        echo "${_all_units}"
+        return 0
+    }
+
+    # Handle comma-separated patterns
+    if [[ "${_pattern}" == *","* ]]; then
+        IFS=',' read -ra _patterns <<< "${_pattern}"
+        for _p in "${_patterns[@]}"; do
+            _p=$(echo "$_p" | xargs)  # trim whitespace
+            while read -r _unit; do
+                [[ "${_unit}" == ${_p} ]] && _matched_units="${_matched_units}${_unit}\n"
+            done <<< "${_all_units}"
+        done
+    else
+        # Single glob pattern
+        while read -r _unit; do
+            [[ "${_unit}" == ${_pattern} ]] && _matched_units="${_matched_units}${_unit}\n"
+        done <<< "${_all_units}"
+    fi
+
+    echo -e "${_matched_units}" | grep -v '^$'
+}
+
+# ------------------------------
+
 _remote_mount() {
-    
+
     [[ $# -eq 0 ]] && {
-        _log_info "Error: No unit specified for mounting."
+        log-info "Error: No unit specified for mounting."
         return 1
     }
 
-    local _unit_name=${1}
-    local _unit_cfg=$(_remote_cfg '.units."'${_unit_name}'"')
+    _unit_name=$1
+    _unit_cfg=$(_remote_query "units" ".\"${_unit_name}\"")
 
     if [[ "${_unit_cfg}" == "null" ]]; then
-        _log_info "Error: Specified unit does not exist."
+        log-info "Error: Specified unit does not exist."
         return 1
     fi
 
-    local _unit_connection=$( echo "${_unit_cfg}" | _jq_query ".connection")
-    local _unit_mountpoint=$( echo "${_unit_cfg}" | _jq_query ".mountpoint")
-    
-    local _root_remote=$(_remote_cfg '.root.remote')
+    _unit_mountpoint=$(_remote_query "units" ".\"${_unit_name}\".mountpoint")
+    _root_remote=$(_remote_query "roots" ".remote")
 
-    local _cache_dir="${remote_cache_dir}/${_unit_name}" 
-    local _runtime_dir="${remote_runtime_dir}/${_unit_name}" 
+    # Get configurable uid/gid (with defaults)
+    _unit_uid=$(_remote_query "units" ".\"${_unit_name}\".uid")
+    _unit_gid=$(_remote_query "units" ".\"${_unit_name}\".gid")
+    [[ "${_unit_uid}" == "null" ]] && _unit_uid="1000"
+    [[ "${_unit_gid}" == "null" ]] && _unit_gid="984"
 
-    if [ ! -d "${_root_remote}/${_unit_mountpoint}" ]; then
-        _log_info "creating mount directory: ${_root_remote}/${_unit_mountpoint}"
+    _cache_dir="${remote_cache_dir}/${_unit_name}"
+    _runtime_dir="${remote_runtime_dir}/${_unit_name}"
+
+
+    [[ ! -d "${_root_remote}/${_unit_mountpoint}" ]] && \
         mkdir -p "${_root_remote}/${_unit_mountpoint}"
-    fi
-    
-    if [ ! -d "${_cache_dir}" ]; then
-        _log_info "creating cache directory: ${_cache_dir}"
+
+    [[ ! -d "${_cache_dir}" ]] && \
         mkdir -p "${_cache_dir}"
+
+    [[ ! -d "${_runtime_dir}" ]] &&
+        mkdir -p "${_runtime_dir}"
+
+    echo "$(_remote_rclone_cfg "${_unit_name}")" > "${_runtime_dir}/rclone.conf"
+
+    if [[ "${remote_dry_run}" == "true" ]]; then
+        log-info "[DRY RUN] Would mount ${_unit_name} @ ${_root_remote}/${_unit_mountpoint}"
+        return 0
     fi
 
-    if [ ! -d "${_runtime_dir}" ]; then
-        _log_info "creating runtime directory: ${_runtime_dir}"
-        mkdir -p "${_runtime_dir}"
-    fi
-    
-    echo "$(_remote_rclone_cfg "${_unit_name}")" > "${_runtime_dir}/rclone.conf"
-    
-    _log_info "mounting ${_unit_name} @ ${_root_remote}/${_unit_mountpoint}"
+    log-debug "mounting ${_unit_name} @ ${_root_remote}/${_unit_mountpoint} (uid=${_unit_uid}, gid=${_unit_gid})"
 
     rclone mount "${_unit_name}:" "${_root_remote}/${_unit_mountpoint}" \
         --allow-non-empty \
@@ -137,12 +438,12 @@ _remote_mount() {
         --config "${_runtime_dir}/rclone.conf" \
         --default-permissions \
         --dir-cache-time "96h" \
-        --gid "984"  \
+        --gid "${_unit_gid}" \
         --log-level "INFO" \
         --log-file "${_runtime_dir}/rclone.log" \
         --poll-interval "15s" \
         --timeout "1h" \
-        --uid "1000" \
+        --uid "${_unit_uid}" \
         --umask "002" \
         --vfs-cache-mode "full" \
         --vfs-cache-max-age "48h" \
@@ -155,24 +456,23 @@ _remote_mount() {
 
 _remote_unmount() {
     
-    if [[ $# -eq 0 ]]; then
+    [[ $# -eq 0 ]] && {
         echo "Error: No unit specified for unmounting."
         return 1
-    fi
+    }
 
-    local _unit_name=${1}
-    local _unit_cfg=$(_remote_cfg '.units."'${_unit_name}'"')
+    _unit_name=${1}
+    _unit_cfg=$(_remote_query "units" ".\"${_unit_name}\"")
 
-    if [[ "${_unit_cfg}" == "null" ]]; then
-        _log_info "Error: Specified unit does not exist."
+    [[ "${_unit_cfg}" == "null" ]] && {
+        log-info "Error: Specified unit does not exist."
         return 1
-    fi
+    }
 
-    local _unit_mountpoint=$( echo "${_unit_cfg}" | _jq_query ".mountpoint")
+    _unit_mountpoint=$(_remote_query "units" ".\"${_unit_name}\".mountpoint")
+    _root_remote=$(_remote_query "roots" ".remote")
     
-    local _root_remote=$(_remote_cfg '.root.remote')
-    
-    _log_info "unmounting ${_unit_name} at ${_root_remote}/${_unit_mountpoint}"
+    log-debug "unmounting ${_unit_name} at ${_root_remote}/${_unit_mountpoint}"
 
     /bin/fusermount -uz "${_root_remote}/${_unit_mountpoint}"
 
@@ -181,109 +481,594 @@ _remote_unmount() {
 # ------------------------------
 
 _remote_upload() {
-    
-    if [[ $# -eq 0 ]]; then
-        _log_error "Error: No unit specified for uploading."
+
+    [[ $# -eq 0 ]] && {
+        log-error "Error: No unit specified for uploading."
         return 1
-    fi
+    }
 
-    local _unit_name=${1}
-    local _unit_cfg=$(_remote_cfg '.units."'${_unit_name}'"')
+    _unit_name=${1}
+    _unit_cfg=$(_remote_query "units" ".${_unit_name}")
 
-    if [[ "${_unit_cfg}" == "null" ]]; then
-        _log_info "Error: Specified unit does not exist."
+    [[ "${_unit_cfg}" == "null" ]] && {
+        log-info "Error: Specified unit does not exist."
         return 1
-    fi
+    }
 
-    local _unit_filters=$( echo "${_unit_cfg}" | _jq_query ".filters[]")
-    local _unit_mountpoint=$( echo "${_unit_cfg}" | _jq_query ".mountpoint")
-    
-    local _root_local=$(_remote_cfg '.root.local')
-    
-    if [ ! -d "${_root_local}/${_unit_mountpoint}" ]; then
-        _log_error "mountpoint does not exist: ${_unit_mountpoint}"
+    _unit_mountpoint=$(_remote_query "units" ".${_unit_name}.mountpoint")
+    _root_local=$(_remote_query "roots" ".local")
+
+    [[ ! -d "${_root_local}/${_unit_mountpoint}" ]] && {
+        log-error "mountpoint does not exist: ${_unit_mountpoint}"
         return 1
-    fi
+    }
 
-    _remote_upload_scan "${_root_local}/${_unit_mountpoint}" | \
-    _remote_upload_filter "${_unit_filters}"
-    # _remote_upload_transfer "${_unit_name}"
-    
+    _local_mount_point="${_root_local}/${_unit_mountpoint}"
+
+    _filters=$(_remote_query "filters" ". | keys[]")
+
+    while read _file; do
+
+
+        for _filter in ${_filters}; do
+            
+            [[ "${_file}" =~ ${_filter} ]] && {
+        
+
+                while read _idx ; do
+
+                    
+                    echo prop ${_idx}
+                    echo operator ${_operator}
+                    echo value ${_value}
+
+                done < <( _remote_query "filters" ".\"${_filter}\"[]")
+
+
+                continue
+        
+            }
+        
+        done
+
+    done < <(find "${_local_mount_point}" -type f )
 
 }
 
-_remote_upload_filter() {
+# ------------------------------
 
-    _unit_filters=$1
+_remote_mount_all() {
+    local _pattern="${1:-*}"
+    local _units=$(_remote_match_units "${_pattern}")
+    local _count=0
 
-    local _filters_cfg=$(_remote_cfg '.filters')
-    local _filters_regexs=()
-        
-    while read _file; do
+    [[ -z "${_units}" ]] && {
+        log-error "No units match pattern: ${_pattern}"
+        return 1
+    }
+
+    log-info "Mounting units matching: ${_pattern}"
+
+    while read -r _unit; do
+        [[ -z "${_unit}" ]] && continue
+        log-info "Mounting: ${_unit}"
+
+        if [[ "${remote_dry_run}" == "true" ]]; then
+            log-debug "[DRY RUN] Would mount: ${_unit}"
+        else
+            systemctl --user start "remote-mount@${_unit}"
+        fi
+        ((_count++))
+    done <<< "${_units}"
+
+    log-info "Mounted ${_count} unit(s)"
+}
+
+# ------------------------------
+
+_remote_unmount_all() {
+    local _pattern="${1:-*}"
+    local _units=$(_remote_match_units "${_pattern}")
+    local _count=0
+
+    [[ -z "${_units}" ]] && {
+        log-error "No units match pattern: ${_pattern}"
+        return 1
+    }
+
+    log-info "Unmounting units matching: ${_pattern}"
+
+    while read -r _unit; do
+        [[ -z "${_unit}" ]] && continue
+        log-info "Unmounting: ${_unit}"
+
+        if [[ "${remote_dry_run}" == "true" ]]; then
+            log-debug "[DRY RUN] Would unmount: ${_unit}"
+        else
+            systemctl --user stop "remote-mount@${_unit}"
+        fi
+        ((_count++))
+    done <<< "${_units}"
+
+    log-info "Unmounted ${_count} unit(s)"
+}
+
+# ------------------------------
+
+_remote_restart_all() {
+    local _pattern="${1:-*}"
+    local _units=$(_remote_match_units "${_pattern}")
+    local _count=0
+
+    [[ -z "${_units}" ]] && {
+        log-error "No units match pattern: ${_pattern}"
+        return 1
+    }
+
+    log-info "Restarting units matching: ${_pattern}"
+
+    while read -r _unit; do
+        [[ -z "${_unit}" ]] && continue
+        log-info "Restarting: ${_unit}"
+
+        if [[ "${remote_dry_run}" == "true" ]]; then
+            log-debug "[DRY RUN] Would restart: ${_unit}"
+        else
+            systemctl --user restart "remote-mount@${_unit}"
+        fi
+        ((_count++))
+    done <<< "${_units}"
+
+    log-info "Restarted ${_count} unit(s)"
+}
+
+# ------------------------------
+
+_remote_enable_all() {
+    local _pattern="${1:-*}"
+    local _units=$(_remote_match_units "${_pattern}")
+    local _count=0
+
+    [[ -z "${_units}" ]] && {
+        log-error "No units match pattern: ${_pattern}"
+        return 1
+    }
+
+    log-info "Enabling units matching: ${_pattern}"
+
+    while read -r _unit; do
+        [[ -z "${_unit}" ]] && continue
+        log-info "Enabling: ${_unit}"
+
+        if [[ "${remote_dry_run}" == "true" ]]; then
+            log-debug "[DRY RUN] Would enable: ${_unit}"
+        else
+            systemctl --user enable "remote-mount@${_unit}"
+            systemctl --user start "remote-mount@${_unit}"
+        fi
+        ((_count++))
+    done <<< "${_units}"
+
+    log-info "Enabled ${_count} unit(s)"
+}
+
+# ------------------------------
+
+_remote_disable_all() {
+    local _pattern="${1:-*}"
+    local _units=$(_remote_match_units "${_pattern}")
+    local _count=0
+
+    [[ -z "${_units}" ]] && {
+        log-error "No units match pattern: ${_pattern}"
+        return 1
+    }
+
+    log-info "Disabling units matching: ${_pattern}"
+
+    while read -r _unit; do
+        [[ -z "${_unit}" ]] && continue
+        log-info "Disabling: ${_unit}"
+
+        if [[ "${remote_dry_run}" == "true" ]]; then
+            log-debug "[DRY RUN] Would disable: ${_unit}"
+        else
+            systemctl --user stop "remote-mount@${_unit}"
+            systemctl --user disable "remote-mount@${_unit}"
+        fi
+        ((_count++))
+    done <<< "${_units}"
+
+    log-info "Disabled ${_count} unit(s)"
+}
+
+# ------------------------------
+
+_remote_enable() {
+    if [[ "${remote_dry_run}" == "true" ]]; then
+        log-info "[DRY RUN] Would enable: $1"
+        return 0
+    fi
+    systemctl --user enable remote-mount@$1
+    systemctl --user start remote-mount@$1
+}
+
+#------------------------------
+
+_remote_disable() {
+    if [[ "${remote_dry_run}" == "true" ]]; then
+        log-info "[DRY RUN] Would disable: $1"
+        return 0
+    fi
+    systemctl --user stop remote-mount@$1
+    systemctl --user disable remote-mount@$1
+}
+
+#------------------------------
+
+_remote_restart() {
+    if [[ "${remote_dry_run}" == "true" ]]; then
+        log-info "[DRY RUN] Would restart: $1"
+        return 0
+    fi
+    systemctl --user restart remote-mount@$1
+}
+
+#------------------------------
+
+_remote_status() {
+    systemctl --user list-units remote-mount@\*
+}
+
+# ------------------------------
+
+_remote_list() {
+    local _pattern="${1:-*}"
+    local _units=$(_remote_match_units "${_pattern}")
+    local _count=0
+
+    [[ -z "${_units}" ]] && {
+        log-error "No units match pattern: ${_pattern}"
+        return 1
+    }
+
+    printf "%-25s %-20s %-15s %-20s\n" "UNIT" "MOUNTPOINT" "STATUS" "CACHE SIZE"
+    printf "%-25s %-20s %-15s %-20s\n" "----" "----------" "------" "----------"
+
+    while read -r _unit; do
+        [[ -z "${_unit}" ]] && continue
+
+        local _mountpoint=$(_remote_query "units" ".\"${_unit}\".mountpoint")
+        local _status=$(systemctl --user is-active "remote-mount@${_unit}" 2>/dev/null || echo "inactive")
+        local _cache_dir="${remote_cache_dir}/${_unit}"
+        local _cache_size="0"
+
+        if [[ -d "${_cache_dir}" ]]; then
+            _cache_size=$(du -sh "${_cache_dir}" 2>/dev/null | cut -f1 || echo "0")
+        fi
+
+        printf "%-25s %-20s %-15s %-20s\n" "${_unit}" "${_mountpoint}" "${_status}" "${_cache_size}"
+        ((_count++))
+    done <<< "${_units}"
+
+    echo ""
+    log-info "Total: ${_count} unit(s)"
+}
+
+# ------------------------------
+
+_remote_verify() {
+    local _pattern="${1:-*}"
+    local _units=$(_remote_match_units "${_pattern}")
+    local _failed=0
+    local _passed=0
+
+    [[ -z "${_units}" ]] && {
+        log-error "No units match pattern: ${_pattern}"
+        return 1
+    }
+
+    log-info "Verifying units matching: ${_pattern}"
+    echo ""
+
+    while read -r _unit; do
+        [[ -z "${_unit}" ]] && continue
+
+        local _errors=""
+        local _unit_cfg=$(_remote_query "units" ".\"${_unit}\"")
+
+        # Check unit exists in config
+        if [[ "${_unit_cfg}" == "null" ]]; then
+            _errors="${_errors}\n  - Unit not found in units.json"
+        fi
+
+        # Check credentials exist
+        local _creds=$(_remote_query "units" ".\"${_unit}\".credentials")
+        if [[ "${_creds}" != "null" ]]; then
+            local _creds_cfg=$(_remote_query "credentials" ".\"${_creds}\"")
+            if [[ "${_creds_cfg}" == "null" ]]; then
+                _errors="${_errors}\n  - Credentials '${_creds}' not found"
+            fi
+        fi
+
+        # Check mountpoint
+        local _mountpoint=$(_remote_query "units" ".\"${_unit}\".mountpoint")
+        if [[ "${_mountpoint}" == "null" ]]; then
+            _errors="${_errors}\n  - Mountpoint not configured"
+        fi
+
+        # Check mount status
+        local _root_remote=$(_remote_query "roots" ".remote")
+        if mountpoint -q "${_root_remote}/${_mountpoint}" 2>/dev/null; then
+            local _status="mounted"
+        else
+            local _status="not mounted"
+        fi
+
+        # Check runtime config
+        local _runtime_cfg="${remote_runtime_dir}/${_unit}/rclone.conf"
+        if [[ ! -f "${_runtime_cfg}" ]] && [[ "${_status}" == "mounted" ]]; then
+            _errors="${_errors}\n  - Runtime config missing but unit is mounted"
+        fi
+
+        if [[ -n "${_errors}" ]]; then
+            echo "[FAIL] ${_unit}"
+            echo -e "${_errors}"
+            ((_failed++))
+        else
+            echo "[PASS] ${_unit} (${_status})"
+            ((_passed++))
+        fi
+    done <<< "${_units}"
+
+    echo ""
+    log-info "Verification complete: ${_passed} passed, ${_failed} failed"
+    return ${_failed}
+}
+
+# ------------------------------
+
+_remote_cleanup() {
+    local _force=false
+    [[ "$1" == "--force" ]] && _force=true
+
+    log-info "Cleaning up stale runtime configs and empty caches..."
+
+    local _cleaned=0
+
+    # Clean runtime configs for non-mounted units
+    if [[ -d "${remote_runtime_dir}" ]]; then
+        for _unit_dir in "${remote_runtime_dir}"/*; do
+            [[ ! -d "${_unit_dir}" ]] && continue
+
+            local _unit=$(basename "${_unit_dir}")
+            local _mountpoint=$(_remote_query "units" ".\"${_unit}\".mountpoint")
+            local _root_remote=$(_remote_query "roots" ".remote")
+
+            # Check if mounted
+            if ! mountpoint -q "${_root_remote}/${_mountpoint}" 2>/dev/null; then
+                if [[ "${remote_dry_run}" == "true" ]]; then
+                    log-debug "[DRY RUN] Would remove runtime config: ${_unit_dir}"
+                else
+                    log-debug "Removing stale runtime config: ${_unit}"
+                    rm -rf "${_unit_dir}"
+                fi
+                ((_cleaned++))
+            fi
+        done
+    fi
+
+    # Clean empty cache directories
+    if [[ -d "${remote_cache_dir}" ]]; then
+        for _cache_dir in "${remote_cache_dir}"/*; do
+            [[ ! -d "${_cache_dir}" ]] && continue
+
+            if [[ -z "$(ls -A "${_cache_dir}")" ]] || [[ "${_force}" == "true" ]]; then
+                if [[ "${remote_dry_run}" == "true" ]]; then
+                    log-debug "[DRY RUN] Would remove cache: ${_cache_dir}"
+                else
+                    log-debug "Removing empty cache: $(basename "${_cache_dir}")"
+                    rm -rf "${_cache_dir}"
+                fi
+                ((_cleaned++))
+            fi
+        done
+    fi
+
+    log-info "Cleanup complete: ${_cleaned} item(s) removed"
+}
+
+# ------------------------------
+
+_remote_sandbox() {
+    local _subcmd="$1"
+    shift
+
+    case "${_subcmd}" in
+        enable)
+            log-info "Enabling sandbox mode"
+            # In a real implementation, this would update sandbox.json
+            remote_dry_run=true
+            ;;
+        disable)
+            log-info "Disabling sandbox mode"
+            remote_dry_run=false
+            ;;
+        *)
+            # Run command in sandbox mode
+            remote_dry_run=true
+            log-info "Running in sandbox mode: ${_subcmd} $@"
+            _remote "${_subcmd}" "$@"
+            ;;
+    esac
+}
+
+# ------------------------------
+
+_remote_upload_v1() {
     
-        # echo "$_file"
+    [[ $# -eq 0 ]] && {
+        log-error "Error: No unit specified for uploading."
+        return 1
+    }
+
+    _unit_name=${1}
+    _unit_cfg=$(_remote_query "units" ".${_unit_name}")
+
+    [[ "${_unit_cfg}" == "null" ]] && {
+        log-info "Error: Specified unit does not exist."
+        return 1
+    }
+
+    _unit_filters=$(_remote_query "units" ".${_unit_name}.filters[]")
+    _unit_mountpoint=$(_remote_query "units" ".${_unit_name}.mountpoint")
+    _root_local=$(_remote_query "roots" ".local")
+
+    [[ ! -d "${_root_local}/${_unit_mountpoint}" ]] && {
+        log-error "mountpoint does not exist: ${_unit_mountpoint}"
+        return 1
+    }
+
+    _filter_from=$(mktemp /tmp/${name}.XXXXXXXX)
+
+    _local_mount_point="${_root_local}/${_unit_mountpoint}"
+
+    _count=0
+
+    while read _file; do
+
+        # log-info "found file '%s'" "${_file}"
 
         for _filter_name in ${_unit_filters}; do
-    
-            _filter_group=$(echo "${_filters_cfg}" | _jq_query ".${_filter_name}")
-            _filter_filename=$(echo ${_filter_group} | _jq_query '.filename')
+
+            if _remote_validate_filter "${_filter_name}" "${_file}"; then
+
+                ((++_count))
+
+                _sed_file="s|${_local_mount_point}/([^\/]{1,}/.*)$|\1|"
+
+                _location=$(echo "${_file}" | sed -r "${_sed_file}")
+                echo "+ /${_location}" >> "${_filter_from}"
             
-            [[ ! ${_file} =~ ${_filter_filename} ]] && continue
+                break
+            
+            fi
 
-            _filter_mimetype=$(echo ${_filter_group} | _jq_query '.mimetype')
-
-            echo "${_filter_mimetype} :  ${_file}"
-
-            break
-    
         done
+
+    done < <(find "${_local_mount_point}" -type f )
+
+    [[ ${_count} -gt 0 ]] && {
     
-    done
+        echo "- **"  >> "${_filter_from}"
+        _rclone_config=$(mktemp /tmp/${name}.XXXXXXXX)
+        echo "$(_remote_rclone_cfg "${_unit_name}")" > "${_rclone_config}"
+        rclone --config "${_rclone_config}" move --filter-from "${_filter_from}" "${_local_mount_point}" "${_unit_name}:" --progress --delete-empty-src-dirs
+
+        rm "${_rclone_config}"
     
+    }
+
+    rm "${_filter_from}"
+
+    
+
 }
 
-_remote_upload_scan() {
+# ------------------------------
+
+_remote_validate_filter_v1() {
+
+    local _filter_name="$1"
+    local _file="$2"
     
-    _path=$1
+    _filter_audio=$(_remote_query "filters" ".${_filter_name}.audio")
+    _filter_filename=$(_remote_query "filters" ".${_filter_name}.filename")
+    _filter_mimetype=$(_remote_query "filters" ".${_filter_name}.mimetype")
+    _filter_video=$(_remote_query "filters" ".${_filter_name}.video")
 
-    _log_info "scanning directory: ${_path}"
+    # validate filename
+    [[ ! ${_file} =~ ${_filter_filename} ]] && return 1
 
-    while read file; do
+    # log-debug "using filter '%s'" "${_filter_name}"
 
-        # _log_info "%8s | %-150s" "scan" "${file}"
-        echo ${file}
+    # # validate mimetype
+    [[ ! `file -b --mime-type "${_file}"` == "${_filter_mimetype}" ]] && return 1
 
-    done < <(find "${_path}" -type f )
+    # collecting media validation info
+    remote_media=$(mediainfo --Output=JSON "${_file}")
+
+    # validate audio
+    [[ "null" != "${_filter_audio}" ]] && {
+
+
+        _qry='first(.media.track[] | select(.["@type"]=="Audio"))'
+        
+        _filter=$(_remote_query "filters" ".${_filter_name}.audio.bit_rate")
+        _media=$(_remote_query "media" "$_qry} | .BitRate")
+        [[ ! `math-within-percent "${_media}" "${_filter}" "10"` ]] && {
+            log-debug "audio bitrate check failed: media is %s.... filter requires %s" "${_media}" "${_filter}" "10"
+            return 1
+        }
+        
+        _filter=$(_remote_query "filters" ".${_filter_name}.audio.format")
+        _media=$(_remote_query "media" "$_qry} | .Format")
+        [[ ! ${_filter} =~ ${_media} ]] && {
+            log-debug "audio format check failed: media is %s & filter requires %s" "${_media}" "${_filter}" \
+            return 1
+        }
+        
+        
+    }
+
+    # # validate video
+    [[ "null" != ${_filter_video} ]] && {
+
+        _media_video_qry='first(.media.track[] | select(.["@type"]=="Video"))'
+        
+        _filter=$(_remote_query "filters" ".${_filter_name}.video.bit_depth")
+        _media=$(_remote_query "media" "${_media_video_qry} | .BitDepth")
+        [[ ! ${_filter} -eq ${_media} ]] && {
+            log-debug "video bit depth check failed: media is %s & filter requires %s" "${_media}" "${_filter}"
+            return 1
+        }
+        
+        _filter=$(_remote_query "filters" ".${_filter_name}.video.bit_rate")
+        _media=$(_remote_query "media" "${_media_video_qry} | .BitRate")
+        [[ ! ${_filter} -eq ${_media} ]] && {
+            log-debug "video bit rate check failed: media is %s & filter requires %s" "${_media}" "${_filter}"
+            return 1
+        }
+        
+        _filter=$(_remote_query "filters" ".${_filter_name}.video.format")
+        _media=$(_remote_query "media" "${_media_video_qry} | .Format")
+        [[ ! ${_filter} == ${_media} ]] && {
+            log-debug "video format check failed: media is %s & filter requires %s" "${_media}" "${_filter}"
+            return 1
+        }
+        
+        _filter=$(_remote_query "filters" ".${_filter_name}.video.height")
+        _media=$(_remote_query "media" "${_media_video_qry} | .Height")
+        [[ ! ${_filter} == ${_media} ]] && {
+            log-debug "video height check failed: media is %s & filter requires %s" "${_media}" "${_filter}"
+            return 1
+        }
+        
+        _filter=$(_remote_query "filters" ".${_filter_name}.video.width")
+        _media=$(_remote_query "media" "${_media_video_qry} | .Width")
+        [[ ! ${_filter} == ${_media} ]] && {
+            log-debug "video width check failed: media is %s & filter requires %s" "${_media}" "${_filter}"
+            return 1
+        }
+        
+    }
+
+    # all validation steps have successfully passed !!!!!!
+
+    log-debug "tests passed"
+    return 0
+
 }
-
-_remote_upload_transfer() {
-    
-    _unit_nane=$1
-
-    _log_info "transferring: ${_unit_name}"
-
-    while read file; do
-
-        _log_info "%8s | %-150s" "scan" "${file}" &
-        echo ${file}
-
-    done 
-}
-
-_remote_upload_validate() {
-    
-    _unit_nane=$1
-
-    _log_info "transferring: ${_unit_name}"
-
-    while read file; do
-
-        _log_info "%8s | %-150s" "scan" "${file}" &
-        echo ${file}
-
-    done 
-}
-
 
 # ------------------------------
 

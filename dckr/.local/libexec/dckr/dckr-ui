@@ -1,0 +1,188 @@
+#!/bin/bash
+
+# dckr-ui - UI utilities and formatting
+# Requires: dckr-common
+
+# Service identification and port descriptions
+dckr_identify_service() {
+    local image=$1
+    local service_name=$2
+    local container_name=$3
+    
+    if [[ -n "$service_name" ]]; then
+        echo "$service_name"
+        return
+    fi
+    
+    if [[ -n "$container_name" ]]; then
+        echo "$container_name"
+        return
+    fi
+    
+    echo "$image" | sed -E 's|.*/||; s|:.*||; s|ghcr.io/||; s|lscr.io/||; s|linuxserver/||; s|onedr0p/||'
+}
+
+dckr_get_port_description() {
+    local port=$1
+    case $port in
+        80|8080|8081|8082|8083|3000|5000|8000|9000) echo "Web UI" ;;
+        443|8443|9443) echo "HTTPS" ;;
+        5432) echo "PostgreSQL" ;;
+        3306) echo "MySQL" ;;
+        6379) echo "Redis" ;;
+        27017) echo "MongoDB" ;;
+        9090) echo "Metrics" ;;
+        22) echo "SSH" ;;
+        *) echo "Port" ;;
+    esac
+}
+
+# Table formatting
+dckr_print_table_header() {
+    local format="$1"
+    shift
+    printf "${YELLOW}${format}${NC}\n" "$@"
+    echo "--------------------------------------------------------------------------------"
+}
+
+dckr_print_table_row() {
+    local format="$1"
+    shift
+    printf "${format}\n" "$@"
+}
+
+# Status formatting
+dckr_format_status() {
+    local status="$1"
+    case "$status" in
+        "running")
+            echo -e "${GREEN}running${NC}"
+            ;;
+        "healthy")
+            echo -e "${GREEN}healthy${NC}"
+            ;;
+        "unhealthy")
+            echo -e "${RED}unhealthy${NC}"
+            ;;
+        "exited")
+            echo -e "${RED}exited${NC}"
+            ;;
+        *)
+            echo -e "${RED}${status}${NC}"
+            ;;
+    esac
+}
+
+# Container detail box formatting
+dckr_print_container_header() {
+    local name="$1"
+    local stack="$2"
+    local service="$3"
+    echo -e "${CYAN}╔═══ ${YELLOW}${name}${NC} ${CYAN}(${MAGENTA}${stack}-${service}${CYAN})${NC}"
+}
+
+dckr_print_container_field() {
+    local label="$1"
+    local value="$2"
+    local color="${3:-$MAGENTA}"
+    echo -e "${CYAN}╠══${NC} ${label}: ${color}${value}${NC}"
+}
+
+dckr_print_container_separator() {
+    echo -e "${CYAN}╚══${NC} $1:"
+}
+
+dckr_print_url() {
+    local protocol="$1"
+    local host="$2"
+    local port="$3"
+    echo -e "    ${GREEN}➜${NC} ${CYAN}${protocol}://${host}:${port}${NC}"
+}
+
+dckr_print_port() {
+    local host_port="$1"
+    local container_port="$2"
+    local description="$3"
+    
+    if [[ -n "$container_port" && "$container_port" != "$host_port" ]]; then
+        echo -e "${CYAN}║   ${GREEN}●${NC} ${CYAN}${host_port}${NC} → ${CYAN}${container_port}${NC} ${YELLOW}[${description}]${NC}"
+    else
+        echo -e "${CYAN}║   ${GREEN}●${NC} ${CYAN}${host_port}${NC} ${YELLOW}[${description}]${NC}"
+    fi
+}
+
+# Progress and status indicators
+dckr_show_spinner() {
+    local pid=$1
+    local delay=0.1
+    local spinstr='|/-\'
+    while [[ "$(ps a | awk '{print $1}' | grep $pid)" ]]; do
+        local temp=${spinstr#?}
+        printf " [%c]  " "$spinstr"
+        local spinstr=$temp${spinstr%"$temp"}
+        sleep $delay
+        printf "\b\b\b\b\b\b"
+    done
+    printf "    \b\b\b\b"
+}
+
+# Section dividers
+dckr_print_section_divider() {
+    echo ""
+    echo -e "${BLUE}═══════════════════════════════════════════════════════════════════════════${NC}"
+    echo ""
+}
+
+dckr_print_header() {
+    local title="$1"
+    echo -e "${BOLD}${BLUE}${title}${NC}"
+    echo ""
+}
+
+dckr_print_subheader() {
+    local title="$1"
+    echo -e "${BOLD}${BLUE}${title}${NC}"
+}
+
+# AI command UI
+dckr_print_ai_header() {
+    local command="$1"
+    local args="$2"
+    echo -e "${BLUE}Executing AI Command: ${YELLOW}$command${NC}"
+    echo -e "${CYAN}Arguments: ${args}${NC}"
+    echo ""
+}
+
+dckr_print_ai_agent_header() {
+    local agent="$1"
+    local context="$2"
+    echo -e "${BLUE}🤖 Invoking AI Agent: ${YELLOW}$agent${NC}"
+    [[ -n "$context" ]] && echo -e "${CYAN}Context: ${context}${NC}"
+    echo ""
+}
+
+dckr_print_ai_status() {
+    local status="$1"
+    local message="$2"
+    case "$status" in
+        "executing")
+            echo -e "${GREEN}✨ $message${NC}"
+            ;;
+        "ready")
+            echo -e "${YELLOW}🔄 $message${NC}"
+            ;;
+        "complete")
+            echo -e "${GREEN}📋 $message${NC}"
+            ;;
+        "info")
+            echo -e "${BLUE}💡 $message${NC}"
+            ;;
+        *)
+            echo -e "${CYAN}$message${NC}"
+            ;;
+    esac
+}
+
+dckr_print_task_divider() {
+    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+}

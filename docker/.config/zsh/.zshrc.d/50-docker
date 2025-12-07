@@ -1,0 +1,176 @@
+# docker compose
+
+dcd() {
+    dir="$DCKR_DIR/svcs/$1"
+    [[ ! -d $dir ]] && {
+        echo "$1: does not exist"
+    
+    } || {
+        # ths need to be a loop to do multiple svcs at once
+        pushd "$DCKR_DIR/svcs/$1" > /dev/null
+        docker-compose --env-file ./.env down
+        popd  > /dev/null
+    }
+}
+
+dcda() {
+    dir="$DCKR_DIR/svcs"
+    [[ ! -d $dir ]] && {
+        echo "$dir: does not exist"
+    
+    } || {
+        for i in $dir/*/; do
+            dcd $(basename "$i")
+        done
+    }
+}
+
+dcu() {
+    dir="$DCKR_DIR/svcs/$1"
+    [[ ! -d $dir ]] && {
+        echo "$1: does not exist"
+    
+    } || {
+        pushd "$DCKR_DIR/svcs/$1"  > /dev/null
+        docker-compose pull
+        docker-compose --env-file ./.env up -d
+        popd  > /dev/null
+    }
+}
+
+dcua() {
+    dir="$DCKR_DIR/svcs"
+    [[ ! -d $dir ]] && {
+        echo "$dir: does not exist"
+    
+    } || {
+        for i in $dir/*/; do
+            dcu $(basename "$i")
+        done
+    }
+}
+
+dcru() {
+    dir="$DCKR_DIR/svcs/$1"
+    [[ ! -d $dir ]] && {
+        echo "$1: does not exist"
+    
+    } || {
+        pushd "$DCKR_DIR/svcs/$1" > /dev/null
+        docker-compose --env-file ./.env down
+        docker-compose pull
+        docker-compose --env-file ./.env up -d
+        popd  > /dev/null
+    }
+}
+
+dcrua() {
+    dir="$DCKR_DIR/svcs"
+    [[ ! -d $dir ]] && {
+        echo "$dir: does not exist"
+    
+    } || {
+        for i in $dir/*/; do
+            dcru $(basename "$i")
+        done
+    }
+}
+
+# docker network
+
+dnc() {
+
+    # Check if argument is provided
+    if [ $# -eq 0 ]; then
+        echo "Usage: create_docker_network <subnet_mask>"
+        echo "Example: create_docker_network 10.0.4.0/24"
+        return 1
+    fi
+
+    # # Validate subnet mask format
+    if [[ ! "$1" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}/[0-9]{1,2}$ ]]; then
+        echo "Invalid subnet mask format. Use x.x.x.x/x"
+        return 1
+    fi
+
+    # Extract subnet and CIDR
+    subnet="$1"
+    network=$(echo "$subnet" | cut -d'/' -f1)
+    cidr=$(echo "$subnet" | cut -d'/' -f2)
+
+    # Calculate the last IP address as gateway
+    # First, convert IP to binary
+    IFS='.' read -r octets <<< "$network"
+    binary_ip=""
+    for octet in "${octets[@]}"; do
+        # Convert each octet to 8-bit binary
+        binary_octet=$(printf "%08d" $(echo "obase=2;$octet" | bc))
+        binary_ip+="$binary_octet"
+    done
+
+    # Calculate number of host bits
+    host_bits=$((32 - cidr))
+
+    # Set all host bits to 1 to get the last IP
+    last_binary_ip=$(echo "$binary_ip" | sed "s/0\{$host_bits\}$/1\{$host_bits\}/")
+
+    # Convert back to decimal IP
+    gateway=""
+    for ((i=0; i<4; i++)); do
+        # Extract 8 bits for each octet
+        binary_octet="${last_binary_ip:$((i*8)):8}"
+        # Convert binary to decimal
+        decimal_octet=$(echo "ibase=2;$binary_octet" | bc)
+        # Append to gateway, with dot except for last octet
+        if [ $i -lt 3 ]; then
+            gateway+="${decimal_octet}."
+        else
+            gateway+="${decimal_octet}"
+        fi
+    done
+
+    # Output Docker network create command
+    echo "docker network create --subnet=${subnet} --gateway=${gateway} backend"
+}
+
+# docker container
+alias de="docker exec -it"
+alias di="docker inspect"
+alias dl="docker logs"
+
+# docker image
+
+alias dib="docker image build"
+alias dih="docker image history"
+alias diim="docker image import"
+alias dii="docker image inspect"
+alias dil="docker image ls"
+alias dilo="docker image load"
+alias dip="docker image prune"
+alias dipl="docker image pull"
+alias dips="docker image push"
+alias dir="docker image rm"
+alias dis="docker image save"
+alias dit="docker image tag"
+
+# docker network
+
+alias dnc="docker network create"
+alias dnco="docker network connect"
+alias dnd="docker network disconnect"
+alias dni="docker network inspect"
+alias dnl="docker network ls"
+alias dnp="docker network prune"
+alias dnr="docker network rm"
+
+# docker ps
+
+alias dps="docker ps | (head -n 1 && tail -n +2 | sort -k1)"
+
+# docker volume
+
+alias dvc="docker volume create"
+alias dvi="docker volume inspect"
+alias dvl="docker volume ls"
+alias dvp="docker volume prune"
+alias dvr="docker volume rm"

@@ -12,3 +12,5 @@ cat-touch() {
     [[ ! -f "$1" ]] && touch "$1" echo "$2" > "$1"
     cat "$1"
 }
+
+fs-file-touch

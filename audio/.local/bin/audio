@@ -284,7 +284,7 @@ _audio_spectrum() {
 
     echo "
         [general]
-        bars = 32
+        bars = 16
 
         [input]
         method = pulse

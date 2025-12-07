@@ -1,4 +1,4 @@
-alias zsh-refresh="source ""${ZDOTDIR}/.zprofile"""
+alias zsh-reload="source ""${ZDOTDIR}/.zprofile"""
 
 # ------------------------------
 
@@ -6,3 +6,25 @@ alias zsh-refresh="source ""${ZDOTDIR}/.zprofile"""
 setopt HIST_IGNORE_ALL_DUPS
 setopt INC_APPEND_HISTORY
 setopt COMPLETE_ALIASES
+
+# ------------------------------
+
+# Bind up arrow to a custom command
+bindkey '^[[A' history-search-backward
+
+# Bind down arrow to a custom command
+bindkey '^[[B' history-search-forward
+
+# # Enable incremental history search
+# bindkey '^R' history-incremental-search-backward
+# bindkey '^S' history-incremental-search-forward
+
+# # Bind Up and Down Arrow keys for history navigation
+# bindkey '^P' history-beginning-search-backwards
+# bindkey '^N' history-beginning-search-forward
+
+# # Clear the command line with Ctrl-U
+# bindkey '^U' backward-kill-line
+
+# # Accept and execute command with Enter
+# bindkey '^M' accept-line

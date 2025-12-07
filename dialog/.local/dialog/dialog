@@ -1,0 +1,69 @@
+#!/usr/bin/env zsh
+
+name=$(basename $0)
+
+# ------------------------------
+
+source "$(which _jq)"
+source "$(which _log)"
+source "$(which _string)"
+
+# ------------------------------
+
+player_cache_dir="${XDG_CACHE_HOME}/${name}"
+player_config_dir="${XDG_CONFIG_HOME}/${name}"
+player_data_dir="${XDG_DATA_HOME}/${name}"
+
+# ------------------------------
+
+player_instances=$(cat "${player_data_dir}/instances.json")
+player_states=$(cat "${player_data_dir}/states.json")
+
+# ------------------------------
+
+# source "$(which _args)"
+
+# ------------------------------
+
+_player() {
+
+    [[ $# -eq 0 ]] && {
+        log-error "command not specified"
+        return 1
+    }
+
+    _command=$1
+    shift 2>/dev/null
+
+    case "${_command}" in
+        
+        file) _player_action_loop "$@" ;;
+        color2) _player_action_next "$@" ;;
+
+
+        *) log-warning "command '%s' unsupported" "${_command}" ;;
+
+    esac
+
+}
+
+# ------------------------------
+
+_pick_file() {
+
+    _status=$(_player_control loop | string-lowercase)
+
+    case "${_status}" in
+        none)
+            _player_control loop track ;;
+        playlist)
+            _player_control loop none ;;
+        track)
+            _player_control loop playlist ;;
+    esac
+
+}
+
+# ------------------------------
+
+_pick "$@"

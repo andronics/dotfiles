@@ -1,0 +1,31 @@
+version: '3.8'
+
+services:
+  remote-test:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: remote-test
+    privileged: true  # Required for FUSE mounts
+    cap_add:
+      - SYS_ADMIN
+    devices:
+      - /dev/fuse
+    volumes:
+      - ./:/test/workspace:ro
+      - ../bin/remote:/test/bin/remote:ro
+      - ./config:/test/config
+      - ./cache:/test/cache
+      - ./runtime:/test/runtime
+      - ./data:/test/data
+      - ./pool:/test/pool
+      - ./tests:/test/tests:ro
+      - ./fixtures:/test/fixtures:ro
+    environment:
+      - XDG_CONFIG_HOME=/test/config
+      - XDG_CACHE_HOME=/test/cache
+      - XDG_RUNTIME_DIR=/test/runtime
+      - XDG_DATA_HOME=/test/data
+      - REMOTE_TEST_MODE=1
+    working_dir: /test
+    command: zsh /test/tests/run-tests.zsh

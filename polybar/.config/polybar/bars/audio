@@ -1,0 +1,15 @@
+[bar/audio]
+inherit = bar/base
+bottom = false
+
+modules-left = run_apps run_gui run_terminal menu spacer-corner-rb  device-bluetooth device-printer device-scanner spacer-corner-lt  
+modules-center = 
+modules-right = spacer-corner-rb device-bluetooth device-printer device-scanner spacer-corner-lt  sys-timestamp
+
+;tray-detached = false
+;tray-maxsize = 10
+;tray-offset-x = 0
+;tray-offset-y = 0
+;tray-padding = 20
+;tray-position = right
+;tray-scale = 1.0

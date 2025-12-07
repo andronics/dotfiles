@@ -1,0 +1,28 @@
+{
+  "test-unit-a": {
+    "credentials": "test@example.com",
+    "mountpoint": "test/unit-a",
+    "drive_id": "test-drive-a-12345",
+    "uid": "1000",
+    "gid": "1000"
+  },
+  "test-unit-b": {
+    "credentials": "test@example.com",
+    "mountpoint": "test/unit-b",
+    "root_folder_id": "test-folder-b-67890"
+  },
+  "test-unit-c": {
+    "credentials": "test@example.com",
+    "mountpoint": "test/unit-c",
+    "drive_id": "test-drive-c-99999"
+  },
+  "media-test": {
+    "credentials": "test@example.com",
+    "mountpoint": "test/media",
+    "drive_id": "test-media-drive"
+  },
+  "invalid-unit": {
+    "credentials": "nonexistent@example.com",
+    "mountpoint": "test/invalid"
+  }
+}

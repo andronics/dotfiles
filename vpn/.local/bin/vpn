@@ -22,6 +22,10 @@ vpn_data_dir="${XDG_DATA_HOME}/${name}"
 
 # ------------------------------
 
+vpn_socket="/run/nordvpn/nordvpnd.sock"
+
+# ------------------------------
+
 vpn_servers=$(cat "${vpn_cache_dir}/servers.json")
 vpn_states=$(cat "${vpn_data_dir}/states.json")
 
@@ -54,6 +58,13 @@ _vpn() {
         list-services) _vpn_list_services "$@" ;;
         list-technologies) _vpn_list_technologies "$@" ;;
         
+        login) _vpn_login "$@" ;;
+
+        mesh) _vpn_mesh "$@" ;;
+        mesh-disable) _vpn_mesh_disable "$@" ;;
+        mesh-enable) _vpn_mesh_enable "$@" ;;
+        mesh-set) _vpn_mesh_set "$@" ;;
+
         meta) _vpn_meta "$@" ;;
         meta-bytes-received) _vpn_meta_bytes_received "$@" ;;
         meta-bytes-sent) _vpn_meta_bytes_sent "$@" ;;
@@ -66,6 +77,22 @@ _vpn() {
         meta-status-icon) _vpn_meta_status_icon "$@" ;;
         meta-technology) _vpn_meta_technology "$@" ;;
         meta-uptime) _vpn_meta_uptime "$@" ;;
+
+        peer-list) _vpn_peer_list "$@" ;;
+        peer-refresh) _vpn_peer_refresh "$@" ;;
+        peer-remove) _vpn_peer_remove "$@" ;;
+        peer-refresh) _vpn_peer_refresh "$@" ;;
+        peer-refresh) _vpn_peer_refresh "$@" ;;
+        peer-refresh) _vpn_peer_refresh "$@" ;;
+        peer-refresh) _vpn_peer_refresh "$@" ;;
+        peer-refresh) _vpn_peer_refresh "$@" ;;
+
+        service-disable) _vpn_service_disable "$@" ;;
+        service-enable) _vpn_service_enable "$@" ;;
+        service-restart) _vpn_service_restart "$@" ;;
+        service-start) _vpn_service_start "$@" ;;
+        service-stop) _vpn_service_stop "$@" ;;
+        service-status) _vpn_service_status "$@" ;;
 
         state-connect) _vpn_state_connect "$@" ;;
         state-disconnect) _vpn_state_disconnect "$@" ;;
@@ -181,6 +208,29 @@ _vpn_meta_uptime() {
 _vpn_server_update() {
     curl --silent "https://${vpn_host}/v1/servers" 
 }
+
+# ------------------------------
+
+_vpn_service_disable() {
+    sudo systemctl disable nordvpnd.service
+}
+_vpn_service_enable() {
+    sudo systemctl enable nordvpnd.service
+}
+_vpn_service_restart() {
+    sudo systemctl restart nordvpnd.service
+}
+_vpn_service_start() {
+    sudo systemctl start nordvpnd.service
+}
+_vpn_service_stop() {
+    sudo systemctl stop nordvpnd.service
+}
+_vpn_service_status() {
+    sudo systemctl status nordvpnd.service
+}
+
+
 
 # ------------------------------
 

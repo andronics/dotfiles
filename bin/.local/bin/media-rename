@@ -1,0 +1,118 @@
+#!/usr/bin/env zsh
+
+# Define the root directory of the audiobooks
+ROOT_DIR="$(realpath .)"
+
+# Function to log the renaming actions for audiobook files
+log_renaming_actions() {
+    local current_dir="$1"
+    local author series book_id book_name
+
+    echo $current_dir
+    # Extract author, series, book ID, and book name from the directory structure
+    if [[ "$current_dir" =~ ^$ROOT_DIR/([0-9]+)[[:space:]]-[[:space:]]([^[:space:]]+)[[:space:]]-[[:space:]]([^[:space:]]+)[[:space:]]-[[:space:]](.+)$ ]]; then
+        echo -- here
+        book_id="${BASH_REMATCH[1]}"
+        book_name="${BASH_REMATCH[2]}"
+        author="${BASH_REMATCH[3]}"
+        year="${BASH_REMATCH[4]}"
+        
+        # Sanitize book name to remove any problematic characters
+        book_name=$(echo "$book_name" | sed 's/[\/:*?"<>|]/_/g')
+        
+        echo "Found: Book ID='$book_id', Book Name='$book_name', Author='$author', Year='$year' in directory '$current_dir'"
+        
+        # Iterate over the files in the current directory
+        for file in "$current_dir"/*; do
+            if [[ -f "$file" ]]; then
+                extension="${file##*.}"
+                base_name="${file##*/}"
+                
+                # Generate the new file name based on the extracted information
+                new_file_name="$book_id - $book_name - $author.$extension"
+
+                # Log the renaming action
+                new_file_path="$current_dir/$new_file_name"
+                echo "Would rename '$file' to '$new_file_path'"
+            fi
+        done
+    fi
+}
+
+# Function to log renaming actions for audiobook files within series
+log_series_renaming_actions() {
+    local series_dir="$1"
+    local series_name author series_id book_id book_name
+
+    # Extract series name and author from the parent directory
+    if [[ "$series_dir" =~ ^$ROOT_DIR/([0-9]+)[[:space:]]-[[:space:]]([^[:space:]]+)[[:space:]]-[[:space:]](.+)[[:space:]]-[[:space:]]([0-9]{4})$ ]]; then
+        series_id="${BASH_REMATCH[1]}"
+        series_name="${BASH_REMATCH[2]}"
+        author="${BASH_REMATCH[3]}"
+        year="${BASH_REMATCH[4]}"
+        
+        # Sanitize series name to remove any problematic characters
+        series_name=$(echo "$series_name" | sed 's/[\/:*?"<>|]/_/g')
+        
+        echo "Found Series: Series ID='$series_id', Series Name='$series_name', Author='$author', Year='$year' in directory '$series_dir'"
+        
+        # Iterate over the subdirectories (books) in the series directory
+        for book_dir in "$series_dir"/*; do
+            if [[ -d "$book_dir" ]]; then
+                if [[ "$book_dir" =~ ^$series_dir/([0-9]+)[[:space:]]-[[:space:]](.+)[[:space:]]\(([0-9]{4})\)$ ]]; then
+                    book_id="${BASH_REMATCH[1]}"
+                    book_name="${BASH_REMATCH[2]}"
+                    book_year="${BASH_REMATCH[3]}"
+                    
+                    # Sanitize book name to remove any problematic characters
+                    book_name=$(echo "$book_name" | sed 's/[\/:*?"<>|]/_/g')
+                    
+                    echo "Found Book: Book ID='$book_id', Book Name='$book_name', Year='$book_year' in series '$series_name' by '$author'"
+
+                    # Iterate over the files in the book directory
+                    for file in "$book_dir"/*; do
+                        if [[ -f "$file" ]]; then
+                            extension="${file##*.}"
+                            base_name="${file##*/}"
+
+                            # Generate the new file name based on the extracted information
+                            new_file_name="$series_name #$book_id - $book_name - $author.$extension"
+
+                            # Log the renaming action
+                            new_file_path="$book_dir/$new_file_name"
+                            echo "Would rename '$file' to '$new_file_path'"
+                        fi
+                    done
+                fi
+            fi
+        done
+    fi
+}
+
+# Function to traverse the directories and log renaming actions
+traverse_and_log() {
+    local current_dir="$1"
+
+    # Iterate over the directories in the current directory
+    for entry in "$current_dir"/*; do
+        if [[ -d "$entry" ]]; then
+            # Check if this is a series directory by looking for subdirectories
+            if find "$entry" -mindepth 1 -maxdepth 1 -type d | read; then
+                # echo series - $entry
+                log_series_renaming_actions "$entry"
+            else
+                
+                # echo non-series - $entry
+                log_renaming_actions "$entry"
+            fi
+
+            # Recursively traverse subdirectories
+            traverse_and_log "$entry"
+        fi
+    done
+}
+
+# Start the traversal from the root directory
+traverse_and_log "$ROOT_DIR"
+
+echo "Dry run logging completed."

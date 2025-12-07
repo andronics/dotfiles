@@ -47,7 +47,11 @@ _dotfiles_install() {
 
    for _pkg in ${_pkgs}; do
       
-      [[ ! -d ${_pkg} ]] && continue
+      [[ ! -d ${_pkg} ]] && {
+         echo "package '${_pkg}' does not exist"
+         continue
+      }
+      
       
       [[ ${_pkg} =~ /^./ ]] && {
          echo "package '${_pkg}' prefixed with a period... ignoring"
@@ -145,7 +149,10 @@ _dotfiles_uninstall() {
 
    for _pkg in ${_pkgs}; do
       
-      [[ ! -d ${_pkg} ]] && continue
+      [[ ! -d ${_pkg} ]] && {
+         echo "package '${_pkg}' does not exist"
+         continue
+      }
 
       [[ ${_pkg} =~ /^./ ]] && {
          echo "package '${_pkg}' prefixed with a period... ignoring"

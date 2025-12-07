@@ -1,0 +1,159 @@
+#!/usr/bin/python
+
+import os
+import subprocess
+
+import eyed3
+import psutil
+import time
+
+from blessed import Terminal
+from concurrent.futures import ProcessPoolExecutor
+from mutagen.asf import ASF
+from mutagen.flac import FLAC
+from mutagen.mp4 import MP4
+from mutagen.wave import WAVE
+from mutagen.wavpack import WavPack
+from mutagen.easyid3 import EasyID3
+
+class Conversion():
+
+    def __init__(self, file_path):
+        
+        self._log = []
+
+        self.file_path = file_path
+        self.tmp_file_path = os.path.splitext(self.file_path)[0] + ".tmp.mp3" 
+
+    def _convert(self):
+        state = False
+        self.log("convert", "begin")
+        try:
+            with open(os.devnull, 'w') as devnull:
+                cmd = [
+                    'ffmpeg',
+                    '-y',
+                    '-hide_banner',  # Hide ffmpeg banner
+                    '-loglevel', 'error',  # Set log level to error
+                    '-i', self.file_path,
+                    '-b:a', '64k',  # Set bitrate to 96 kbps
+                    '-c:a', 'libmp3lame',
+                    self.tmp_file_path
+                ]
+                subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            self.log("convert", "success")
+            state = True
+        except subprocess.CalledProcessError as e:
+            self.log("convert", "failed : " + e.output)
+        self.log("convert", "end")
+        return state
+
+    def log(self, message, state = "info"):
+        
+        self._log.append([message, state])
+
+    def exec(self):
+        if self._convert() == False:
+            remove_file(self.tmp_file_path)
+            return
+        self._set_tags()
+        remove_file(self.file_path)
+        rename_file(self.tmp_file_path, os.path.splitext(self.file_path)[0] + ".mp3")
+
+    def _retrieve_tags(self):
+        
+        file_ext = os.path.splitext(self.file_path)[1]
+        
+        match file_ext.lower():
+            case ".flac":
+                audio = FLAC(self.file_path)
+            case ".m4a":
+                audio = MP4(self.file_path)
+            case ".mp3":
+                audio = EasyID3(self.file_path)
+            case ".wav":
+                audio = WAVE(self.file_path)
+            case ".wma" | ".wv":
+                audio = ASF(self.file_path)
+            case ".wvv":
+                audio = WavPack(self.file_path)
+        
+        tags = {key: audio[key][0] for key in audio.keys()}
+
+        album = tags.get('album') if 'album' in tags else None
+        artist = tags.get('artist') if 'artist' in tags else None
+        genre = tags.get('genre') if 'genre' in tags else None
+        title = tags.get('title') if 'title' in tags else None
+        track = tags.get('track') if 'track' in tags  else None
+        year = tags.get('date')  if 'date' in tags else None
+
+        try:
+            year = year.split("-")[0]
+        except Exception as e:
+            pass
+
+        return album, artist, genre, title, track, year
+
+    def _set_tags(self):
+        album, artist, genre, title, track, year = self._retrieve_tags()
+        try:
+            audiofile = eyed3.load(self.tmp_file_path)
+            audiofile.tag.title = title
+            audiofile.tag.artist = artist
+            audiofile.tag.album = album
+            audiofile.tag.genre = genre
+            audiofile.tag.track_num = track
+            audiofile.tag.year = year
+            audiofile.tag.save()
+            return True
+        except Exception as e:
+            return False
+
+def find_files(root_directory, file_types = []):
+    found = []
+    for root, dirs, files in os.walk(root_directory):
+        for file in files:
+            if any(file.lower().endswith(file_type) for file_type in file_types):
+                found.append(os.path.join(root, file))
+    return found
+
+def remove_file(file_path):
+    try:
+        os.remove(file_path)
+        return True
+    except:
+        return False
+
+def rename_file(file_path_old, file_path_new):
+    try:
+        os.rename(file_path_old, file_path_new)
+        return True
+    except:
+        return False
+
+def worker(file):
+    try:
+        conversion = Conversion(file)
+        conversion.exec()
+        return f"Conversion successful for {file}"
+    except Exception as e:
+        return f"Error converting {file}: {str(e)}"
+
+def worker_done(future):
+    print(future.result())
+
+
+if __name__ == "__main__":
+    
+    root_directory = "/.pool/local/media/music"
+    file_types = ["flac","m4a","mp3","wav","wma", "wv","wvv"]
+    
+    files = find_files(root_directory, file_types)
+
+    with ProcessPoolExecutor() as executor:
+        futures = []
+        for file in files:
+            future = executor.submit(worker, file)
+            future.add_done_callback(worker_done)
+            futures.append(future)
+        

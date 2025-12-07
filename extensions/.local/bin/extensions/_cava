@@ -56,4 +56,3 @@ cava-config() {
     cava-spectrum < ${_pipe}
 
 }
-`   a||`

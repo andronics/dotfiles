@@ -1,0 +1,215 @@
+#!/bin/bash
+
+# dckr-docker-api - Docker API interface
+# Requires: dckr-common
+
+# Performance tracking
+declare -g DCKR_API_CALL_COUNT=0
+declare -g DCKR_START_TIME
+
+# Cache for container data
+declare -gA DCKR_CONTAINER_CACHE
+declare -gA DCKR_CONTAINER_DETAILS_CACHE
+
+# Initialize performance tracking
+dckr_api_init() {
+    DCKR_START_TIME=$(date +%s.%N)
+    DCKR_API_CALL_COUNT=0
+}
+
+# Optimized API call wrapper
+dckr_api_call() {
+    local endpoint="$1"
+    ((DCKR_API_CALL_COUNT++))
+    dckr_debug "API call #$DCKR_API_CALL_COUNT: $endpoint"
+    curl -s --unix-socket "$DOCKER_SOCK" "http://localhost${endpoint}"
+}
+
+# Extract all containers data in ONE API call
+dckr_load_all_containers() {
+    local filter="$1"
+    local cache_key="containers_${filter:-all}"
+    
+    # Check cache first
+    if [[ -n "${DCKR_CONTAINER_CACHE[$cache_key]}" ]]; then
+        echo "${DCKR_CONTAINER_CACHE[$cache_key]}"
+        return
+    fi
+    
+    local container_json
+    container_json=$(dckr_api_call "/containers/json?all=true")
+    
+    local result
+    if dckr_check_command jq; then
+        if [[ -n "$filter" ]]; then
+            result=$(echo "$container_json" | jq -c ".[] | select(.Labels.\"com.docker.compose.project\" == \"$filter\")")
+        else
+            result=$(echo "$container_json" | jq -c ".[]")
+        fi
+    else
+        # Fallback: filter by stack
+        if [[ -n "$filter" ]]; then
+            result=$(echo "$container_json" | grep -o "{[^}]*\"com.docker.compose.project\":\"$filter\"[^}]*}")
+        else
+            result="$container_json"
+        fi
+    fi
+    
+    # Cache the result
+    DCKR_CONTAINER_CACHE[$cache_key]="$result"
+    echo "$result"
+}
+
+# Get detailed container info (only when needed)
+dckr_get_container_details() {
+    local container_id="$1"
+    
+    # Check cache first
+    if [[ -n "${DCKR_CONTAINER_DETAILS_CACHE[$container_id]}" ]]; then
+        echo "${DCKR_CONTAINER_DETAILS_CACHE[$container_id]}"
+        return
+    fi
+    
+    # Fetch and cache
+    local details
+    details=$(dckr_api_call "/containers/$container_id/json")
+    DCKR_CONTAINER_DETAILS_CACHE[$container_id]="$details"
+    echo "$details"
+}
+
+# Extract data from container JSON (optimized)
+dckr_extract_container_data() {
+    local container_json="$1"
+    local field="$2"
+    
+    if dckr_check_command jq; then
+        case "$field" in
+            id)
+                echo "$container_json" | jq -r '.Id'
+                ;;
+            name)
+                echo "$container_json" | jq -r '.Names[0]' | sed 's/^\///'
+                ;;
+            image)
+                echo "$container_json" | jq -r '.Image'
+                ;;
+            status)
+                echo "$container_json" | jq -r '.Status'
+                ;;
+            state)
+                echo "$container_json" | jq -r '.State'
+                ;;
+            service)
+                echo "$container_json" | jq -r '.Labels."com.docker.compose.service" // ""'
+                ;;
+            project)
+                echo "$container_json" | jq -r '.Labels."com.docker.compose.project" // ""'
+                ;;
+            ports)
+                echo "$container_json" | jq -r '.Ports[]?.PublicPort // empty' | sort -u
+                ;;
+            networks)
+                echo "$container_json" | jq -r '.NetworkSettings.Networks | keys[]' | tr '\n' ','
+                ;;
+        esac
+    else
+        # Fallback parsing for systems without jq
+        case "$field" in
+            id)
+                echo "$container_json" | grep -o "\"Id\":\"[^\"]*\"" | head -1 | cut -d'"' -f4
+                ;;
+            name)
+                echo "$container_json" | grep -o "\"Names\":\[\"[^\"]*\"" | cut -d'"' -f4 | sed 's/^\///'
+                ;;
+            image)
+                echo "$container_json" | grep -o "\"Image\":\"[^\"]*\"" | head -1 | cut -d'"' -f4
+                ;;
+            status)
+                echo "$container_json" | grep -o "\"Status\":\"[^\"]*\"" | head -1 | cut -d'"' -f4
+                ;;
+            state)
+                echo "$container_json" | grep -o "\"State\":\"[^\"]*\"" | head -1 | cut -d'"' -f4
+                ;;
+            service)
+                echo "$container_json" | grep -o "\"com.docker.compose.service\":\"[^\"]*\"" | cut -d'"' -f4
+                ;;
+            project)
+                echo "$container_json" | grep -o "\"com.docker.compose.project\":\"[^\"]*\"" | cut -d'"' -f4
+                ;;
+            ports)
+                echo "$container_json" | grep -o '"PublicPort":[0-9]*' | cut -d':' -f2 | sort -u
+                ;;
+            networks)
+                echo "$container_json" | grep -o "\"[^\"]*\":{[^}]*\"IPAddress\":\"[^\"]*\"" | cut -d'"' -f2 | grep -v "^$" | tr '\n' ','
+                ;;
+        esac
+    fi
+}
+
+# Extract detailed data
+dckr_extract_detail() {
+    local details="$1"
+    local field="$2"
+    
+    if dckr_check_command jq; then
+        case "$field" in
+            networks)
+                echo "$details" | jq -r '.NetworkSettings.Networks | keys | join(",")'
+                ;;
+            ips)
+                echo "$details" | jq -r '[.NetworkSettings.Networks[].IPAddress | select(. != "")] | join(",")'
+                ;;
+            ports_host)
+                echo "$details" | jq -r '.NetworkSettings.Ports | to_entries[] | .value[]?.HostPort // empty' | sort -u
+                ;;
+            ports_container)
+                echo "$details" | jq -r '.NetworkSettings.Ports | keys[] | split("/")[0]' | sort -u
+                ;;
+            port_map)
+                echo "$details" | jq -r '.NetworkSettings.Ports | to_entries[] | .key as $k | .value[]? | "\(.HostPort):\($k | split("/")[0])"'
+                ;;
+        esac
+    else
+        # Fallback parsing
+        case "$field" in
+            networks)
+                echo "$details" | grep -o "\"[^\"]*\":{[^}]*\"IPAddress\":\"[^\"]*\"" | cut -d'"' -f2 | grep -v "^$" | tr '\n' ',' | sed 's/,$//'
+                ;;
+            ips)
+                echo "$details" | grep -o '"IPAddress":"[^"]*"' | cut -d'"' -f4 | grep -v '^$' | tr '\n' ',' | sed 's/,$//'
+                ;;
+            ports_host)
+                echo "$details" | grep -o '"HostPort":"[^"]*"' | cut -d'"' -f4 | grep -v '^$' | sort -u
+                ;;
+            ports_container)
+                echo "$details" | grep -o '"[0-9]*/tcp"' | cut -d'"' -f2 | cut -d'/' -f1 | sort -u
+                ;;
+            port_map)
+                echo "$details" | grep -o '"[0-9]*/tcp":{[^}]*}' | while read line; do
+                    if [[ $line =~ \"([0-9]+)/tcp.*HostPort.*:.*\"([0-9]+)\" ]]; then
+                        echo "${BASH_REMATCH[2]}:${BASH_REMATCH[1]}"
+                    fi
+                done
+                ;;
+        esac
+    fi
+}
+
+# Performance statistics
+dckr_show_performance_stats() {
+    local end_time=$(date +%s.%N)
+    local duration
+    if dckr_check_command bc; then
+        duration=$(echo "$end_time - $DCKR_START_TIME" | bc)
+    else
+        duration="<calculated>"
+    fi
+    
+    echo ""
+    echo -e "${BLUE}Performance: ${GREEN}${DCKR_API_CALL_COUNT} API calls${NC} in ${GREEN}${duration}s${NC}"
+    if dckr_check_command jq; then
+        echo -e "${BLUE}Parser: ${GREEN}jq (optimized)${NC}"
+    else
+        echo -e "${BLUE}Parser: ${YELLOW}grep/sed (fallback)${NC}"
+    fi
+}

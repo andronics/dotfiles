@@ -1,0 +1,13 @@
+# bsp-daemon: Proactive bspwm management service
+# Auto-start the bsp-daemon service if bspwm is running
+
+if command -v bspwm >/dev/null 2>&1 && pgrep -x bspwm >/dev/null 2>&1; then
+    # Check if service is already running
+    if ! pgrep -x bspc-service >/dev/null 2>&1; then
+        # Start the service
+        "$HOME/.dotfiles/bsp-daemon/.local/bin/bspc-service" &>/dev/null &
+        
+        # Optional: Load any saved rules after a brief delay
+        (sleep 2 && "$HOME/.dotfiles/bsp-daemon/.local/bin/bspc-request" service reload &>/dev/null) &
+    fi
+fi
