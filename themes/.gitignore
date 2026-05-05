@@ -1,0 +1,10 @@
+# Auto-generated user icon caches that shouldn't be tracked.
+# Steam/Chrome PWAs/etc. write into hicolor at runtime; the system
+# already provides a base hicolor theme via the hicolor-icon-theme
+# package, so a user override here is just cruft.
+.local/share/icons/hicolor/
+
+# Papirus Dark is provided by the papirus-icon-theme pacman package
+# (installed at /usr/share/icons/Papirus-Dark/). Don't vendor 121MB
+# of icons that the OS package manager already handles.
+.local/share/icons/Papirus*
