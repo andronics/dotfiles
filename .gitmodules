@@ -1,15 +1,9 @@
-[submodule "gnupg/.gnupg"]
-	path = gnupg/.gnupg
+[submodule "shell/.gnupg"]
+	path = shell/.gnupg
 	url = https://github.com/andronics/gnupg
-[submodule "password-store/.password-store"]
-	path = password-store/.password-store
-	url = https://github.com/andronics/password-store
-[submodule "ssh/.ssh"]
-	path = ssh/.ssh
+[submodule "shell/.ssh"]
+	path = shell/.ssh
 	url = https://github.com/andronics/ssh
-[submodule "zsh/.config/zsh/.zplugins/zshrc.d"]
-	path = zsh/.config/zsh/.zplugins/zshrc.d
-	url = https://github.com/mattmc3/zshrc.d
-[submodule "lyrics/.lyrics"]
-	path = lyrics/.lyrics
-	url = https://github.com/andronics/lyrics
+[submodule "shell/tmux/plugins/tpm"]
+	path = shell/tmux/plugins/tpm
+	url = https://github.com/tmux-plugins/tpm
