@@ -1,1 +1,1 @@
-[[ $- != *i* ]] && setxkbmap -layout gb
+[[ -n $DISPLAY ]] && setxkbmap -layout gb

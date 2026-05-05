@@ -1,0 +1,7 @@
+if (( $+commands[dircolors] )); then
+    if [[ -r ${ZDOTDIR}/.dircolors ]]; then
+        eval "$(dircolors -b ${ZDOTDIR}/.dircolors)"
+    else
+        eval "$(dircolors -b)"
+    fi
+fi

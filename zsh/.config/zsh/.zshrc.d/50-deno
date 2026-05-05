@@ -1,0 +1,3 @@
+if [[ ":$FPATH:" != *":${ZDOTDIR}/completions:"* ]]; then
+    export FPATH="${ZDOTDIR}/completions:$FPATH"
+fi

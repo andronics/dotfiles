@@ -1,3 +1,12 @@
 pk() {
-  pgrep -i "$1" | sudo xargs kill -9
+  local pids
+  pids=(${(f)"$(pgrep -x "$1")"})
+  (( ${#pids} )) || { print -u2 "pk: no process matches '$1'"; return 1 }
+  if (( ${#pids} > 1 )); then
+    print -u2 "pk: ${#pids} processes match '$1':"
+    ps -o pid,user,comm -p ${pids} >&2
+    read -q "?Kill all ${#pids}? " || { print; return 1 }
+    print
+  fi
+  kill ${pids}
 }

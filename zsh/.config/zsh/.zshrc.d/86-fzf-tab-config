@@ -1,0 +1,63 @@
+# fzf-tab must be loaded (see 85-fzf-tab) for these zstyles to take effect.
+
+# --- general behavior ---
+zstyle ':fzf-tab:*' fzf-flags --height=70% --layout=reverse --border
+zstyle ':fzf-tab:*' switch-group ',' '.'        # cycle groups with , and .
+zstyle ':fzf-tab:*' continuous-trigger '/'      # in path completion, / drills in
+zstyle ':completion:*:descriptions' format '[%d]'
+zstyle ':fzf-tab:*' fzf-min-height 15
+
+# --- previews ---
+# directory navigation
+zstyle ':fzf-tab:complete:cd:*' fzf-preview \
+    'eza --tree --level=2 --color=always --icons --group-directories-first $realpath 2>/dev/null'
+zstyle ':fzf-tab:complete:z:*' fzf-preview \
+    'eza --tree --level=2 --color=always --icons --group-directories-first $realpath 2>/dev/null'
+
+# file viewers / editors → preview file contents
+for cmd in cat less more head tail bat vim nvim nano code subl; do
+    zstyle ":fzf-tab:complete:${cmd}:*" fzf-preview \
+        '(bat --color=always --style=numbers --line-range=:200 $realpath 2>/dev/null \
+          || eza --tree --level=2 --color=always --icons $realpath 2>/dev/null \
+          || head -200 $realpath)'
+done
+
+# git: smarter previews based on what's being completed
+zstyle ':fzf-tab:complete:git-(add|diff|restore):*' fzf-preview \
+    'git diff --color=always $word | head -500'
+zstyle ':fzf-tab:complete:git-log:*' fzf-preview \
+    'git log --color=always --oneline --graph --decorate -50 $word'
+zstyle ':fzf-tab:complete:git-show:*' fzf-preview \
+    'git show --color=always --stat $word | head -500'
+zstyle ':fzf-tab:complete:git-(checkout|switch|branch):*' fzf-preview \
+    'git log --color=always --oneline --graph --decorate -20 $word'
+zstyle ':fzf-tab:complete:git-help:*' fzf-preview \
+    'git help $word | col -bx | head -200'
+
+# systemctl: show unit status
+zstyle ':fzf-tab:complete:systemctl-*:*' fzf-preview \
+    'SYSTEMD_COLORS=1 systemctl status --no-pager $word 2>/dev/null | head -40'
+
+# kill: show full ps row
+zstyle ':completion:*:*:*:*:processes' command \
+    "ps -u $USER -o pid,user,comm,args -w -w"
+zstyle ':fzf-tab:complete:(kill|pk):argument-rest' fzf-preview \
+    '[[ $group == "[process ID]" ]] && ps --pid=$word -o cmd --no-headers -ww -p $word'
+zstyle ':fzf-tab:complete:(kill|pk):*' fzf-flags --preview-window=down:3:wrap
+
+# ssh / scp: show known_hosts entry
+zstyle ':fzf-tab:complete:(ssh|scp|sftp|rsync):*' fzf-preview \
+    'grep -- "$word" ~/.ssh/known_hosts 2>/dev/null | head -5; \
+     grep -i -A4 -- "Host $word" ~/.ssh/config 2>/dev/null | head -20'
+
+# env vars (export, unset, echo $X) → show current value
+zstyle ':fzf-tab:complete:(-command-|-parameter-|-brace-parameter-|export|unset|expand):*' fzf-preview \
+    'echo ${(P)word}'
+
+# man pages
+zstyle ':fzf-tab:complete:man:*' fzf-preview \
+    'MANWIDTH=$FZF_PREVIEW_COLUMNS man $word 2>/dev/null | head -200'
+
+# pacman / paru: show package info
+zstyle ':fzf-tab:complete:(pacman|paru|yay):*' fzf-preview \
+    'pacman -Si $word 2>/dev/null || pacman -Qi $word 2>/dev/null'
