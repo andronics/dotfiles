@@ -4,6 +4,6 @@
 [submodule "shell/.ssh"]
 	path = shell/.ssh
 	url = https://github.com/andronics/ssh
-[submodule "shell/tmux/plugins/tpm"]
-	path = shell/tmux/plugins/tpm
+[submodule "shell/.config/tmux/plugins/tpm"]
+	path = shell/.config/tmux/plugins/tpm
 	url = https://github.com/tmux-plugins/tpm
