@@ -1,3 +1,0 @@
-export DISABLE_UPDATE_PROMPT=true
-export UPDATE_ZSH_DAYS=28
-export ZSH="${HOME}/.oh-my-zsh"
