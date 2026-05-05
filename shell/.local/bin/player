@@ -1,0 +1,394 @@
+#!/usr/bin/env zsh
+
+# player - Media player control dispatcher (v2.0)
+# Uses _player v2.0 extension library
+#
+# This utility provides a comprehensive interface for controlling media players
+# via playerctl (MPRIS). All business logic is handled by the _player extension
+# library, making this a clean dispatcher.
+
+# Exit on errors
+set -e
+
+# Script name
+readonly SCRIPT_NAME="$(basename "$0")"
+
+# ----------------------------------------------------------------------
+# Dependencies
+# ----------------------------------------------------------------------
+
+# Load player library
+if ! source "$(command -v _player)" 2>/dev/null; then
+    echo "ERROR: _player extension library not found" >&2
+    echo "Please ensure /home/andronics/.dotfiles/lib is in PATH" >&2
+    exit 1
+fi
+
+# ----------------------------------------------------------------------
+# Initialization & Cleanup
+# ----------------------------------------------------------------------
+
+# Initialize player library
+player-init || {
+    echo "ERROR: Failed to initialize player library" >&2
+    exit 1
+}
+
+# Register cleanup handler
+trap player-cleanup EXIT
+
+# ----------------------------------------------------------------------
+# Main Dispatcher
+# ----------------------------------------------------------------------
+
+player_main() {
+    # Check for command
+    if [[ $# -eq 0 ]]; then
+        player_usage
+        return 1
+    fi
+
+    local command="$1"
+    shift 2>/dev/null || true
+
+    # Dispatch to library functions
+    case "${command}" in
+        # Player detection
+        list)
+            player-list-all "$@"
+            ;;
+        active)
+            player-get-active "$@"
+            ;;
+        detect)
+            player-detect "$@"
+            ;;
+        exists)
+            if [[ -z "$1" ]]; then
+                echo "ERROR: Usage: ${SCRIPT_NAME} exists PLAYER" >&2
+                return 1
+            fi
+            player-exists "$@"
+            ;;
+
+        # Player control
+        play)
+            player-play "$@"
+            ;;
+        pause)
+            player-pause "$@"
+            ;;
+        play-pause|toggle)
+            player-play-pause "$@"
+            ;;
+        stop)
+            player-stop "$@"
+            ;;
+        next)
+            player-next "$@"
+            ;;
+        previous|prev)
+            player-previous "$@"
+            ;;
+
+        # Advanced control
+        seek)
+            player-seek "$@"
+            ;;
+        loop)
+            player-loop "$@"
+            ;;
+        shuffle)
+            player-shuffle "$@"
+            ;;
+        volume)
+            if [[ "$1" == "set" && -n "$2" ]]; then
+                shift
+                player-set-volume "$@"
+            else
+                player-get-volume "$@"
+            fi
+            ;;
+
+        # Metadata queries
+        title)
+            player-get-title "$@"
+            ;;
+        artist)
+            player-get-artist "$@"
+            ;;
+        album)
+            player-get-album "$@"
+            ;;
+        metadata)
+            player-get-metadata "$@"
+            ;;
+        metadata-json)
+            player-get-metadata-json "$@"
+            ;;
+        artwork)
+            player-get-artwork "$@"
+            ;;
+        position)
+            player-get-position "$@"
+            ;;
+        position-formatted)
+            local pos_us pos_sec
+            pos_us=$(player-get-position "$@")
+            if [[ -n "$pos_us" && "$pos_us" =~ ^[0-9]+$ ]]; then
+                pos_sec=$((pos_us / 1000000))
+                printf "%02d:%02d\n" $((pos_sec / 60)) $((pos_sec % 60))
+            else
+                echo "$pos_us"
+            fi
+            ;;
+        position-percent)
+            local pos_us dur_us
+            pos_us=$(player-get-position "$@")
+            dur_us=$(player-get-duration "$@")
+            if [[ -n "$pos_us" && "$pos_us" =~ ^[0-9]+$ && -n "$dur_us" && "$dur_us" =~ ^[0-9]+$ && "$dur_us" -gt 0 ]]; then
+                echo $((pos_us * 100 / dur_us))
+            else
+                echo "0"
+            fi
+            ;;
+        duration|length)
+            player-get-duration "$@"
+            ;;
+
+        # Status queries
+        status)
+            player-get-status "$@"
+            ;;
+        status-json)
+            player-get-status-json "$@"
+            ;;
+        state)
+            player-get-state-icon "$@"
+            ;;
+        playing)
+            player-is-playing "$@"
+            ;;
+
+        # Instance info
+        instance|instance-name)
+            player-get-instance-name "$@"
+            ;;
+        icon|instance-icon)
+            player-get-instance-icon "$@"
+            ;;
+
+        # Advanced features
+        watch)
+            player-watch "$@"
+            ;;
+        format)
+            player-format-output "$@"
+            ;;
+        control)
+            player-control "$@"
+            ;;
+
+        # Utility commands
+        help|-h|--help)
+            player_usage "$@"
+            ;;
+        version|-v|--version)
+            player-version
+            ;;
+        info)
+            player-info
+            ;;
+
+        # Backward compatibility aliases (from original utility)
+        action-loop)
+            player-loop "$@"
+            ;;
+        action-next)
+            player-next "$@"
+            ;;
+        action-play-pause)
+            player-play-pause "$@"
+            ;;
+        action-previous)
+            player-previous "$@"
+            ;;
+        action-seek)
+            player-seek "$@"
+            ;;
+        action-shuffle)
+            player-shuffle "$@"
+            ;;
+        action-stop)
+            player-stop "$@"
+            ;;
+        action-pause)
+            player-pause "$@"
+            ;;
+        action-play)
+            player-play "$@"
+            ;;
+        metadata-artist)
+            player-get-artist "$@"
+            ;;
+        metadata-artwork)
+            player-get-artwork "$@"
+            ;;
+        metadata-length)
+            player-get-duration "$@"
+            ;;
+        metadata-title)
+            player-get-title "$@"
+            ;;
+        status-icon)
+            player-get-state-icon "$@"
+            ;;
+        status-name)
+            player-get-status "$@"
+            ;;
+
+        # Unknown command
+        *)
+            echo "ERROR: Unknown command '${command}'" >&2
+            echo "Run '${SCRIPT_NAME} help' for usage information" >&2
+            return 1
+            ;;
+    esac
+}
+
+# ----------------------------------------------------------------------
+# Usage Information
+# ----------------------------------------------------------------------
+
+player_usage() {
+    cat <<'EOF'
+player - Media player control via playerctl (MPRIS)
+
+USAGE:
+    player <command> [arguments]
+
+PLAYER DETECTION:
+    list                    List all available players
+    active                  Show currently active player
+    detect                  Auto-detect and display active player
+    exists PLAYER           Check if specific player exists
+
+PLAYER CONTROL:
+    play                    Start playback
+    pause                   Pause playback
+    play-pause              Toggle play/pause
+    toggle                  Alias for play-pause
+    stop                    Stop playback
+    next                    Next track
+    previous                Previous track
+    prev                    Alias for previous
+
+ADVANCED CONTROL:
+    seek POSITION           Seek to position (absolute or relative)
+                           Examples: 60, +10, -5
+    loop [MODE]             Get or set loop mode
+                           Modes: None, Track, Playlist
+    shuffle [MODE]          Get or set shuffle mode
+                           Modes: On, Off
+    volume [set VALUE]      Get or set volume (0-100)
+
+METADATA QUERIES:
+    title                   Get track title
+    artist                  Get artist name
+    album                   Get album name
+    metadata                Get formatted metadata (Artist: Title)
+    metadata-json           Get all metadata as JSON
+    artwork                 Get artwork URL
+    position                Get current playback position (microseconds)
+    position-formatted      Get position in mm:ss format
+    position-percent        Get position as percentage (0-100)
+    duration                Get track duration
+    length                  Alias for duration
+
+STATUS QUERIES:
+    status                  Get playback status (playing/paused/stopped)
+    status-json             Get detailed status as JSON
+    state                   Get state icon
+    playing                 Check if currently playing (exit 0 if yes)
+
+INSTANCE INFO:
+    instance                Get player instance name
+    instance-name           Alias for instance
+    icon                    Get player instance icon
+    instance-icon           Alias for icon
+
+ADVANCED FEATURES:
+    watch                   Watch for player events and output changes
+    format TEMPLATE         Format output using template string
+    control ARGS...         Pass-through to playerctl command
+
+UTILITY:
+    help                    Show this help message
+    version                 Show version information
+    info                    Show library information
+
+BACKWARD COMPATIBILITY:
+    The following commands from the original utility are supported:
+    - action-loop, action-next, action-play-pause, action-previous
+    - action-seek, action-shuffle, action-stop, action-pause, action-play
+    - metadata-artist, metadata-artwork, metadata-length, metadata-title
+    - status-icon, status-name
+
+EXAMPLES:
+    # Basic playback control
+    player play
+    player pause
+    player next
+
+    # Get metadata
+    player metadata          # Output: Artist: Title
+    player artist            # Output: Artist Name
+    player title             # Output: Track Title
+
+    # Seek operations
+    player seek 60           # Seek to 60 seconds
+    player seek +10          # Seek forward 10 seconds
+    player seek -5           # Seek backward 5 seconds
+
+    # Loop and shuffle
+    player loop              # Show current loop mode
+    player loop Track        # Set loop to Track mode
+    player shuffle           # Show current shuffle state
+    player shuffle On        # Enable shuffle
+
+    # Volume control
+    player volume            # Show current volume
+    player volume set 75     # Set volume to 75%
+
+    # JSON output
+    player metadata-json     # Complete metadata as JSON
+    player status-json       # Complete status as JSON
+
+    # Advanced
+    player watch             # Watch for player events
+    player format '{{artist}} - {{title}}'
+
+CONFIGURATION:
+    Configuration files are stored in XDG-compliant locations:
+    - Config: ~/.config/player/
+    - Data:   ~/.local/share/player/
+    - Cache:  ~/.cache/player/
+
+    Instance icons:  ~/.local/share/player/instances.json
+    State icons:     ~/.local/share/player/states.json
+
+LIBRARY DOCUMENTATION:
+    For detailed library documentation, see:
+    /home/andronics/.dotfiles/lib/.local/docs/lib/_player.md
+
+SEE ALSO:
+    playerctl(1)
+
+EOF
+}
+
+# ----------------------------------------------------------------------
+# Execute
+# ----------------------------------------------------------------------
+
+player_main "$@"

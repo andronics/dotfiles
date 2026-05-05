@@ -1,0 +1,35 @@
+{
+  "version": "1.0",
+  "type": "desktop",
+  "name": "Default Layout",
+  "description": "Default balanced tiled layout",
+  "monitor": "{monitor}",
+  "captured_at": "2025-11-07T00:00:00Z",
+  "metadata": {
+    "author": "BSP Package",
+    "tags": ["default", "balanced", "tiled"]
+  },
+  "tree": {
+    "layout": "tiled",
+    "splitRatio": 0.5,
+    "splitType": "vertical",
+    "firstChild": null,
+    "secondChild": null,
+    "client": null
+  },
+  "settings": {
+    "borderWidth": 2,
+    "windowGap": 10,
+    "topPadding": 0,
+    "rightPadding": 0,
+    "bottomPadding": 0,
+    "leftPadding": 0
+  },
+  "rules": [
+    {
+      "class": "*",
+      "state": "tiled",
+      "follow": true
+    }
+  ]
+}

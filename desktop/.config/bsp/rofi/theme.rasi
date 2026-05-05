@@ -1,0 +1,231 @@
+/**
+ * BSP Rofi Theme
+ *
+ * Custom Rofi theme for bsp package interactive menus.
+ * Matches bspwm aesthetic with minimal, clean design.
+ */
+
+* {
+    /* Color Palette */
+    bg-color:            #1e1e2e;
+    bg-alt-color:        #313244;
+    fg-color:            #cdd6f4;
+    fg-alt-color:        #bac2de;
+
+    accent-color:        #89b4fa;
+    urgent-color:        #f38ba8;
+    active-color:        #a6e3a1;
+
+    border-color:        #45475a;
+    separator-color:     #45475a;
+
+    /* Transparency */
+    background-color:    transparent;
+    text-color:          @fg-color;
+
+    /* Spacing */
+    spacing:             8px;
+    padding:             12px;
+    margin:              0px;
+}
+
+window {
+    location:            center;
+    anchor:              center;
+    width:               600px;
+
+    background-color:    @bg-color;
+    border:              2px solid;
+    border-color:        @accent-color;
+    border-radius:       8px;
+
+    padding:             0px;
+}
+
+mainbox {
+    background-color:    @bg-color;
+    padding:             0px;
+}
+
+/* Input bar */
+inputbar {
+    background-color:    @bg-alt-color;
+    border:              0px 0px 2px 0px solid;
+    border-color:        @separator-color;
+
+    padding:             12px;
+    spacing:             8px;
+
+    children:            [ prompt, entry ];
+}
+
+prompt {
+    background-color:    transparent;
+    text-color:          @accent-color;
+    font:                "monospace bold 11";
+}
+
+entry {
+    background-color:    transparent;
+    text-color:          @fg-color;
+    placeholder:         "Type to filter...";
+    placeholder-color:   @fg-alt-color;
+}
+
+/* List view */
+listview {
+    background-color:    transparent;
+    padding:             8px;
+    spacing:             4px;
+
+    lines:               8;
+    columns:             1;
+
+    scrollbar:           true;
+    fixed-height:        false;
+    dynamic:             true;
+}
+
+scrollbar {
+    background-color:    @bg-alt-color;
+    handle-color:        @accent-color;
+    handle-width:        4px;
+    border:              0px;
+    margin:              0px 0px 0px 4px;
+}
+
+/* List elements */
+element {
+    background-color:    transparent;
+    text-color:          @fg-color;
+    padding:             8px 12px;
+    spacing:             8px;
+    border-radius:       4px;
+}
+
+element normal.normal {
+    background-color:    transparent;
+    text-color:          @fg-color;
+}
+
+element normal.urgent {
+    background-color:    @urgent-color;
+    text-color:          @bg-color;
+}
+
+element normal.active {
+    background-color:    @active-color;
+    text-color:          @bg-color;
+}
+
+element selected.normal {
+    background-color:    @accent-color;
+    text-color:          @bg-color;
+}
+
+element selected.urgent {
+    background-color:    @urgent-color;
+    text-color:          @bg-color;
+}
+
+element selected.active {
+    background-color:    @active-color;
+    text-color:          @bg-color;
+}
+
+element alternate.normal {
+    background-color:    transparent;
+    text-color:          @fg-color;
+}
+
+element alternate.urgent {
+    background-color:    transparent;
+    text-color:          @urgent-color;
+}
+
+element alternate.active {
+    background-color:    transparent;
+    text-color:          @active-color;
+}
+
+/* Element text */
+element-text {
+    background-color:    transparent;
+    text-color:          inherit;
+    vertical-align:      0.5;
+}
+
+element-icon {
+    background-color:    transparent;
+    size:                1.2em;
+    padding:             0px 8px 0px 0px;
+}
+
+/* Message box */
+message {
+    background-color:    @bg-alt-color;
+    border:              2px 0px 0px 0px solid;
+    border-color:        @separator-color;
+    padding:             12px;
+}
+
+textbox {
+    background-color:    transparent;
+    text-color:          @fg-color;
+    padding:             4px;
+}
+
+/* Error message */
+error-message {
+    background-color:    @urgent-color;
+    border:              2px solid;
+    border-color:        @urgent-color;
+    padding:             12px;
+}
+
+/* Mode switcher (if used) */
+mode-switcher {
+    background-color:    @bg-alt-color;
+    border:              2px 0px 0px 0px solid;
+    border-color:        @separator-color;
+    padding:             8px;
+}
+
+button {
+    background-color:    transparent;
+    text-color:          @fg-color;
+    padding:             8px 16px;
+    border-radius:       4px;
+}
+
+button selected {
+    background-color:    @accent-color;
+    text-color:          @bg-color;
+}
+
+/* Specific customizations for BSP menus */
+
+/* Window selector - wider for long titles */
+window.window-selector {
+    width:               800px;
+}
+
+/* Desktop selector - medium width */
+window.desktop-selector {
+    width:               600px;
+}
+
+/* Layout selector - with descriptions */
+window.layout-selector {
+    width:               700px;
+}
+
+/* Feature toggle - compact */
+window.feature-toggle {
+    width:               500px;
+}
+
+/* Configuration editor - full details */
+window.config-editor {
+    width:               700px;
+}

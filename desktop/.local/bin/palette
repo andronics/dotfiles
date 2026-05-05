@@ -1,0 +1,32 @@
+#!/usr/bin/env zsh
+
+name=$(basename $0)
+
+# ------------------------------
+
+source "$(which _xdg)" >/dev/null 2>&1 || true
+
+# Setup XDG directories using extension library
+xdg-setup-dirs "${name}"
+
+# Backward-compatible aliases
+palette_cache_dir="${XDG_CACHE_DIR}"
+palette_config_dir="${XDG_CONFIG_DIR}"
+palette_data_dir="${XDG_DATA_DIR}"
+
+# ------------------------------
+
+source "$(which _args)"
+
+# ------------------------------
+
+_palette() {
+    _filter=$1
+    cat "${palette_config_dir}/palette.conf" | awk  "/^${_filter}/{ print \$2 }"
+}
+
+# ------------------------------
+
+_palette "$@"
+
+

@@ -1,0 +1,66 @@
+{
+  "version": "1.0",
+  "type": "desktop",
+  "name": "Browsing Layout",
+  "description": "Web browsing layout with side panel",
+  "monitor": "{monitor}",
+  "captured_at": "2025-11-07T00:00:00Z",
+  "metadata": {
+    "author": "BSP Package",
+    "tags": ["browsing", "web", "research"],
+    "recommended_apps": ["browser", "notes", "chat"]
+  },
+  "tree": {
+    "layout": "tiled",
+    "splitRatio": 0.75,
+    "splitType": "vertical",
+    "firstChild": {
+      "description": "Main browser area (75% width)",
+      "splitRatio": 0.5,
+      "splitType": "horizontal"
+    },
+    "secondChild": {
+      "description": "Side panel for notes/chat (25% width)",
+      "splitRatio": 0.5,
+      "splitType": "horizontal"
+    }
+  },
+  "settings": {
+    "borderWidth": 1,
+    "windowGap": 8,
+    "topPadding": 0,
+    "rightPadding": 0,
+    "bottomPadding": 0,
+    "leftPadding": 0
+  },
+  "rules": [
+    {
+      "class": "firefox|Firefox|chromium|Chromium|brave|Brave|qutebrowser",
+      "desktop": "{desktop}",
+      "state": "tiled",
+      "splitRatio": 0.75,
+      "splitDir": "west",
+      "follow": true
+    },
+    {
+      "class": "obsidian|Obsidian|notion|Notion|logseq|Logseq",
+      "desktop": "{desktop}",
+      "state": "tiled",
+      "splitRatio": 0.25,
+      "splitDir": "east",
+      "follow": false
+    },
+    {
+      "class": "discord|Discord|slack|Slack|telegram|Telegram",
+      "desktop": "{desktop}",
+      "state": "tiled",
+      "splitDir": "east",
+      "follow": false
+    }
+  ],
+  "instructions": [
+    "Open browser first - it will take 75% of the screen",
+    "Open notes or communication app in the remaining 25%",
+    "Perfect for research with note-taking"
+  ]
+}

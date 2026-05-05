@@ -1,0 +1,46 @@
+#!/usr/bin/env zsh
+
+name=$(basename $0)
+
+# ------------------------------
+
+source $(which _log)
+source $(which _rofi)
+source "$(which _xdg)" >/dev/null 2>&1 || true
+
+# ------------------------------
+
+# Backward-compatible aliases
+bindings_cache_dir="${XDG_CACHE_DIR}"
+bindings_config_dir="${XDG_CONFIG_DIR}"
+bindings_data_dir="${XDG_DATA_DIR}"
+
+# ------------------------------
+
+bindings_config=$(cat "${XDG_CONFIG_HOME}/sxhkd/sxhkdrc")
+
+# ------------------------------
+
+rofi_config="${bindings_data_dir}/theme.rasi"
+
+# ------------------------------
+
+source "$(which _args)"
+
+# ------------------------------
+
+_bindings() {
+
+    export LC_ALL=C
+
+    echo "${bindings_config}" \
+        | awk '/^[a-zA-Z]/ && last {print $0,"\t",last} {last=""} /^#/{last=$0}' \
+        | column -t -s $'\t' \
+        | sort -f \
+        | rofi-dmenu "sxhkd bindings:"
+
+}
+
+# ------------------------------
+
+_bindings "$@"

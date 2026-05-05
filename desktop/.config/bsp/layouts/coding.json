@@ -1,0 +1,66 @@
+{
+  "version": "1.0",
+  "type": "desktop",
+  "name": "Coding Layout",
+  "description": "Development layout with editor and terminals",
+  "monitor": "{monitor}",
+  "captured_at": "2025-11-07T00:00:00Z",
+  "metadata": {
+    "author": "BSP Package",
+    "tags": ["development", "coding", "split"],
+    "recommended_apps": ["code", "terminal", "browser"]
+  },
+  "tree": {
+    "layout": "tiled",
+    "splitRatio": 0.65,
+    "splitType": "vertical",
+    "firstChild": {
+      "description": "Main editor area (65% width)",
+      "splitRatio": 0.5,
+      "splitType": "horizontal"
+    },
+    "secondChild": {
+      "description": "Terminal/browser area (35% width)",
+      "splitRatio": 0.5,
+      "splitType": "horizontal"
+    }
+  },
+  "settings": {
+    "borderWidth": 2,
+    "windowGap": 12,
+    "topPadding": 0,
+    "rightPadding": 0,
+    "bottomPadding": 0,
+    "leftPadding": 0
+  },
+  "rules": [
+    {
+      "class": "code|Code|VSCode|nvim|vim|emacs",
+      "desktop": "{desktop}",
+      "state": "tiled",
+      "splitRatio": 0.65,
+      "splitDir": "west",
+      "follow": true
+    },
+    {
+      "class": "Alacritty|kitty|wezterm|st",
+      "desktop": "{desktop}",
+      "state": "tiled",
+      "splitRatio": 0.35,
+      "splitDir": "east",
+      "follow": false
+    },
+    {
+      "class": "firefox|chromium|brave",
+      "desktop": "{desktop}",
+      "state": "tiled",
+      "splitDir": "east",
+      "follow": false
+    }
+  ],
+  "instructions": [
+    "Open your code editor first - it will take 65% of the screen",
+    "Open terminal in the remaining 35% on the right",
+    "Additional windows will stack in the right panel"
+  ]
+}

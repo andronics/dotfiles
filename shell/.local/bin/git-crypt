@@ -1,0 +1,341 @@
+#!/usr/bin/env zsh
+# Exit on errors
+set -e
+
+# Get script name
+readonly SCRIPT_NAME="$(basename "$0")"
+
+# ------------------------------------------------------------------------------
+# Configuration
+# ------------------------------------------------------------------------------
+
+# Get encryption key from environment or fallback to password manager
+get_encryption_key() {
+    if [[ -n "$GIT_CRYPT_KEY" ]]; then
+        echo "$GIT_CRYPT_KEY"
+    elif command -v pass >/dev/null 2>&1; then
+        pass show git/crypt-key 2>/dev/null || {
+            echo "ERROR: GIT_CRYPT_KEY not set and no key in password store" >&2
+            return 1
+        }
+    else
+        echo "ERROR: GIT_CRYPT_KEY environment variable not set" >&2
+        echo "Set it with: export GIT_CRYPT_KEY='your-key-here'" >&2
+        return 1
+    fi
+}
+
+# ------------------------------------------------------------------------------
+# Initialization Sub-Functions
+# ------------------------------------------------------------------------------
+
+# Check if we're in a git repository
+init_check_git_repo() {
+    if ! git rev-parse --git-dir >/dev/null 2>&1; then
+        echo "ERROR: Not in a git repository" >&2
+        return 1
+    fi
+}
+
+# Ensure encryption key exists, generate if needed
+# Returns: key source description for display
+init_ensure_encryption_key() {
+    local key_source=""
+    
+    # Check environment variable
+    if [[ -n "$GIT_CRYPT_KEY" ]]; then
+        echo "✓ Found encryption key in environment variable GIT_CRYPT_KEY"
+        echo "environment variable GIT_CRYPT_KEY"
+        return 0
+    fi
+    
+    # Check password store
+    if command -v pass >/dev/null 2>&1 && pass show git/crypt-key >/dev/null 2>&1; then
+        echo "✓ Found encryption key in password store (git/crypt-key)"
+        echo "password store (git/crypt-key)"
+        return 0
+    fi
+    
+    # No key found - generate new one
+    echo "⚠ No encryption key found"
+    echo
+    echo "Generating new encryption key..."
+    local new_key=$(openssl rand -base64 32)
+    
+    if command -v pass >/dev/null 2>&1; then
+        # Store in password manager
+        echo -n "$new_key" | pass insert -m git/crypt-key
+        echo "✓ Stored key in password store: git/crypt-key"
+        echo "password store (git/crypt-key)"
+        return 0
+    else
+        # No password manager - manual setup required
+        echo "✓ Generated key: $new_key"
+        echo
+        echo "⚠ Password manager 'pass' not found"
+        echo "  Add this to your shell profile (~/.zshrc):"
+        echo "    export GIT_CRYPT_KEY='$new_key'"
+        echo
+        read -q "REPLY?Press 'y' to continue with setup, or 'n' to abort: "
+        echo
+        if [[ ! "$REPLY" =~ ^[Yy]$ ]]; then
+            echo "Aborted."
+            return 1
+        fi
+        export GIT_CRYPT_KEY="$new_key"
+        echo "current session only (not persisted)"
+        return 0
+    fi
+}
+
+# Configure git clean/smudge filters
+init_configure_git_filters() {
+    local script_path="$1"
+    
+    echo "Configuring git filters..."
+    git config filter.git-crypt.clean "$script_path clean"
+    git config filter.git-crypt.smudge "$script_path smudge"
+    git config filter.git-crypt.required true
+    echo "✓ Git filters configured in .git/config"
+}
+
+# Get absolute path to this script
+init_get_script_path() {
+    if [[ "$0" = /* ]]; then
+        # Already absolute path
+        echo "$0"
+    else
+        # Relative path - make absolute
+        echo "$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+    fi
+}
+
+# Create or update .gitattributes file
+init_setup_gitattributes() {
+    local gitattributes=".gitattributes"
+    local filter_line="*.env filter=git-crypt diff=git-crypt"
+    
+    if [[ -f "$gitattributes" ]]; then
+        if grep -q "filter=git-crypt" "$gitattributes"; then
+            echo "✓ .gitattributes already contains git-crypt filters"
+        else
+            echo "$filter_line" >> "$gitattributes"
+            echo "✓ Added git-crypt filter to existing .gitattributes"
+        fi
+    else
+        cat > "$gitattributes" <<'EOF'
+# Git-crypt encrypted files
+*.env filter=git-crypt diff=git-crypt
+
+# You can add more patterns here, for example:
+# *.key filter=git-crypt diff=git-crypt
+# secrets/** filter=git-crypt diff=git-crypt
+EOF
+        echo "✓ Created .gitattributes with git-crypt filters"
+    fi
+}
+
+# Check for existing .env files and provide guidance
+# Returns: array of found .env files (via stdout for capture)
+init_check_existing_env_files() {
+    local env_files=(*.env(N))
+    
+    if [[ ${#env_files[@]} -gt 0 ]]; then
+        echo "⚠ Found existing .env files:"
+        printf '  - %s\n' "${env_files[@]}"
+        echo
+        echo "To encrypt these files in git:"
+        echo "  git add .gitattributes"
+        echo "  git rm --cached *.env"
+        echo "  git add *.env"
+        echo "  git commit -m 'Encrypt .env files with git-crypt'"
+        echo
+        # Return count for caller
+        return ${#env_files[@]}
+    else
+        echo "ℹ No .env files found in repository root"
+        echo "  Files matching *.env will be automatically encrypted when added"
+        echo
+        return 0
+    fi
+}
+
+# Print initialization summary
+init_print_summary() {
+    local key_source="$1"
+    local has_existing_files="$2"
+    
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "✓ Git-crypt initialization complete!"
+    echo
+    echo "Configuration:"
+    echo "  • Encryption key: ${key_source}"
+    echo "  • Git filters: configured in .git/config"
+    echo "  • Pattern: *.env files will be encrypted"
+    echo
+    echo "Next steps:"
+    if [[ "$has_existing_files" == "true" ]]; then
+        echo "  1. Review and commit .gitattributes"
+        echo "  2. Re-encrypt existing .env files (see commands above)"
+    else
+        echo "  1. Commit .gitattributes: git add .gitattributes && git commit -m 'Add git-crypt config'"
+        echo "  2. Create .env files - they'll be encrypted automatically"
+    fi
+    echo
+    echo "Team setup:"
+    echo "  Other team members need the encryption key."
+    if [[ "$key_source" == "password store (git/crypt-key)" ]]; then
+        echo "  Share with: pass show git/crypt-key"
+    elif [[ "$key_source" =~ "environment variable" ]]; then
+        echo "  Share securely and have them set: export GIT_CRYPT_KEY='...'"
+    fi
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+}
+
+# ------------------------------------------------------------------------------
+# Main Initialization Function
+# ------------------------------------------------------------------------------
+
+git_crypt_init() {
+    echo "Initializing git-crypt for this repository..."
+    echo
+    
+    # 1. Verify we're in a git repo
+    init_check_git_repo || return 1
+    
+    # 2. Ensure encryption key exists
+    local key_source
+    key_source=$(init_ensure_encryption_key) || return 1
+    echo
+    
+    # 3. Get absolute script path for git config
+    local script_path
+    script_path=$(init_get_script_path)
+    
+    # 4. Configure git filters
+    init_configure_git_filters "$script_path"
+    echo
+    
+    # 5. Setup .gitattributes
+    init_setup_gitattributes
+    echo
+    
+    # 6. Check for existing .env files
+    init_check_existing_env_files
+    local has_existing_files="false"
+    if [[ $? -gt 0 ]]; then
+        has_existing_files="true"
+    fi
+    
+    # 7. Print summary
+    init_print_summary "$key_source" "$has_existing_files"
+}
+
+# ------------------------------------------------------------------------------
+# Filter Functions
+# ------------------------------------------------------------------------------
+
+git_crypt_clean() {
+    # Encrypts stdin and outputs to stdout (for git add)
+    local key
+    key=$(get_encryption_key) || return 1
+    
+    # Read from stdin, encrypt, output to stdout
+    GIT_CRYPT_KEY="$key" openssl enc -aes-256-cbc -pbkdf2 -salt -pass env:GIT_CRYPT_KEY 2>/dev/null
+}
+
+git_crypt_smudge() {
+    # Decrypts stdin and outputs to stdout (for git checkout)
+    local key
+    key=$(get_encryption_key) || return 1
+    
+    # Read from stdin, decrypt, output to stdout
+    GIT_CRYPT_KEY="$key" openssl dec -aes-256-cbc -pbkdf2 -pass env:GIT_CRYPT_KEY 2>/dev/null || {
+        echo "ERROR: Failed to decrypt file - wrong key or corrupted data?" >&2
+        return 1
+    }
+}
+
+# ------------------------------------------------------------------------------
+# Main Dispatcher
+# ------------------------------------------------------------------------------
+
+git_crypt_main() {
+    
+    # Require at least one argument
+    if [[ $# -eq 0 ]]; then
+        git_crypt_usage
+        return 1
+    fi
+
+    local command="$1"
+    shift 2>/dev/null || true
+
+    # Dispatch to appropriate library function
+    case "${command}" in
+        
+        # Init
+        init)
+            git_crypt_init "$@"
+            ;;
+        
+        # Filters
+        clean)
+            git_crypt_clean "$@"
+            ;;
+        smudge)
+            git_crypt_smudge "$@"
+            ;;
+        
+        # Help
+        help|--help|-h)
+            git_crypt_usage
+            ;;
+        version|--version|-v)
+            echo "Git Crypt CLI v0.0.1"
+            ;;
+        
+        # Unknown command
+        *)
+            echo "ERROR: Unknown command '${command}'" >&2
+            echo "Run '${SCRIPT_NAME} help' for usage information" >&2
+            return 1
+            ;;
+    esac
+}
+
+# ------------------------------------------------------------------------------
+# Usage Information
+# ------------------------------------------------------------------------------
+
+git_crypt_usage() {
+    cat <<'EOF'
+Git Crypt CLI - Selective file encryption for Git repositories
+
+USAGE:
+    git-crypt <command> [arguments]
+
+COMMANDS:
+    Setup:
+        init                     Initialize git-crypt in current repository
+
+    Filters:
+        clean                    Encrypts file content for storage in Git
+        smudge                   Decrypts file content for use in working directory
+
+    Utility:
+        help, --help, -h         Show this help message
+        version, --version, -v   Show version information
+
+ENVIRONMENT:
+    GIT_CRYPT_KEY    Encryption key (required)
+                     Falls back to 'pass show git/crypt-key' if available
+
+EOF
+}
+
+# ------------------------------------------------------------------------------
+# Execute
+# ------------------------------------------------------------------------------
+
+git_crypt_main "$@"

@@ -1,0 +1,15 @@
+[bar/main]
+inherit = bar/base
+bottom = true
+
+modules-left = menu-layout menu-screenshot menu-settings menu-theme menu-vpn spacer-corner-lt run_apps run_gui run_terminal spacer-corner-rb  device-bluetooth device-printer device-scanner spacer-corner-lt  apps-browser apps-code  apps-nemo apps-spotify apps-virtualbox
+modules-center = bspwm
+modules-right = player-metadata spacer-corner-rt player-previous player-stop player-play-pause player-next player-loop player-shuffle audio-spectrum spacer-corner-lb bluetooth-status audio-level audio-device sys-uptime sys-time sys-date spacer-corner-rt menu-power menu-session menu-lock  
+
+;tray-detached = false
+;tray-maxsize = 10
+;tray-offset-x = 0
+;tray-offset-y = 0
+;tray-padding = 20
+;tray-position = center
+;tray-scale = 1.0

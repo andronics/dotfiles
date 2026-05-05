@@ -1,0 +1,59 @@
+{
+  "version": "1.0",
+  "type": "desktop",
+  "name": "Media Layout",
+  "description": "Media consumption layout with monocle mode",
+  "monitor": "{monitor}",
+  "captured_at": "2025-11-07T00:00:00Z",
+  "metadata": {
+    "author": "BSP Package",
+    "tags": ["media", "video", "music", "monocle"],
+    "recommended_apps": ["mpv", "spotify", "youtube"]
+  },
+  "tree": {
+    "layout": "monocle",
+    "splitRatio": 0.5,
+    "splitType": "vertical",
+    "description": "Monocle mode - all windows fullscreen, switch with Super+Tab"
+  },
+  "settings": {
+    "borderWidth": 0,
+    "windowGap": 0,
+    "topPadding": 0,
+    "rightPadding": 0,
+    "bottomPadding": 0,
+    "leftPadding": 0
+  },
+  "rules": [
+    {
+      "class": "mpv|vlc|VLC",
+      "desktop": "{desktop}",
+      "state": "tiled",
+      "follow": true,
+      "layer": "above"
+    },
+    {
+      "class": "spotify|Spotify|youtube|Youtube",
+      "desktop": "{desktop}",
+      "state": "tiled",
+      "follow": false
+    },
+    {
+      "class": "firefox|chromium|brave",
+      "desktop": "{desktop}",
+      "state": "tiled",
+      "follow": false
+    }
+  ],
+  "instructions": [
+    "Desktop uses monocle layout - all windows are fullscreened",
+    "Switch between windows with Super+Tab",
+    "No borders or gaps for immersive media experience",
+    "Perfect for watching videos or listening to music"
+  ],
+  "keybindings": {
+    "cycle_windows": "super + Tab",
+    "toggle_monocle": "super + m",
+    "fullscreen": "super + f"
+  }
+}

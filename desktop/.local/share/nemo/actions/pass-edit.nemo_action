@@ -1,0 +1,7 @@
+[Nemo Action]
+Name=Edit Password
+Comment=Edit this password entry with pass
+Exec=pass-edit %F
+Icon-Name=dialog-password
+Selection=s
+Mimetypes=application/pgp-encrypted;

@@ -1,6 +1,0 @@
-export DENO_AUTH_TOKENS=""
-# DENO_CERT=
-export DENO_DIR=
-export DENO_INSTALL_ROOT=
-export DENO_NO_PACKAGE_JSON=
-export DENO_REPL_HISTORY="${HOME}/.cache/deno/repl"

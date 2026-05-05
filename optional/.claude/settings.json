@@ -1,0 +1,11 @@
+{
+  "includeCoAuthoredBy": false,
+  "permissions": {
+    "defaultMode": "auto"
+  },
+  "alwaysThinkingEnabled": true,
+  "skipDangerousModePermissionPrompt": true,
+  "agentPushNotifEnabled": true,
+  "gitAttribution": false,
+  "skipAutoPermissionPrompt": true
+}

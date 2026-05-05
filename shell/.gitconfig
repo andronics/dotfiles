@@ -1,0 +1,19 @@
+[user]
+	email = andronics@gmail.com
+	name = Stephen Cox
+
+[core]
+	editor = nano
+	hooksPath = /home/andronics/.git-hooks
+
+[credential]
+	helper = store
+
+[init]
+	defaultbranch = main
+
+[pull]
+	rebase = true
+	
+[rebase]
+	autoStash = true

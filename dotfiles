@@ -4,14 +4,21 @@
 
 dotfiles_source_root="$(cd "$(dirname "$0")" && pwd)"
 dotfiles_target_root="${HOME}"
-dotfiles_ignore="\.((?:pre|post)?(?:un)?install|fold)"
+dotfiles_ignore="\.((?:pre|post)?(?:un)?install|fold)|README\.md|LICENSE|\.gitignore|\.git|\.DS_Store"
+
+# ------------------------------
+
+err()  { printf '\033[0;31merror:\033[0m %s\n' "$*" >&2; }
+warn() { printf '\033[0;33mwarn:\033[0m  %s\n' "$*" >&2; }
+info() { printf '\033[0;36m·\033[0m %s\n' "$*"; }
+ok()   { printf '\033[0;32m✓\033[0m %s\n' "$*"; }
 
 # ------------------------------
 
 _dotfiles() {
 
    [[ $# -eq 0 ]] && {
-        echo "usage: $(basename $0) command"
+        info "usage: $(basename $0) [i|install] "
         return 1
    }
 
@@ -48,20 +55,20 @@ _dotfiles_install() {
    for _pkg in ${_pkgs}; do
       
       [[ ! -d ${_pkg} ]] && {
-         echo "package '${_pkg}' does not exist"
+         err "package '${_pkg}' does not exist"
          continue
       }
       
       
       [[ ${_pkg} =~ /^./ ]] && {
-         echo "package '${_pkg}' prefixed with a period... ignoring"
+         warn "package '${_pkg}' prefixed with a period... ignoring"
          continue
       }
 
       _dotfiles_pre_install
 
       [[ -f "${_pkg}/.install" && -x "${_pkg}/.install" ]] && {
-         echo "package '${_pkg}' is being installed by script"
+         info "package '${_pkg}' is being installed by script"
          source "${_pkg}/.install"
       }
       
@@ -71,10 +78,10 @@ _dotfiles_install() {
          
          [[ -f "${_pkg}/.fold" ]] && _no_folding=""
 
-         echo "package '${_pkg}' is being installed by stow"
+         info "package '${_pkg}' is being installed by stow"
          stow -t "${dotfiles_target_root}" -S ${_pkg} --ignore="${dotfiles_ignore}" ${_no_folding}
 
-         [[ $? -ne 0 ]] && echo "... failed to install"
+         [[ $? -ne 0 ]] && err "... failed to install"
 
       }
 
@@ -91,7 +98,7 @@ _dotfiles_pre_install() {
    _script="${dotfiles_source_root}/${_pkg}/.preinstall"
       
    [[ -f "${_script}" && -x "${_script}" ]] && {
-      echo "package '${_pkg}' executing preinstall script"
+      info "package '${_pkg}' executing preinstall script"
       source "${_script}"
    }
 
@@ -102,7 +109,7 @@ _dotfiles_pre_uninstall() {
    _script="${dotfiles_source_root}/${_pkg}/.preuninstall"
       
    [[ -f "${_script}" && -x "${_script}" ]] && {
-      echo "package '${_pkg}' executing preuninstall script"
+      info "package '${_pkg}' executing preuninstall script"
       source "${_script}"
    }
    
@@ -113,7 +120,7 @@ _dotfiles_post_install() {
    _script="${dotfiles_source_root}/${_pkg}/.postinstall"
       
    [[ -f "${_script}" && -x "${_script}" ]] && {
-      echo "package '${_pkg}' executing postinstall script"
+      info "package '${_pkg}' executing postinstall script"
       source "${_script}"
    }
 
@@ -124,7 +131,7 @@ _dotfiles_post_uninstall() {
    _script="${dotfiles_source_root}/${_pkg}/.postuninstall"
       
    [[ -f "${_script}" && -x "${_script}" ]] && {
-      echo "package '${_pkg}' executing postuninstall script"
+      info "package '${_pkg}' executing postuninstall script"
       source "${_script}"
    }
    
@@ -150,19 +157,19 @@ _dotfiles_uninstall() {
    for _pkg in ${_pkgs}; do
       
       [[ ! -d ${_pkg} ]] && {
-         echo "package '${_pkg}' does not exist"
+         err "package '${_pkg}' does not exist"
          continue
       }
 
       [[ ${_pkg} =~ /^./ ]] && {
-         echo "package '${_pkg}' prefixed with a period... ignoring"
+         warn "package '${_pkg}' prefixed with a period... ignoring"
          continue
       }
 
       _dotfiles_pre_uninstall
          
       [[ -f "${_pkg}/.uninstall" && -x "${_pkg}/.uninstall" ]] && {
-         echo "package '${_pkg}' is being uninstalled by script"
+         info "package '${_pkg}' is being uninstalled by script"
          source "${_pkg}/.uninstall"
       }
       
@@ -172,10 +179,10 @@ _dotfiles_uninstall() {
          
          [[ -f "${_pkg}/.fold" ]] && _no_folding=""
          
-         echo "package '${_pkg}' is being uninstalled by stow"
+         info "package '${_pkg}' is being uninstalled by stow"
          stow -t "${dotfiles_target_root}" -D ${_pkg} --ignore="${dotfiles_ignore}" ${_no_folding}
 
-         [[ $? -ne 0 ]] && echo "... failed to install"
+         [[ $? -ne 0 ]] && err "... failed to install"
 
       }
 

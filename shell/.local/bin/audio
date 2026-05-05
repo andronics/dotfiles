@@ -1,0 +1,216 @@
+#!/usr/bin/env zsh
+# Audio CLI - PulseAudio control interface
+# Uses _audio v2.0 extension library
+
+# Exit on errors
+set -e
+
+# Get script name
+readonly SCRIPT_NAME="$(basename "$0")"
+
+# ------------------------------------------------------------------------------
+# Dependencies
+# ------------------------------------------------------------------------------
+
+# Load audio library
+if ! source "$(command -v _audio)" 2>/dev/null; then
+    echo "ERROR: _audio extension library not found" >&2
+    echo "Please ensure ${HOME}/.local/bin/lib is in PATH" >&2
+    exit 1
+fi
+
+# _audio already loads: _common, _jq, _xdg, _log (and optionally _cava, _events, etc.)
+
+# ------------------------------------------------------------------------------
+# Main Dispatcher
+# ------------------------------------------------------------------------------
+
+audio_main() {
+    # Require at least one argument
+    if [[ $# -eq 0 ]]; then
+        audio_usage
+        return 1
+    fi
+
+    local command="$1"
+    shift 2>/dev/null || true
+
+    # Dispatch to appropriate library function
+    case "${command}" in
+        # Device management
+        device-name)
+            audio-device-get-name "$@"
+            ;;
+        device-icon)
+            audio-device-get-icon "$@"
+            ;;
+
+        # Volume level indicators
+        level-name)
+            audio-level-get-name "$@"
+            ;;
+        level-icon)
+            audio-level-get-icon "$@"
+            ;;
+
+        # Mute control
+        mute-disable)
+            audio-mute-disable "$@"
+            ;;
+        mute-enable)
+            audio-mute-enable "$@"
+            ;;
+        mute-toggle)
+            audio-mute-toggle "$@"
+            ;;
+
+        # Server control
+        restart)
+            audio-server-restart "$@"
+            ;;
+
+        # Sink management
+        sink-next)
+            audio-sink-set-next "$@"
+            ;;
+        sink-prev)
+            audio-sink-set-prev "$@"
+            ;;
+
+        # Spectrum visualization
+        spectrum)
+            audio-spectrum-show "$@"
+            ;;
+
+        # Event subscription
+        subscribe)
+            audio-subscribe "$@"
+            ;;
+
+        # Volume control
+        volume-decrease)
+            audio-volume-decrease "$@"
+            ;;
+        volume-increase)
+            audio-volume-increase "$@"
+            ;;
+        volume-query)
+            # Map to audio-volume-get (query is an alias)
+            audio-volume-get "$@"
+            ;;
+
+        # Help and info
+        help|--help|-h)
+            audio_usage
+            ;;
+        version|--version|-v)
+            echo "audio CLI v2.0.0 (using _audio library v${AUDIO_VERSION:-2.0.0})"
+            ;;
+        info)
+            audio-info "$@"
+            ;;
+
+        # Unknown command
+        *)
+            echo "ERROR: Unknown command '${command}'" >&2
+            echo "Run 'audio help' for usage information" >&2
+            return 1
+            ;;
+    esac
+}
+
+# ------------------------------------------------------------------------------
+# Usage Information
+# ------------------------------------------------------------------------------
+
+audio_usage() {
+    cat <<'EOF'
+Audio CLI - PulseAudio control interface
+
+USAGE:
+    audio <command> [arguments]
+
+COMMANDS:
+    Device Management:
+        device-name              Get friendly name of current device
+        device-icon              Get icon for current device
+
+    Volume Level:
+        level-name               Get volume level name (lowest, low, medium, high, highest, muted)
+        level-icon               Get icon for current volume level
+
+    Mute Control:
+        mute-enable              Enable mute
+        mute-disable             Disable mute
+        mute-toggle              Toggle mute state
+
+    Volume Control:
+        volume-query             Query current volume percentage
+        volume-increase [amount] Increase volume (default: 5%)
+        volume-decrease [amount] Decrease volume (default: 5%)
+
+    Sink Management:
+        sink-next                Switch to next audio sink
+        sink-prev                Switch to previous audio sink
+
+    Server Control:
+        restart                  Restart PulseAudio server
+
+    Visualization:
+        spectrum                 Show audio spectrum visualization
+
+    Events:
+        subscribe                Subscribe to PulseAudio events
+
+    Utility:
+        help, --help, -h         Show this help message
+        version, --version, -v   Show version information
+        info                     Show audio system status
+
+EXAMPLES:
+    # Volume control
+    audio volume-increase
+    audio volume-decrease 10
+    audio volume-query
+
+    # Mute control
+    audio mute-toggle
+    audio mute-disable
+
+    # Sink switching
+    audio sink-next
+    audio sink-prev
+
+    # Device info
+    audio device-name
+    audio device-icon
+
+    # Spectrum visualization
+    audio spectrum
+
+    # Status information
+    audio info
+
+CONFIGURATION:
+    Configuration files are stored in XDG directories:
+    - ${XDG_DATA_HOME}/audio/devices.json - Device patterns and names
+    - ${XDG_DATA_HOME}/audio/levels.json  - Volume level icons
+
+    See _audio extension documentation for configuration details.
+
+NOTES:
+    - Maximum volume: 150% (configurable via AUDIO_VOLUME_MAX)
+    - Default volume step: 5% (configurable via AUDIO_VOLUME_STEP)
+    - Requires PulseAudio and pactl command
+
+DOCUMENTATION:
+    Full documentation: ~/.dotfiles/lib/.local/docs/lib/_audio.md
+
+EOF
+}
+
+# ------------------------------------------------------------------------------
+# Execute
+# ------------------------------------------------------------------------------
+
+audio_main "$@"

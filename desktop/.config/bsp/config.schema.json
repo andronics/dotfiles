@@ -1,0 +1,481 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/andronics/dotfiles/main/bsp/config.schema.json",
+  "title": "BSP Configuration Schema",
+  "description": "Configuration schema for bsp (Binary Space Partitioning) window manager utilities",
+  "type": "object",
+  "required": ["version", "features"],
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "JSON Schema reference"
+    },
+    "version": {
+      "type": "string",
+      "description": "Configuration version",
+      "pattern": "^[0-9]+\\.[0-9]+$"
+    },
+    "features": {
+      "type": "object",
+      "description": "Feature configurations",
+      "properties": {
+        "balance": {
+          "type": "object",
+          "description": "Auto-balance window tree feature",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Enable auto-balance feature",
+              "default": true
+            },
+            "strategy": {
+              "type": "string",
+              "description": "Balance strategy",
+              "enum": ["equal", "equalize"],
+              "default": "equal"
+            },
+            "exclude_classes": {
+              "type": "array",
+              "description": "Window classes to exclude from balancing",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            },
+            "events": {
+              "type": "array",
+              "description": "Events to trigger balancing",
+              "items": {
+                "type": "string",
+                "enum": ["node_add", "node_remove", "node_state", "node_geometry", "node_swap", "node_transfer"]
+              },
+              "default": ["node_add", "node_remove", "node_state", "node_geometry"]
+            }
+          }
+        },
+        "desktops": {
+          "type": "object",
+          "description": "Dynamic desktop management feature",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Enable dynamic desktop management",
+              "default": true
+            },
+            "start_id": {
+              "type": "integer",
+              "description": "Starting desktop ID",
+              "minimum": 1,
+              "default": 1
+            },
+            "auto_naming": {
+              "type": "boolean",
+              "description": "Automatically name desktops",
+              "default": false
+            },
+            "naming_pattern": {
+              "type": "string",
+              "description": "Desktop naming pattern (use {id} placeholder)",
+              "default": "Desktop {id}"
+            },
+            "events": {
+              "type": "array",
+              "description": "Events to trigger desktop management",
+              "items": {
+                "type": "string"
+              },
+              "default": ["node_add", "node_remove", "node_state", "node_geometry"]
+            }
+          }
+        },
+        "flag": {
+          "type": "object",
+          "description": "Window flag reaction feature",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Enable flag reactions",
+              "default": true
+            },
+            "events": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": ["node_flag"]
+            },
+            "marked": {
+              "type": "object",
+              "properties": {
+                "border_width": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "default": 3
+                },
+                "border_color": {
+                  "type": "string",
+                  "pattern": "^#[0-9a-fA-F]{6}$",
+                  "default": "#0000ff"
+                }
+              }
+            },
+            "floating": {
+              "type": "object",
+              "properties": {
+                "border_width": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "default": 2
+                },
+                "border_color": {
+                  "type": "string",
+                  "pattern": "^#[0-9a-fA-F]{6}$",
+                  "default": "#00ff00"
+                }
+              }
+            },
+            "hidden": {
+              "type": "object",
+              "properties": {
+                "border_width": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "default": 0
+                }
+              }
+            },
+            "sticky": {
+              "type": "object",
+              "properties": {
+                "border_color": {
+                  "type": "string",
+                  "pattern": "^#[0-9a-fA-F]{6}$",
+                  "default": "#ffff00"
+                }
+              }
+            },
+            "locked": {
+              "type": "object",
+              "properties": {
+                "border_color": {
+                  "type": "string",
+                  "pattern": "^#[0-9a-fA-F]{6}$",
+                  "default": "#ff0000"
+                }
+              }
+            },
+            "private": {
+              "type": "object",
+              "properties": {
+                "border_color": {
+                  "type": "string",
+                  "pattern": "^#[0-9a-fA-F]{6}$",
+                  "default": "#ff00ff"
+                }
+              }
+            }
+          }
+        },
+        "floating_borders": {
+          "type": "object",
+          "description": "Remove borders from floating windows feature",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Enable floating border removal",
+              "default": true
+            },
+            "border_width": {
+              "type": "integer",
+              "description": "Border width for floating windows",
+              "minimum": 0,
+              "default": 0
+            },
+            "events": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": ["node_state"]
+            }
+          }
+        },
+        "ventilate": {
+          "type": "object",
+          "description": "Terminal window swallowing feature",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Enable terminal swallowing",
+              "default": true
+            },
+            "terminals": {
+              "type": "array",
+              "description": "Terminal window classes",
+              "items": {
+                "type": "string"
+              },
+              "default": ["Alacritty", "terminal-drop", "Code"]
+            },
+            "no_inhale": {
+              "type": "array",
+              "description": "Window classes that should not be swallowed",
+              "items": {
+                "type": "string"
+              },
+              "default": ["Rofi", "xev", "xprop", "gcr-prompter", "firefox", "Google-chrome"]
+            },
+            "events": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": ["node_add", "node_remove"]
+            },
+            "state_file": {
+              "type": "string",
+              "description": "File to store swallowed window state",
+              "default": "${XDG_STATE_HOME}/bsp/inhaled.json"
+            }
+          }
+        }
+      }
+    },
+    "ipc": {
+      "type": "object",
+      "description": "IPC (Inter-Process Communication) settings",
+      "properties": {
+        "socket": {
+          "type": "string",
+          "description": "Unix socket path for IPC",
+          "default": "${XDG_RUNTIME_DIR}/bsp.sock"
+        },
+        "timeout": {
+          "type": "integer",
+          "description": "IPC timeout in seconds",
+          "minimum": 1,
+          "default": 5
+        },
+        "buffer_size": {
+          "type": "integer",
+          "description": "IPC buffer size in bytes",
+          "minimum": 1024,
+          "default": 4096
+        }
+      }
+    },
+    "logging": {
+      "type": "object",
+      "description": "Logging configuration",
+      "properties": {
+        "level": {
+          "type": "string",
+          "description": "Log level",
+          "enum": ["DEBUG", "INFO", "WARN", "ERROR"],
+          "default": "INFO"
+        },
+        "file": {
+          "type": "string",
+          "description": "Log file path",
+          "default": "${XDG_STATE_HOME}/bsp/bsp.log"
+        },
+        "max_size": {
+          "type": "string",
+          "description": "Maximum log file size (e.g., 10M, 1G)",
+          "pattern": "^[0-9]+[KMG]$",
+          "default": "10M"
+        },
+        "rotate": {
+          "type": "integer",
+          "description": "Number of rotated log files to keep",
+          "minimum": 0,
+          "default": 5
+        },
+        "format": {
+          "type": "string",
+          "description": "Log message format",
+          "default": "[{timestamp}] [{level}] [{context}] {message}"
+        }
+      }
+    },
+    "cache": {
+      "type": "object",
+      "description": "Cache configuration",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Enable caching",
+          "default": true
+        },
+        "ttl": {
+          "type": "object",
+          "description": "Cache TTL (Time To Live) settings in seconds",
+          "properties": {
+            "nodes": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 5
+            },
+            "desktops": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 5
+            },
+            "monitors": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 5
+            },
+            "tree": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 5
+            },
+            "window_properties": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 60
+            },
+            "config": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 3600
+            }
+          }
+        },
+        "file": {
+          "type": "string",
+          "description": "Cache file path",
+          "default": "${XDG_CACHE_HOME}/bsp/cache.json"
+        }
+      }
+    },
+    "layouts": {
+      "type": "object",
+      "description": "Layout management configuration",
+      "properties": {
+        "directory": {
+          "type": "string",
+          "description": "Directory for layout files",
+          "default": "${XDG_CONFIG_HOME}/bsp/layouts"
+        },
+        "auto_apply": {
+          "type": "boolean",
+          "description": "Automatically apply layouts on desktop switch",
+          "default": false
+        },
+        "default_layout": {
+          "type": "string",
+          "description": "Default layout name",
+          "default": "default"
+        }
+      }
+    },
+    "notifications": {
+      "type": "object",
+      "description": "Desktop notification settings",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Enable desktop notifications",
+          "default": true
+        },
+        "events": {
+          "type": "object",
+          "description": "Events to notify about",
+          "properties": {
+            "desktop_added": {
+              "type": "boolean",
+              "default": true
+            },
+            "desktop_removed": {
+              "type": "boolean",
+              "default": true
+            },
+            "layout_applied": {
+              "type": "boolean",
+              "default": true
+            },
+            "feature_enabled": {
+              "type": "boolean",
+              "default": false
+            },
+            "feature_disabled": {
+              "type": "boolean",
+              "default": false
+            },
+            "errors": {
+              "type": "boolean",
+              "default": true
+            }
+          }
+        },
+        "urgency": {
+          "type": "object",
+          "description": "Notification urgency levels",
+          "properties": {
+            "info": {
+              "type": "string",
+              "enum": ["low", "normal", "critical"],
+              "default": "normal"
+            },
+            "warning": {
+              "type": "string",
+              "enum": ["low", "normal", "critical"],
+              "default": "normal"
+            },
+            "error": {
+              "type": "string",
+              "enum": ["low", "normal", "critical"],
+              "default": "critical"
+            }
+          }
+        }
+      }
+    },
+    "ui": {
+      "type": "object",
+      "description": "UI/UX settings",
+      "properties": {
+        "colors": {
+          "type": "boolean",
+          "description": "Enable colored output",
+          "default": true
+        },
+        "unicode": {
+          "type": "boolean",
+          "description": "Enable unicode symbols",
+          "default": true
+        },
+        "tree": {
+          "type": "object",
+          "description": "Tree visualization settings",
+          "properties": {
+            "symbols": {
+              "type": "object",
+              "description": "Tree drawing symbols",
+              "properties": {
+                "vertical": {
+                  "type": "string",
+                  "default": "│"
+                },
+                "horizontal": {
+                  "type": "string",
+                  "default": "─"
+                },
+                "corner": {
+                  "type": "string",
+                  "default": "└"
+                },
+                "tee": {
+                  "type": "string",
+                  "default": "├"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

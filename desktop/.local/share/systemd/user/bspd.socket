@@ -1,0 +1,14 @@
+[Unit]
+Description=BSPWM Daemon Socket
+Documentation=man:bsp(1) https://github.com/andronics/dotfiles
+PartOf=bspd.service
+
+[Socket]
+ListenStream=%t/bspd.sock
+SocketMode=0600
+Accept=false
+RemoveOnStop=true
+
+# Start service on socket activation
+[Install]
+WantedBy=sockets.target

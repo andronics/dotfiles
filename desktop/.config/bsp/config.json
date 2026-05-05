@@ -1,0 +1,143 @@
+{
+  "$schema": "./config.schema.json",
+  "version": "2.0",
+
+  "features": {
+    "balance": {
+      "enabled": true,
+      "strategy": "equal",
+      "exclude_classes": [],
+      "events": ["node_add", "node_remove", "node_state", "node_geometry"]
+    },
+
+    "desktops": {
+      "enabled": true,
+      "start_id": 1,
+      "auto_naming": false,
+      "naming_pattern": "Desktop {id}",
+      "events": ["node_add", "node_remove", "node_state", "node_geometry", "desktop_add", "desktop_rename", "desktop_remove", "node_transfer"]
+    },
+
+    "flag": {
+      "enabled": true,
+      "events": ["node_flag"],
+      "marked": {
+        "border_width": 3,
+        "border_color": "#0000ff"
+      },
+      "floating": {
+        "border_width": 2,
+        "border_color": "#00ff00"
+      },
+      "hidden": {
+        "border_width": 0
+      },
+      "sticky": {
+        "border_color": "#ffff00"
+      },
+      "locked": {
+        "border_color": "#ff0000"
+      },
+      "private": {
+        "border_color": "#ff00ff"
+      }
+    },
+
+    "floating_borders": {
+      "enabled": true,
+      "border_width": 0,
+      "tiled_border_width": 1,
+      "events": ["node_state"]
+    },
+
+    "ventilate": {
+      "enabled": true,
+      "terminals": [
+        "Alacritty",
+        "terminal-drop",
+        "Code",
+        "kitty",
+        "URxvt",
+        "st"
+      ],
+      "no_inhale": [
+        "Rofi",
+        "xev",
+        "xprop",
+        "gcr-prompter",
+        "firefox",
+        "Google-chrome",
+        "Chromium",
+        "Brave-browser",
+        "Thunar",
+        "Nautilus",
+        "dolphin"
+      ],
+      "events": ["node_add", "node_remove"],
+      "state_file": "${XDG_STATE_HOME}/bsp/inhaled.json"
+    }
+  },
+
+  "ipc": {
+    "socket": "${XDG_RUNTIME_DIR}/bsp.sock",
+    "timeout": 5,
+    "buffer_size": 4096
+  },
+
+  "logging": {
+    "level": "INFO",
+    "file": "${XDG_STATE_HOME}/bsp/bsp.log",
+    "max_size": "10M",
+    "rotate": 5,
+    "format": "[{timestamp}] [{level}] [{context}] {message}"
+  },
+
+  "cache": {
+    "enabled": true,
+    "ttl": {
+      "nodes": 5,
+      "desktops": 5,
+      "monitors": 5,
+      "tree": 5,
+      "window_properties": 60,
+      "config": 3600
+    },
+    "file": "${XDG_CACHE_HOME}/bsp/cache.json"
+  },
+
+  "layouts": {
+    "directory": "${XDG_CONFIG_HOME}/bsp/layouts",
+    "auto_apply": false,
+    "default_layout": "default"
+  },
+
+  "notifications": {
+    "enabled": true,
+    "events": {
+      "desktop_added": true,
+      "desktop_removed": true,
+      "layout_applied": true,
+      "feature_enabled": false,
+      "feature_disabled": false,
+      "errors": true
+    },
+    "urgency": {
+      "info": "normal",
+      "warning": "normal",
+      "error": "critical"
+    }
+  },
+
+  "ui": {
+    "colors": true,
+    "unicode": true,
+    "tree": {
+      "symbols": {
+        "vertical": "│",
+        "horizontal": "─",
+        "corner": "└",
+        "tee": "├"
+      }
+    }
+  }
+}

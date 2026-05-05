@@ -1,0 +1,43 @@
+[Unit]
+Description=BSPWM Daemon - Unified window management daemon
+Documentation=man:bsp(1) https://github.com/andronics/dotfiles
+After=bspwm.service
+Wants=bspwm.service
+PartOf=graphical-session.target
+
+[Service]
+Type=notify
+ExecStart=%h/.pkgs/bsp/.local/libexec/bsp/bspd
+Restart=on-failure
+RestartSec=3s
+
+# Resource limits
+MemoryHigh=50M
+MemoryMax=100M
+CPUQuota=10%
+
+# Security
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/.cache/bsp %h/.config/bsp %h/.local/share/bsp
+
+# Environment
+Environment="PATH=/usr/local/bin:/usr/bin:/bin"
+Environment="XDG_CONFIG_HOME=%h/.config"
+Environment="XDG_CACHE_HOME=%h/.cache"
+Environment="XDG_DATA_HOME=%h/.local/share"
+
+# Shutdown
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=10s
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=bspd
+
+[Install]
+WantedBy=graphical-session.target

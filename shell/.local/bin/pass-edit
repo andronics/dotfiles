@@ -1,0 +1,4 @@
+#!/bin/bash
+entry="${1#$HOME/.password-store/}"
+entry="${entry%.gpg}"
+alacritty -e pass edit "$entry"

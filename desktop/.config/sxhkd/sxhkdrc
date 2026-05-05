@@ -1,0 +1,137 @@
+# bspc - wm restart / quit
+super + BackSpace + {_, alt}
+  bspc {wm --restart, quit}
+
+# desktop - shroud + mute
+super + Escape + {_, alt}
+  { bsp-shroud cover && audio mute, bsp-shroud reveal && audio unmute }
+
+# terminal - default
+super + Return + {_, alt, shift}
+  {$TERMINAL, terminal drop scratch, terminal draw}
+
+# launcher - gui
+super + space + {_, alt}
+  { rofi -show drun -show-icons, $HOME/.local/bin/apps }
+
+# preselect on {north, south, west, east} postion
+super + {Up, Down, Left, Right}
+  bspc node -p "{~north,~south,~west,~east}"
+
+# focus on {north, south, west, east} node
+super + {Up, Down, Left, Right}  + alt
+  bspc node -f { north, south, west, east }
+
+# focus on {next,previous} desktop
+super + {n, p}
+  bspc desktop -f { next, prev }
+
+# send node to {next / previous} desktop
+super + {n, p} + alt
+  bspc node -d $(bspc query -D -d "{next,prev}") --follow
+
+# node - balance
+super + b + {_, alt}
+  bspc node {@parent, @/} --balance
+
+# Recepticles - clear
+super + c
+  for win in `bspc query -n -n ".leaf.\!window"`; do bspc node $win -k; done
+
+# node - equalise
+super + e + {_, alt}
+  bspc node {@parent, @/} --equalize
+
+# node - floating / fullscreen
+super + f + {_, alt}
+  bspc node --state {floating, fullscreen}
+
+# window gap
+super + g
+  bspc config -d focused window_gap {15,30,65}
+
+# node - hidden
+super + h + {_, alt}
+  { bspc node --flag hidden=on, bspc node any.hidden.local --flag hidden=off}
+
+# node - private / inddependent
+super + i
+  bspc node --flag private
+
+# node - locked
+super + l
+  bspc node --flag locked
+
+# node - marked
+super + m
+  bspc node --flag marked
+
+# node - quit
+super + q + {_, alt}
+  bspc node --{close,kill}
+
+# tree - rotate forward
+super + r + {_, alt}
+  bspc node {@parent, @/} -C forward
+
+# node - sticky
+super + s
+  bspc node --flag sticky
+
+# node - tiled / pseudo_tiled
+super + t + {_, alt}
+  bspc node --state {tiled,pseudo_tiled}
+
+# node - swap with marked
+super + x
+  bspc node -s $(bspc query -N -n .marked)
+
+# node - yank to preselect
+super + y
+	bspc node newest.marked.local -n newest.!automatic.local
+
+# tree - flip vertical
+super + v + {_, alt}
+  bspc node {@parent, @/} -f vertical
+
+# tree - flip horizontal
+super + w + {_, alt}
+  bspc node {@parent, @/} -f horizontal
+
+# tree - rotate backward
+super + z + {_, alt}
+  bspc node {@parent, @/} -C backward
+
+
+# sxhkd  {bindings, reload, edit
+super + F1 + {_, alt, shift}
+  {sxhkd-bindings, pkill -sigusr1 sxhkd, xdg-open ~/.config/sxhkd/sxhkdrc}
+
+# lower audio
+XF86AudioLowerVolume
+  audio volume-decrease
+
+# mute audio
+XF86AudioMute
+  audio mute-toggle
+
+# next track
+XF86AudioNext
+  player action-next
+
+# play / pause track
+XF86AudioPlay
+  player action-play-pause
+
+# previous track
+XF86AudioPrev
+  player action-previous
+
+# raise audio
+XF86AudioRaiseVolume
+  audio volume-increase
+
+# bluetooth - menu / power toggle
+super + F9 + {_, alt}
+  {bt menu, bt power-toggle}
+
