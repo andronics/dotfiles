@@ -90,6 +90,32 @@ Two private secrets repos are tracked as submodules:
 
 `shell/.postinstall` enforces `chmod 700` on `~/.ssh` and `~/.gnupg` (sshd and gpg refuse loose-perm dirs) and runs `gpg-connect-agent reloadagent` so any newly-imported keys are picked up.
 
+## Secrets architecture
+
+Three layered tiers. Compromise of any tier leaks nothing without the one above it.
+
+```
+GPG key             ← shell/.gnupg submodule (private)
+   │ decrypts
+pass entries        ← github.com/andronics/password-store (private)
+   │ pass show git/crypt-key
+git-crypt key       ← 32-byte symmetric key, never on disk in plaintext
+   │ AES via git clean/smudge
+*.env files         ← tracked in this (public) repo
+```
+
+Patterns under git-crypt are declared in `.gitattributes` at the repo root. The clean/smudge filters are wired automatically by `shell/.postinstall` on first install — it runs `./shell/.local/bin/git-crypt init` if `.gitattributes` declares the filter and `.git/config` doesn't yet have it.
+
+To wire manually (after `pass` and the key are available):
+
+```sh
+cd ~/.dotfiles && ./shell/.local/bin/git-crypt init
+git checkout HEAD -- .       # re-checkout to materialize decrypted contents
+```
+
+Currently no files are encrypted — the wiring is symbolic. Add a pattern to `.gitattributes` and re-add the matching files (`git rm --cached <file>; git add <file>`) to start encrypting.
+
+> The `git-crypt` script in this repo is a custom openssl-based implementation, not Andrew Ayer's upstream `git-crypt` Arch package. Same clean/smudge concept; symmetric-only; deliberate.
 
 ## Conventions
 

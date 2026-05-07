@@ -1,0 +1,14 @@
+# Git-crypt encrypted files.
+#
+# Files matching the patterns below are encrypted on commit (clean filter)
+# and decrypted on checkout (smudge filter) using the symmetric key in
+# `pass show git/crypt-key`. Filter is wired by `shell/.local/bin/git-crypt`,
+# invoked automatically by `shell/.postinstall` after a fresh clone.
+#
+# To activate manually: cd ~/.dotfiles && ./shell/.local/bin/git-crypt init
+#
+# Until activated, the patterns below are no-ops — git's filter resolution
+# falls through to identity when filter.git-crypt.* is unset, so adding
+# this file to a fresh clone is harmless.
+
+*.env filter=git-crypt diff=git-crypt

@@ -2,8 +2,10 @@
 # Exit on errors
 set -e
 
-# Get script name
-readonly SCRIPT_NAME="$(basename "$0")"
+# Capture script identity at top-level — `$0` inside a zsh function refers to
+# the function name (FUNCTION_ARGZERO is on by default), not the script path.
+readonly SCRIPT_PATH="${0:A}"
+readonly SCRIPT_NAME="${SCRIPT_PATH:t}"
 
 # ------------------------------------------------------------------------------
 # Configuration
@@ -99,15 +101,9 @@ init_configure_git_filters() {
     echo "✓ Git filters configured in .git/config"
 }
 
-# Get absolute path to this script
+# Resolve to the absolute script path (captured at top-level into SCRIPT_PATH).
 init_get_script_path() {
-    if [[ "$0" = /* ]]; then
-        # Already absolute path
-        echo "$0"
-    else
-        # Relative path - make absolute
-        echo "$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
-    fi
+    echo "${SCRIPT_PATH}"
 }
 
 # Create or update .gitattributes file
@@ -249,8 +245,10 @@ git_crypt_smudge() {
     local key
     key=$(get_encryption_key) || return 1
     
-    # Read from stdin, decrypt, output to stdout
-    GIT_CRYPT_KEY="$key" openssl dec -aes-256-cbc -pbkdf2 -pass env:GIT_CRYPT_KEY 2>/dev/null || {
+    # Read from stdin, decrypt, output to stdout. `openssl enc -d` is the
+    # decrypt mode; there is no `openssl dec` subcommand (was an OpenSSL 1.x
+    # quasi-alias, removed in 3.x).
+    GIT_CRYPT_KEY="$key" openssl enc -d -aes-256-cbc -pbkdf2 -pass env:GIT_CRYPT_KEY 2>/dev/null || {
         echo "ERROR: Failed to decrypt file - wrong key or corrupted data?" >&2
         return 1
     }

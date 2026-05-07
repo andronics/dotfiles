@@ -1,11 +1,27 @@
 #!/usr/bin/env bash
 # Sourced by ./dotfiles after stowing the shell package.
-# Locks down secret-dir perms (ssh/gpg refuse loose modes) and reloads
-# gpg-agent so any newly-imported keys are picked up.
+# Locks down secret-dir perms (ssh/gpg refuse loose modes), reloads gpg-agent
+# so newly-imported keys are picked up, and wires git-crypt filters in the
+# dotfiles repo if .gitattributes declares them.
+# shellcheck disable=SC2154  # err/info/ok and dotfiles_source_root come from the wrapper
 
 [[ -d "${HOME}/.ssh"   ]] && chmod 700 "${HOME}/.ssh"
 [[ -d "${HOME}/.gnupg" ]] && chmod 700 "${HOME}/.gnupg"
 
 command -v gpg-connect-agent >/dev/null && {
    gpg-connect-agent reloadagent /bye >/dev/null 2>&1 && ok "gpg-agent reloaded"
+}
+
+# Wire git-crypt clean/smudge filters into the dotfiles repo's .git/config.
+# Idempotent: skipped if filter is already configured. Best-effort: does not
+# abort install if pass / key is unavailable.
+_gitattrs="${dotfiles_source_root}/.gitattributes"
+[[ -f "${_gitattrs}" ]] && grep -q 'filter=git-crypt' "${_gitattrs}" 2>/dev/null && {
+   git -C "${dotfiles_source_root}" config --get filter.git-crypt.clean >/dev/null 2>&1 || {
+      info "wiring git-crypt filters in dotfiles repo"
+      ( cd "${dotfiles_source_root}" \
+         && "${dotfiles_source_root}/shell/.local/bin/git-crypt" init >/dev/null 2>&1 \
+      ) && ok "git-crypt activated (run 'git checkout HEAD -- .' to refresh tracked files)" \
+        || warn "git-crypt init skipped — pass entry 'git/crypt-key' missing or gpg locked"
+   }
 }
