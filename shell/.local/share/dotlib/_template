@@ -1,0 +1,1102 @@
+#!/usr/bin/env zsh
+
+# _template - Template rendering engine with gomplate integration
+# Part of the dotfiles library v2.0
+# Version: 2.0.0 (Enhanced with gomplate support for schema system)
+#
+# Purpose:
+#   Provides template rendering capabilities using gomplate (external tool)
+#   with fallback to native ZSH mustache-style templating. Supports data
+#   sources, functions, and advanced templating features.
+#
+# Usage:
+#   source "$(which _template)"
+#   template-render "Hello {{ .name }}" '{"name":"World"}'
+#   template-render-file "template.yaml" "context.json"
+#
+# Features:
+#   - Gomplate integration (primary engine)
+#   - Native mustache-style templating (fallback)
+#   - JSON/YAML context support
+#   - Template discovery and loading
+#   - Context variable management
+#   - Inline and file-based rendering
+#   - Variable substitution ({{VAR}} syntax)
+#   - Conditional rendering ({{#if condition}}...{{/if}})
+#   - Loop rendering ({{#each items}}...{{/each}})
+#   - Template includes/partials ({{> partial}})
+#
+# Dependencies:
+#   - _common (required, for XDG paths and utilities)
+#   - gomplate (optional, for advanced features)
+
+# ------------------------------
+# Source Guard
+# ------------------------------
+
+[[ -n "${TEMPLATE_LOADED:-}" ]] && return 0
+
+# ------------------------------
+# Version
+# ------------------------------
+
+declare -gr TEMPLATE_VERSION="2.0.0"
+declare -g TEMPLATE_LOADED=1
+
+# ------------------------------
+# Load Dependencies
+# ------------------------------
+
+# Load _common (required)
+_TEMPLATE_DIR="${${(%):-%x}:A:h}"
+if ! source "$_TEMPLATE_DIR/_common" 2>/dev/null; then
+    # Fallback: try multiple locations
+    local _found=false
+    for _path in \
+        "$HOME/.local/bin/lib/_common" \
+        "$HOME/.dotfiles/lib/.local/bin/lib/_common"; do
+        if [[ -f "$_path" ]] && source "$_path" 2>/dev/null; then
+            _found=true
+            break
+        fi
+    done
+    if [[ "$_found" != "true" ]]; then
+        echo "[ERROR] _template requires _common extension" >&2
+        return 1
+    fi
+    unset _found _path
+fi
+unset _TEMPLATE_DIR
+
+# ------------------------------
+# Configuration Variables
+# ------------------------------
+
+# Template directories
+declare -g TEMPLATE_DIR="${TEMPLATE_DIR:-$(common-xdg-data-home)/templates}"
+declare -g TEMPLATE_PARTIALS_DIR="${TEMPLATE_PARTIALS_DIR:-${TEMPLATE_DIR}/partials}"
+declare -g TEMPLATE_CACHE_DIR="${TEMPLATE_CACHE_DIR:-$(common-xdg-cache-home)/templates}"
+
+# Template search paths (colon-separated)
+declare -g TEMPLATE_SEARCH_PATHS="${TEMPLATE_SEARCH_PATHS:-}"
+
+# Engine configuration
+declare -g TEMPLATE_DEFAULT_ENGINE="${TEMPLATE_DEFAULT_ENGINE:-auto}"  # auto|gomplate|mustache|simple
+declare -g TEMPLATE_USE_GOMPLATE="${TEMPLATE_USE_GOMPLATE:-auto}"  # auto|yes|no (deprecated, use DEFAULT_ENGINE)
+
+# Delimiters
+declare -g TEMPLATE_VARIABLE_PREFIX="${TEMPLATE_VARIABLE_PREFIX:-\{\{}"
+declare -g TEMPLATE_VARIABLE_SUFFIX="${TEMPLATE_VARIABLE_SUFFIX:-\}\}}"
+declare -g TEMPLATE_GOMPLATE_LEFT_DELIM="${TEMPLATE_GOMPLATE_LEFT_DELIM:-{{}"
+declare -g TEMPLATE_GOMPLATE_RIGHT_DELIM="${TEMPLATE_GOMPLATE_RIGHT_DELIM:-}}}"
+
+# Behavior
+declare -g TEMPLATE_KEEP_UNKNOWN="${TEMPLATE_KEEP_UNKNOWN:-false}"
+declare -g TEMPLATE_STRICT_MODE="${TEMPLATE_STRICT_MODE:-false}"
+declare -g TEMPLATE_VERBOSE="${TEMPLATE_VERBOSE:-false}"
+declare -g TEMPLATE_DEBUG="${TEMPLATE_DEBUG:-false}"
+
+# Create required directories
+mkdir -p "$TEMPLATE_DIR" "$TEMPLATE_PARTIALS_DIR" "$TEMPLATE_CACHE_DIR" 2>/dev/null
+
+# ------------------------------
+# Internal State
+# ------------------------------
+
+# Feature availability
+declare -g TEMPLATE_GOMPLATE_AVAILABLE=false
+declare -g TEMPLATE_HAS_JQ=0
+
+# Template variables (associative array)
+declare -g -A _TEMPLATE_VARS=()
+
+# Context storage (for schema system)
+declare -g -A _TEMPLATE_CONTEXT=()
+
+# Partial templates cache
+declare -g -A _TEMPLATE_PARTIALS=()
+
+# Template cache
+declare -g -A _TEMPLATE_CACHE=()
+
+# Template stack for nested includes
+declare -g -a _TEMPLATE_STACK=()
+
+# Statistics
+declare -g _TEMPLATE_TOTAL_RENDERS=0
+declare -g _TEMPLATE_TOTAL_ERRORS=0
+
+# Last error
+declare -g TEMPLATE_LAST_ERROR=""
+
+# ------------------------------
+# Check for tools
+# ------------------------------
+
+if common-command-exists "gomplate"; then
+    TEMPLATE_GOMPLATE_AVAILABLE=true
+fi
+
+if common-command-exists "jq"; then
+    TEMPLATE_HAS_JQ=1
+fi
+
+# ------------------------------
+# Color Constants
+# ------------------------------
+
+declare -gr _TEMPLATE_COLOR_ERROR="$COLOR_RED"
+declare -gr _TEMPLATE_COLOR_WARNING="$COLOR_YELLOW"
+declare -gr _TEMPLATE_COLOR_DEBUG="$COLOR_BLUE"
+
+# ------------------------------
+# Internal Logging Functions
+# ------------------------------
+
+_template-log-debug() {
+    [[ "$TEMPLATE_DEBUG" == "true" ]] || return 0
+    echo -e "${_TEMPLATE_COLOR_DEBUG}[DEBUG] template: $*${COLOR_RESET}" >&2
+}
+
+_template-log-verbose() {
+    [[ "$TEMPLATE_VERBOSE" == "true" ]] || return 0
+    echo "[INFO] template: $*" >&2
+}
+
+_template-log-error() {
+    echo -e "${_TEMPLATE_COLOR_ERROR}[ERROR] template: $*${COLOR_RESET}" >&2
+    TEMPLATE_LAST_ERROR="$*"
+    ((_TEMPLATE_TOTAL_ERRORS++))
+}
+
+_template-log-warning() {
+    echo -e "${_TEMPLATE_COLOR_WARNING}[WARNING] template: $*${COLOR_RESET}" >&2
+}
+
+# ------------------------------
+# Feature Detection
+# ------------------------------
+
+# Check if gomplate is available
+template-has-gomplate() {
+    [[ "$TEMPLATE_GOMPLATE_AVAILABLE" == "true" ]]
+}
+
+# Determine if we should use gomplate
+_template-should-use-gomplate() {
+    # Check new DEFAULT_ENGINE first
+    if [[ "$TEMPLATE_DEFAULT_ENGINE" == "gomplate" ]]; then
+        if template-has-gomplate; then
+            return 0
+        else
+            _template-log-error "Gomplate engine requested but not available"
+            return 1
+        fi
+    elif [[ "$TEMPLATE_DEFAULT_ENGINE" == "mustache" ]] || [[ "$TEMPLATE_DEFAULT_ENGINE" == "simple" ]]; then
+        return 1
+    fi
+
+    # Fall back to USE_GOMPLATE (deprecated)
+    case "$TEMPLATE_USE_GOMPLATE" in
+        yes|true|1)
+            if template-has-gomplate; then
+                return 0
+            else
+                _template-log-error "Gomplate requested but not available"
+                return 1
+            fi
+            ;;
+        no|false|0)
+            return 1
+            ;;
+        auto)
+            template-has-gomplate
+            return $?
+            ;;
+        *)
+            template-has-gomplate
+            return $?
+            ;;
+    esac
+}
+
+# ------------------------------
+# Lifecycle Integration
+# ------------------------------
+
+# Initialize template extension
+template-init() {
+    _template-log-debug "Initializing template engine v${TEMPLATE_VERSION}"
+
+    # Clear state
+    _TEMPLATE_VARS=()
+    _TEMPLATE_CONTEXT=()
+    _TEMPLATE_PARTIALS=()
+    _TEMPLATE_CACHE=()
+    _TEMPLATE_STACK=()
+
+    # Ensure directories exist
+    mkdir -p "$TEMPLATE_DIR" "$TEMPLATE_PARTIALS_DIR" "$TEMPLATE_CACHE_DIR" 2>/dev/null
+
+    _template-log-debug "Initialization complete"
+    return 0
+}
+
+# Cleanup template resources
+template-cleanup() {
+    _template-log-debug "Cleaning up template resources"
+
+    _TEMPLATE_VARS=()
+    _TEMPLATE_CONTEXT=()
+    _TEMPLATE_PARTIALS=()
+    _TEMPLATE_CACHE=()
+    _TEMPLATE_STACK=()
+
+    return 0
+}
+
+# Variable Management (Legacy)
+# ------------------------------
+
+# Set template variable
+template-set-var() {
+    local name="${1:?Variable name required}"
+    local value="$2"
+
+    _TEMPLATE_VARS[$name]="$value"
+    _template-log-debug "Set variable: ${name}=${value}"
+    return 0
+}
+
+# Get template variable
+template-get-var() {
+    local name="${1:?Variable name required}"
+    local default="${2:-}"
+
+    echo "${_TEMPLATE_VARS[$name]:-$default}"
+}
+
+# Unset template variable
+template-unset-var() {
+    local name="${1:?Variable name required}"
+
+    if [[ -n "${_TEMPLATE_VARS[$name]}" ]]; then
+        unset "_TEMPLATE_VARS[$name]"
+        _template-log-debug "Unset variable: ${name}"
+        return 0
+    fi
+
+    return 1
+}
+
+# Clear all template variables
+template-clear-vars() {
+    _TEMPLATE_VARS=()
+    _template-log-debug "Cleared all variables"
+    return 0
+}
+
+# List all template variables
+template-list-vars() {
+    if [[ ${#_TEMPLATE_VARS[@]} -eq 0 ]]; then
+        _template-log-verbose "No variables defined"
+        return 0
+    fi
+
+    local name
+    for name in "${(@k)_TEMPLATE_VARS}"; do
+        echo "${name}=${_TEMPLATE_VARS[$name]}"
+    done
+}
+
+# Check if variable exists
+template-has-var() {
+    local name="${1:?Variable name required}"
+    [[ -n "${_TEMPLATE_VARS[$name]}" ]]
+}
+
+# Load variables from JSON file
+template-load-vars-json() {
+    local file="${1:?JSON file required}"
+
+    if [[ ! -f "$file" ]]; then
+        _template-log-error "JSON file not found: ${file}"
+        return 1
+    fi
+
+    if [[ "$TEMPLATE_HAS_JQ" -eq 0 ]]; then
+        _template-log-error "jq not available for JSON parsing"
+        return 1
+    fi
+
+    _template-log-debug "Loading variables from JSON: ${file}"
+
+    # Parse JSON and set variables
+    local key value
+    local json_content=$(cat "$file")
+    local keys=$(echo "$json_content" | jq -r 'keys[]' 2>/dev/null)
+
+    while IFS= read -r key; do
+        value=$(echo "$json_content" | jq -r ".$key" 2>/dev/null)
+        template-set-var "$key" "$value"
+    done <<< "$keys"
+
+    _template-log-verbose "Loaded variables from: ${file}"
+    return 0
+}
+
+# Load variables from environment with prefix
+template-load-vars-env() {
+    local prefix="${1:-TEMPLATE_VAR_}"
+
+    _template-log-debug "Loading environment variables with prefix: ${prefix}"
+
+    local var name value
+    for var in ${(M)${(k)parameters}:#${prefix}*}; do
+        name="${var#$prefix}"
+        value="${(P)var}"
+        template-set-var "$name" "$value"
+    done
+
+    _template-log-debug "Loaded environment variables"
+    return 0
+}
+
+# Load variables from key=value file
+template-load-vars-file() {
+    local file="${1:?File required}"
+
+    if [[ ! -f "$file" ]]; then
+        _template-log-error "File not found: ${file}"
+        return 1
+    fi
+
+    _template-log-debug "Loading variables from file: ${file}"
+
+    local line key value
+    while IFS= read -r line; do
+        # Skip comments and empty lines
+        [[ "$line" =~ ^[[:space:]]*# ]] && continue
+        [[ -z "${line// /}" ]] && continue
+
+        # Parse key=value
+        if [[ "$line" =~ ^([^=]+)=(.*)$ ]]; then
+            key="${match[1]}"
+            value="${match[2]}"
+            template-set-var "$key" "$value"
+        fi
+    done < "$file"
+
+    _template-log-verbose "Loaded variables from: ${file}"
+    return 0
+}
+
+# ------------------------------
+# Partial Templates
+# ------------------------------
+
+# Register partial template
+template-register-partial() {
+    local name="${1:?Partial name required}"
+    local content="$2"
+
+    _TEMPLATE_PARTIALS[$name]="$content"
+    _template-log-debug "Registered partial: ${name}"
+    return 0
+}
+
+# Load partial from file
+template-load-partial() {
+    local name="${1:?Partial name required}"
+
+    # Check cache first
+    if [[ -n "${_TEMPLATE_PARTIALS[$name]}" ]]; then
+        echo "${_TEMPLATE_PARTIALS[$name]}"
+        return 0
+    fi
+
+    # Try to load from file
+    local partial_file="${TEMPLATE_PARTIALS_DIR}/${name}"
+    [[ ! "$name" =~ \. ]] && partial_file="${partial_file}.tmpl"
+
+    if [[ ! -f "$partial_file" ]]; then
+        _template-log-warning "Partial not found: ${name}"
+        return 1
+    fi
+
+    local content
+    content=$(<"$partial_file")
+
+    # Cache for future use
+    _TEMPLATE_PARTIALS[$name]="$content"
+    _template-log-debug "Loaded partial: ${name}"
+
+    echo "$content"
+    return 0
+}
+
+# Clear partial cache
+template-clear-partials() {
+    _TEMPLATE_PARTIALS=()
+    _template-log-debug "Cleared partial cache"
+    return 0
+}
+
+# ------------------------------
+# Gomplate Template Rendering
+# ------------------------------
+
+# Render template using gomplate
+_template-render-gomplate() {
+    local template="$1"
+    local context_json="$2"
+
+    # Create temporary file for template
+    local temp_template=$(mktemp)
+    echo "$template" > "$temp_template"
+
+    # Create temporary file for context
+    local temp_context=""
+    if [[ -n "$context_json" ]]; then
+        temp_context=$(mktemp)
+        echo "$context_json" > "$temp_context"
+    fi
+
+    # Build gomplate command
+    local -a gomplate_args=(
+        "--file" "$temp_template"
+        "--left-delim" "$TEMPLATE_GOMPLATE_LEFT_DELIM"
+        "--right-delim" "$TEMPLATE_GOMPLATE_RIGHT_DELIM"
+    )
+
+    # Add context data source
+    if [[ -n "$temp_context" ]]; then
+        gomplate_args+=("--datasource" "ctx=file://$temp_context?type=application/json")
+        gomplate_args+=("--context" ".=ctx://ctx")
+    fi
+
+    # Merge global context as environment variables
+    for key in "${(@k)_TEMPLATE_CONTEXT}"; do
+        export "${key}=${_TEMPLATE_CONTEXT[$key]}"
+    done
+
+    # Execute gomplate
+    local result
+    local exit_code
+    result=$(gomplate "${gomplate_args[@]}" 2>&1)
+    exit_code=$?
+
+    # Cleanup
+    rm -f "$temp_template"
+    [[ -n "$temp_context" ]] && rm -f "$temp_context"
+
+    if [[ $exit_code -ne 0 ]]; then
+        _template-log-error "Gomplate rendering failed: $result"
+        return 1
+    fi
+
+    echo "$result"
+    return 0
+}
+
+# ------------------------------
+# Native Mustache-like Template Rendering
+# ------------------------------
+
+# Render mustache-style template (native fallback)
+_template-render-mustache() {
+    local template="$1"
+    local output="$template"
+
+    # Variable substitution: {{var}}
+    local var_name var_value
+    for var_name in "${(@k)_TEMPLATE_VARS}"; do
+        var_value="${_TEMPLATE_VARS[$var_name]}"
+        output="${output//\{\{${var_name}\}\}/$var_value}"
+    done
+
+    # Conditionals: {{#var}}...{{/var}}
+    while [[ "$output" =~ \{\{#([^\}]+)\}\}(.*)\{\{/\1\}\} ]]; do
+        local cond_var="${match[1]}"
+        local cond_content="${match[2]}"
+        local cond_value="${_TEMPLATE_VARS[$cond_var]:-}"
+
+        local replacement=""
+        if [[ -n "$cond_value" ]] && [[ "$cond_value" != "false" ]] && [[ "$cond_value" != "0" ]]; then
+            replacement="$cond_content"
+        fi
+
+        output="${output/\{\{#${cond_var}\}\}${cond_content}\{\{\/${cond_var}\}\}/$replacement}"
+    done
+
+    # Inverted conditionals: {{^var}}...{{/var}}
+    while [[ "$output" =~ \{\{\^([^\}]+)\}\}(.*)\{\{/\1\}\} ]]; do
+        local inv_var="${match[1]}"
+        local inv_content="${match[2]}"
+        local inv_value="${_TEMPLATE_VARS[$inv_var]:-}"
+
+        local replacement=""
+        if [[ -z "$inv_value" ]] || [[ "$inv_value" == "false" ]] || [[ "$inv_value" == "0" ]]; then
+            replacement="$inv_content"
+        fi
+
+        output="${output/\{\{\^${inv_var}\}\}${inv_content}\{\{\/${inv_var}\}\}/$replacement}"
+    done
+
+    # Partials: {{> partial}}
+    while [[ "$output" =~ \{\{>([^\}]+)\}\} ]]; do
+        local partial_name="${match[1]// /}"
+        local partial_content=$(template-load-partial "$partial_name" 2>/dev/null || echo "")
+        output="${output/\{\{>${match[1]}\}\}/$partial_content}"
+    done
+
+    # Comments: {{! comment}}
+    output=$(echo "$output" | sed -E 's/\{\{![^}]*\}\}//g')
+
+    echo "$output"
+}
+
+# Render simple template (variable substitution only)
+_template-render-simple() {
+    local template="$1"
+    local output="$template"
+
+    # Replace all variables
+    local var_name var_value pattern
+    for var_name in "${(@k)_TEMPLATE_VARS}"; do
+        var_value="${_TEMPLATE_VARS[$var_name]}"
+        pattern="${TEMPLATE_VARIABLE_PREFIX}${var_name}${TEMPLATE_VARIABLE_SUFFIX}"
+        output="${output//$pattern/$var_value}"
+    done
+
+    # Handle unknown variables
+    if [[ "$TEMPLATE_KEEP_UNKNOWN" == "false" ]]; then
+        output=$(echo "$output" | sed -E "s/${TEMPLATE_VARIABLE_PREFIX}[^${TEMPLATE_VARIABLE_SUFFIX}]*${TEMPLATE_VARIABLE_SUFFIX}//g")
+    fi
+
+    # Strict mode check
+    if [[ "$TEMPLATE_STRICT_MODE" == "true" ]]; then
+        if echo "$output" | grep -qE "${TEMPLATE_VARIABLE_PREFIX}[^${TEMPLATE_VARIABLE_SUFFIX}]*${TEMPLATE_VARIABLE_SUFFIX}"; then
+            _template-log-error "Undefined variables found in strict mode"
+            return 1
+        fi
+    fi
+
+    echo "$output"
+}
+
+# ------------------------------
+# Main Template Rendering Functions
+# ------------------------------
+
+# Render template string with context
+# Usage: template-render <template> [context_json]
+template-render() {
+    local template="$1"
+    local context_json="${2:-}"
+
+    common-validate-required "$template" "template" || return 2
+
+    ((_TEMPLATE_TOTAL_RENDERS++))
+
+    _template-log-debug "Rendering template (length: ${#template})"
+
+    # Choose rendering engine
+    if _template-should-use-gomplate; then
+        _template-log-debug "Using gomplate engine"
+        _template-render-gomplate "$template" "$context_json"
+    elif [[ "$TEMPLATE_DEFAULT_ENGINE" == "mustache" ]]; then
+        _template-log-debug "Using mustache engine"
+        _template-render-mustache "$template"
+    else
+        _template-log-debug "Using simple engine"
+        _template-render-simple "$template"
+    fi
+}
+
+# Render template from file
+# Usage: template-render-file <template_file> [context_json]
+template-render-file() {
+    local template_file="$1"
+    local context_json="${2:-}"
+
+    common-validate-required "$template_file" "template_file" || return 2
+
+    if [[ ! -f "$template_file" ]]; then
+        _template-log-error "Template file not found: $template_file"
+        return 4
+    fi
+
+    local template=$(cat "$template_file")
+    template-render "$template" "$context_json"
+}
+
+# Render template with context from JSON file
+# Usage: template-render-with-file <template> <context_file>
+template-render-with-file() {
+    local template="$1"
+    local context_file="$2"
+
+    common-validate-required "$template" "template" || return 2
+    common-validate-required "$context_file" "context_file" || return 2
+
+    if [[ ! -f "$context_file" ]]; then
+        _template-log-error "Context file not found: $context_file"
+        return 4
+    fi
+
+    local context_json=$(cat "$context_file")
+    template-render "$template" "$context_json"
+}
+
+# Render template file with context file
+# Usage: template-render-files <template_file> <context_file>
+template-render-files() {
+    local template_file="$1"
+    local context_file="$2"
+
+    common-validate-required "$template_file" "template_file" || return 2
+    common-validate-required "$context_file" "context_file" || return 2
+
+    if [[ ! -f "$template_file" ]]; then
+        _template-log-error "Template file not found: $template_file"
+        return 4
+    fi
+
+    if [[ ! -f "$context_file" ]]; then
+        _template-log-error "Context file not found: $context_file"
+        return 4
+    fi
+
+    local template=$(cat "$template_file")
+    local context_json=$(cat "$context_file")
+
+    template-render "$template" "$context_json"
+}
+
+# Render template from string (legacy interface)
+template-render-string() {
+    local template="${1:?Template string required}"
+    shift
+
+    local engine="$TEMPLATE_DEFAULT_ENGINE"
+
+    # Parse options
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --engine)
+                engine="$2"
+                shift 2
+                ;;
+            --var)
+                local assignment="$2"
+                local var_name="${assignment%%=*}"
+                local var_value="${assignment#*=}"
+                template-set-var "$var_name" "$var_value"
+                shift 2
+                ;;
+            *)
+                shift
+                ;;
+        esac
+    done
+
+    # Render based on engine
+    case "$engine" in
+        simple)
+            _template-render-simple "$template"
+            ;;
+        mustache)
+            _template-render-mustache "$template"
+            ;;
+        gomplate|auto)
+            if _template-should-use-gomplate; then
+                _template-render-gomplate "$template" ""
+            else
+                _template-render-mustache "$template"
+            fi
+            ;;
+        *)
+            _template-log-error "Unknown engine: ${engine}"
+            return 1
+            ;;
+    esac
+}
+
+# ------------------------------
+# Template Discovery
+# ------------------------------
+
+# Find template file in search paths
+template-find() {
+    local template_name="$1"
+
+    common-validate-required "$template_name" "template_name" || return 2
+
+    # Check current directory first
+    if [[ -f "$template_name" ]]; then
+        echo "$template_name"
+        return 0
+    fi
+
+    # Check search paths
+    if [[ -n "$TEMPLATE_SEARCH_PATHS" ]]; then
+        local -a paths=("${(@s[:]:)TEMPLATE_SEARCH_PATHS}")
+        for path in "${paths[@]}"; do
+            local full_path="$path/$template_name"
+            if [[ -f "$full_path" ]]; then
+                echo "$full_path"
+                return 0
+            fi
+        done
+    fi
+
+    # Not found
+    _template-log-error "Template not found: $template_name"
+    return 4
+}
+
+# List available templates in search paths
+template-list() {
+    local pattern="${1:-*}"
+
+    # List from current directory
+    if [[ -d "." ]]; then
+        find . -maxdepth 1 -name "$pattern" -type f
+    fi
+
+    # List from search paths
+    if [[ -n "$TEMPLATE_SEARCH_PATHS" ]]; then
+        local -a paths=("${(@s[:]:)TEMPLATE_SEARCH_PATHS}")
+        for path in "${paths[@]}"; do
+            if [[ -d "$path" ]]; then
+                find "$path" -maxdepth 1 -name "$pattern" -type f
+            fi
+        done
+    fi
+}
+
+# ------------------------------
+# Template Cache
+# ------------------------------
+
+# Cache template content
+template-cache-set() {
+    local name="$1"
+    local content="$2"
+
+    common-validate-required "$name" "name" || return 2
+
+    _TEMPLATE_CACHE[$name]="$content"
+    _template-log-debug "Cached template: $name"
+}
+
+# Get cached template content
+template-cache-get() {
+    local name="$1"
+
+    common-validate-required "$name" "name" || return 2
+
+    if [[ -n "${_TEMPLATE_CACHE[$name]}" ]]; then
+        echo "${_TEMPLATE_CACHE[$name]}"
+        return 0
+    else
+        return 1
+    fi
+}
+
+# Clear template cache
+template-cache-clear() {
+    _TEMPLATE_CACHE=()
+    _template-log-debug "Cleared template cache"
+}
+
+# ------------------------------
+# Template Validation
+# ------------------------------
+
+# Validate template syntax
+template-validate() {
+    local input="${1:?Input required}"
+
+    local template
+    if [[ -f "$input" ]]; then
+        template=$(<"$input")
+    else
+        template="$input"
+    fi
+
+    local errors=0
+
+    # Check balanced delimiters
+    local open_count=$(echo "$template" | grep -o "$TEMPLATE_VARIABLE_PREFIX" | wc -l)
+    local close_count=$(echo "$template" | grep -o "$TEMPLATE_VARIABLE_SUFFIX" | wc -l)
+
+    if [[ $open_count -ne $close_count ]]; then
+        _template-log-error "Unbalanced delimiters: ${open_count} open, ${close_count} close"
+        ((errors++))
+    fi
+
+    # Check balanced conditionals (mustache)
+    if echo "$template" | grep -q '{{#'; then
+        local cond_open=$(echo "$template" | grep -o '{{#[^}]*}}' | wc -l)
+        local cond_close=$(echo "$template" | grep -o '{{/[^}]*}}' | wc -l)
+
+        if [[ $cond_open -ne $cond_close ]]; then
+            _template-log-error "Unbalanced conditionals: ${cond_open} open, ${cond_close} close"
+            ((errors++))
+        fi
+    fi
+
+    if [[ $errors -eq 0 ]]; then
+        _template-log-verbose "Validation passed"
+        return 0
+    else
+        _template-log-error "Validation failed with ${errors} error(s)"
+        return 1
+    fi
+}
+
+# List variables used in template
+template-list-template-vars() {
+    local input="${1:?Input required}"
+
+    local template
+    if [[ -f "$input" ]]; then
+        template=$(<"$input")
+    else
+        template="$input"
+    fi
+
+    # Extract variable names
+    echo "$template" | grep -oE "${TEMPLATE_VARIABLE_PREFIX}[^${TEMPLATE_VARIABLE_SUFFIX}]+${TEMPLATE_VARIABLE_SUFFIX}" | \
+        sed -E "s/${TEMPLATE_VARIABLE_PREFIX}([^${TEMPLATE_VARIABLE_SUFFIX}]+)${TEMPLATE_VARIABLE_SUFFIX}/\1/" | \
+        sort -u
+}
+
+# ------------------------------
+# Utility Functions
+# ------------------------------
+
+# Get last error
+template-get-error() {
+    echo "$TEMPLATE_LAST_ERROR"
+}
+
+# Clear last error
+template-clear-error() {
+    TEMPLATE_LAST_ERROR=""
+}
+
+# ------------------------------
+# Statistics
+# ------------------------------
+
+template-stats() {
+    echo "Template Engine Statistics:"
+    echo "  Version: $TEMPLATE_VERSION"
+    echo "  Gomplate Available: $(template-has-gomplate && echo "Yes" || echo "No")"
+    echo "  Default Engine: $TEMPLATE_DEFAULT_ENGINE"
+    echo "  Total Renders: $_TEMPLATE_TOTAL_RENDERS"
+    echo "  Total Errors: $_TEMPLATE_TOTAL_ERRORS"
+    echo "  Variables: ${#_TEMPLATE_VARS[@]}"
+    echo "  Context Variables: ${#_TEMPLATE_CONTEXT[@]}"
+    echo "  Cached Templates: ${#_TEMPLATE_CACHE[@]}"
+    echo "  Cached Partials: ${#_TEMPLATE_PARTIALS[@]}"
+    echo "  Strict Mode: $TEMPLATE_STRICT_MODE"
+}
+
+# Show version information
+template-version() {
+    echo "lib/_template version ${TEMPLATE_VERSION}"
+}
+
+# Show module information
+template-info() {
+    cat <<EOF
+Template Engine v${TEMPLATE_VERSION}
+
+Configuration:
+  Templates Dir:    ${TEMPLATE_DIR}
+  Partials Dir:     ${TEMPLATE_PARTIALS_DIR}
+  Cache Dir:        ${TEMPLATE_CACHE_DIR}
+  Default Engine:   ${TEMPLATE_DEFAULT_ENGINE}
+  Keep Unknown:     ${TEMPLATE_KEEP_UNKNOWN}
+  Strict Mode:      ${TEMPLATE_STRICT_MODE}
+
+Features:
+  Gomplate:         $(template-has-gomplate && echo "Available" || echo "Not available")
+  JQ Support:       $([[ $TEMPLATE_HAS_JQ -eq 1 ]] && echo "Yes" || echo "No")
+
+Statistics:
+  Variables:        ${#_TEMPLATE_VARS[@]}
+  Context:          ${#_TEMPLATE_CONTEXT[@]}
+  Cached Templates: ${#_TEMPLATE_CACHE[@]}
+  Partials Cached:  ${#_TEMPLATE_PARTIALS[@]}
+EOF
+}
+
+# ------------------------------
+# Help
+# ------------------------------
+
+template-help() {
+    cat <<'EOF'
+template - Template rendering engine with gomplate integration
+Version: 2.0.0
+
+Usage:
+  source "$(which _template)"
+  template-render "Hello {{ .name }}" '{"name":"World"}'
+  template-render-file "template.yaml" "context.json"
+
+Main Functions:
+  template-render <template> [context_json]          Render template string
+  template-render-file <file> [context_json]         Render template file
+  template-render-with-file <template> <ctx_file>    Render with context file
+  template-render-files <tmpl_file> <ctx_file>       Render both from files
+  template-render-string <template> [options]        Render with options
+
+Context Management (Schema System):
+  template-context-set <key> <value>                 Set context variable
+  template-context-get <key> [default]               Get context variable
+  template-context-clear                             Clear all context
+  template-context-load-json <file>                  Load context from JSON
+  template-context-export-json                       Export context as JSON
+
+Variable Management (Legacy):
+  template-set-var <name> <value>                    Set variable
+  template-get-var <name> [default]                  Get variable
+  template-clear-vars                                Clear all variables
+  template-list-vars                                 List all variables
+  template-has-var <name>                            Check if variable exists
+  template-load-vars-json <file>                     Load from JSON file
+  template-load-vars-env [prefix]                    Load from environment
+  template-load-vars-file <file>                     Load from key=value file
+
+Partials:
+  template-register-partial <name> <content>         Register partial
+  template-load-partial <name>                       Load partial from file
+  template-clear-partials                            Clear partial cache
+
+Template Discovery:
+  template-find <name>                               Find template in paths
+  template-list [pattern]                            List available templates
+
+Cache:
+  template-cache-set <name> <content>                Cache template
+  template-cache-get <name>                          Get cached template
+  template-cache-clear                               Clear cache
+
+Validation:
+  template-validate <file_or_string>                 Validate syntax
+  template-list-template-vars <file_or_string>       List vars in template
+
+Lifecycle:
+  template-init                                      Initialize engine
+  template-cleanup                                   Cleanup resources
+
+Utilities:
+  template-has-gomplate                              Check gomplate availability
+  template-get-error                                 Get last error
+  template-stats                                     Show statistics
+  template-version                                   Show version
+  template-info                                      Show configuration
+  template-help                                      Show this help
+
+Configuration:
+  TEMPLATE_VERBOSE=true/false                        Verbose output
+  TEMPLATE_DEBUG=true/false                          Debug output
+  TEMPLATE_DEFAULT_ENGINE=auto/gomplate/mustache/simple
+  TEMPLATE_STRICT_MODE=true/false                    Error on unresolved vars
+  TEMPLATE_SEARCH_PATHS=path1:path2                  Search paths (colon-separated)
+  TEMPLATE_GOMPLATE_LEFT_DELIM={{                    Left delimiter
+  TEMPLATE_GOMPLATE_RIGHT_DELIM=}}                   Right delimiter
+
+Template Syntax (Gomplate):
+  {{ .variable }}                                    Variable substitution
+  {{ if .condition }}...{{ end }}                    Conditional
+  {{ range .items }}...{{ end }}                     Loop
+  {{ .variable | default "value" }}                  Default value
+  {{ .variable | upper }}                            Filters/functions
+
+  See: https://docs.gomplate.ca/
+
+Template Syntax (Mustache):
+  {{variable}}                                       Variable substitution
+  {{#variable}}...{{/variable}}                      Conditional (if true)
+  {{^variable}}...{{/variable}}                      Inverted conditional
+  {{> partial}}                                      Include partial
+  {{! comment}}                                      Comment
+
+Examples:
+  # Simple variable substitution
+  template-render "Hello {{ .name }}" '{"name":"World"}'
+
+  # Using context variables
+  template-context-set "name" "Alice"
+  template-render "Hello {{ .name }}"
+
+  # Rendering from file
+  template-render-file "config.yaml.tmpl" '{"port":8080}'
+
+  # With context file
+  template-render-files "template.yaml" "context.json"
+
+  # Template discovery
+  TEMPLATE_SEARCH_PATHS="/templates:/etc/templates"
+  template_path=$(template-find "app-config.yaml")
+  template-render-file "$template_path"
+
+Installation:
+  Gomplate (recommended):
+    sudo pacman -S gomplate
+    # or
+    curl -o /usr/local/bin/gomplate -sSL \
+      https://github.com/hairyhenderson/gomplate/releases/download/v3.11.5/gomplate_linux-amd64
+    chmod +x /usr/local/bin/gomplate
+
+EOF
+}
+
+# ------------------------------
+# Script Execution Detection
+# ------------------------------
+
+if [[ "${ZSH_EVAL_CONTEXT}" == *:file || "${ZSH_EVAL_CONTEXT}" == "file" ]]; then
+    # Sourced, don't run anything
+    :
+elif [[ "${ZSH_EVAL_CONTEXT}" == "" || "${(%):-%x}" == "$0" ]]; then
+    # Executed directly
+    case "${1:-help}" in
+        help|--help|-h)
+            template-help
+            exit 0
+            ;;
+        stats)
+            template-stats
+            exit 0
+            ;;
+        test)
+            # Simple test
+            echo "Testing template engine..."
+            template-context-set "name" "World"
+            result=$(template-render "Hello {{ .name }}")
+            echo "Result: $result"
+            [[ "$result" =~ "World" ]] && echo "✓ Test passed" || echo "✗ Test failed"
+            exit 0
+            ;;
+        *)
+            echo "Error: Extension must be sourced, not executed directly" >&2
+            echo "Usage: source \"$(which _template)\"" >&2
+            echo "For help: $0 help" >&2
+            exit 1
+            ;;
+    esac
+fi
+
+# ------------------------------
+# Extension Loaded
+# ------------------------------
+
+_template-log-debug "Extension loaded successfully"

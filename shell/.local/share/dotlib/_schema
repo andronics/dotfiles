@@ -1,0 +1,956 @@
+#!/usr/bin/env zsh
+
+# _schema - Schema loading, validation, and parsing for action/v1
+# Part of the dotfiles library v2.0
+# Version: 1.0.0
+#
+# Purpose:
+#   Core schema engine for the schema-driven action system. Loads and validates
+#   action/v1 schemas, expands templates, and prepares actions for execution.
+#
+# Usage:
+#   source "${DOTLIB}/_schema"
+#   schema-load "myschema.yaml"
+#   schema-validate "myschema.yaml"
+#   schema-get-actions "myschema.yaml"
+#
+# Features:
+#   - YAML schema loading (via yq or python)
+#   - JSON schema support
+#   - Schema version validation (action/v1)
+#   - Template expansion (via _template)
+#   - Action sequence parsing
+#   - Dependency validation
+#   - Context management
+#   - Schema discovery
+#
+# Dependencies:
+#   - _common (required)
+#   - _validation (required)
+#   - _template (required)
+#   - yq or python3+PyYAML (required for YAML)
+#   - jq (required for JSON)
+
+# ------------------------------
+# Source Guard
+# ------------------------------
+
+[[ -n "${SCHEMA_LOADED:-}" ]] && return 0
+
+# ------------------------------
+# Version
+# ------------------------------
+
+declare -gr SCHEMA_VERSION="1.0.0"
+declare -g SCHEMA_LOADED=1
+
+# ------------------------------
+# Load Dependencies
+# ------------------------------
+
+# Load _common (required)
+if ! source "${DOTLIB}/_common" 2>/dev/null; then
+    echo "[ERROR] _schema requires _common - cannot load" >&2
+    return 1
+fi
+
+# Load _validation (required)
+if ! source "${DOTLIB}/_validation" 2>/dev/null; then
+    echo "[ERROR] _schema requires _validation - cannot load" >&2
+    return 1
+fi
+
+# Load _template (required)
+if ! source "${DOTLIB}/_template" 2>/dev/null; then
+    echo "[ERROR] _schema requires _template - cannot load" >&2
+    return 1
+fi
+
+# ------------------------------
+# Configuration Variables
+# ------------------------------
+
+# Schema directories
+declare -g SCHEMA_DIR="${SCHEMA_DIR:-$(common-xdg-data-home)/schemas}"
+declare -g SCHEMA_CACHE_DIR="${SCHEMA_CACHE_DIR:-$(common-xdg-cache-home)/schemas}"
+
+# Schema search paths (colon-separated)
+declare -g SCHEMA_SEARCH_PATHS="${SCHEMA_SEARCH_PATHS:-}"
+
+# Validation options
+declare -g SCHEMA_STRICT="${SCHEMA_STRICT:-true}"
+declare -g SCHEMA_VALIDATE_DEPS="${SCHEMA_VALIDATE_DEPS:-true}"
+declare -g SCHEMA_ALLOW_UNKNOWN_FIELDS="${SCHEMA_ALLOW_UNKNOWN_FIELDS:-false}"
+
+# Behavior
+declare -g SCHEMA_VERBOSE="${SCHEMA_VERBOSE:-false}"
+declare -g SCHEMA_DEBUG="${SCHEMA_DEBUG:-false}"
+declare -g SCHEMA_EXPAND_TEMPLATES="${SCHEMA_EXPAND_TEMPLATES:-true}"
+
+# Supported schema versions
+declare -g SCHEMA_SUPPORTED_VERSIONS="action/v1"
+
+# Create directories
+mkdir -p "$SCHEMA_DIR" "$SCHEMA_CACHE_DIR" 2>/dev/null
+
+# ------------------------------
+# Internal State
+# ------------------------------
+
+# Feature availability
+declare -g SCHEMA_YQ_AVAILABLE=false
+declare -g SCHEMA_PYTHON_YAML_AVAILABLE=false
+declare -g SCHEMA_JQ_AVAILABLE=false
+
+# Currently loaded schema
+declare -g -A _SCHEMA_CURRENT=()
+
+# Schema cache (parsed schemas)
+declare -g -A _SCHEMA_CACHE=()
+
+# Last error
+declare -g SCHEMA_LAST_ERROR=""
+
+# Statistics
+declare -g _SCHEMA_TOTAL_LOADS=0
+declare -g _SCHEMA_TOTAL_VALIDATIONS=0
+declare -g _SCHEMA_TOTAL_ERRORS=0
+
+# ------------------------------
+# Check for tools
+# ------------------------------
+
+# NOTE: yq check disabled because the aliased jq version causes hangs
+# if common-command-exists "yq" && echo '{}' | yq eval -o=json '.' >/dev/null 2>&1; then
+#     SCHEMA_YQ_AVAILABLE=true
+# fi
+
+if common-command-exists "python3" && python3 -c "import yaml" 2>/dev/null; then
+    SCHEMA_PYTHON_YAML_AVAILABLE=true
+fi
+echo "[DEBUG _schema] Python YAML check done" >&2
+
+if common-command-exists "jq"; then
+    SCHEMA_JQ_AVAILABLE=true
+fi
+echo "[DEBUG _schema] JQ check done" >&2
+
+# ------------------------------
+# Color Constants
+# ------------------------------
+
+declare -gr _SCHEMA_COLOR_ERROR="$COLOR_RED"
+declare -gr _SCHEMA_COLOR_WARNING="$COLOR_YELLOW"
+declare -gr _SCHEMA_COLOR_DEBUG="$COLOR_BLUE"
+declare -gr _SCHEMA_COLOR_SUCCESS="$COLOR_GREEN"
+
+# ------------------------------
+# Internal Logging Functions
+# ------------------------------
+
+_schema-log-debug() {
+    [[ "$SCHEMA_DEBUG" == "true" ]] || return 0
+    echo -e "${_SCHEMA_COLOR_DEBUG}[DEBUG] schema: $*${COLOR_RESET}" >&2
+}
+
+_schema-log-verbose() {
+    [[ "$SCHEMA_VERBOSE" == "true" ]] || return 0
+    echo "[INFO] schema: $*" >&2
+}
+
+_schema-log-error() {
+    echo -e "${_SCHEMA_COLOR_ERROR}[ERROR] schema: $*${COLOR_RESET}" >&2
+    SCHEMA_LAST_ERROR="$*"
+    ((_SCHEMA_TOTAL_ERRORS++))
+}
+
+_schema-log-warning() {
+    echo -e "${_SCHEMA_COLOR_WARNING}[WARNING] schema: $*${COLOR_RESET}" >&2
+}
+
+_schema-log-success() {
+    [[ "$SCHEMA_VERBOSE" == "true" ]] || return 0
+    echo -e "${_SCHEMA_COLOR_SUCCESS}[SUCCESS] schema: $*${COLOR_RESET}" >&2
+}
+
+# ------------------------------
+# Feature Detection
+# ------------------------------
+
+# Check if YAML parsing is available
+schema-has-yaml() {
+    [[ "$SCHEMA_YQ_AVAILABLE" == "true" ]] || [[ "$SCHEMA_PYTHON_YAML_AVAILABLE" == "true" ]]
+}
+
+# Check if JSON parsing is available
+schema-has-json() {
+    [[ "$SCHEMA_JQ_AVAILABLE" == "true" ]]
+}
+
+# ------------------------------
+# YAML/JSON Parsing
+# ------------------------------
+
+# Parse YAML to JSON using yq
+_schema-parse-yaml-yq() {
+    local file="$1"
+    yq eval -o=json '.' "$file" 2>/dev/null
+}
+
+# Parse YAML to JSON using Python
+_schema-parse-yaml-python() {
+    local file="$1"
+    /usr/bin/python3 -c "import yaml, json, sys; print(json.dumps(yaml.safe_load(open('$file'))))" 2>/dev/null
+}
+
+# Parse YAML to JSON (auto-detect method)
+_schema-parse-yaml() {
+    local file="$1"
+
+    if [[ "$SCHEMA_YQ_AVAILABLE" == "true" ]]; then
+        _schema-parse-yaml-yq "$file"
+    elif [[ "$SCHEMA_PYTHON_YAML_AVAILABLE" == "true" ]]; then
+        _schema-parse-yaml-python "$file"
+    else
+        _schema-log-error "YAML parsing requires yq or python3+PyYAML"
+        return 6
+    fi
+}
+
+# Parse JSON (validate and pretty-print)
+_schema-parse-json() {
+    local file="$1"
+
+    if [[ "$SCHEMA_JQ_AVAILABLE" != "true" ]]; then
+        _schema-log-error "JSON parsing requires jq"
+        return 6
+    fi
+
+    /usr/bin/jq '.' "$file" 2>/dev/null
+}
+
+# ------------------------------
+# Schema Loading
+# ------------------------------
+
+# Detect schema format from file extension
+schema-detect-format() {
+    local file="$1"
+
+    common-validate-required "$file" "file" || return 2
+
+    case "${file:e:l}" in
+        yaml|yml)
+            echo "yaml"
+            ;;
+        json)
+            echo "json"
+            ;;
+        *)
+            # Try to detect by content
+            if [[ -f "$file" ]]; then
+                local first_line=$(head -n1 "$file" 2>/dev/null)
+                if [[ "$first_line" =~ ^\{ ]]; then
+                    echo "json"
+                else
+                    echo "yaml"
+                fi
+            else
+                echo "yaml"  # Default
+            fi
+            ;;
+    esac
+}
+
+# Load schema file to JSON
+schema-load-file() {
+    local file="$1"
+
+    common-validate-required "$file" "file" || return 2
+
+    if [[ ! -f "$file" ]]; then
+        _schema-log-error "Schema file not found: $file"
+        return 4
+    fi
+
+    local format=$(schema-detect-format "$file")
+    _schema-log-debug "Loading schema from $file (format: $format)"
+
+    local json
+    case "$format" in
+        yaml)
+            if ! schema-has-yaml; then
+                _schema-log-error "YAML support not available (install yq or python3+PyYAML)"
+                return 6
+            fi
+            json=$(_schema-parse-yaml "$file")
+            if [[ $? -ne 0 ]]; then
+                _schema-log-error "Failed to parse YAML file: $file"
+                return 3
+            fi
+            ;;
+        json)
+            if ! schema-has-json; then
+                _schema-log-error "JSON support not available (install jq)"
+                return 6
+            fi
+            json=$(_schema-parse-json "$file")
+            if [[ $? -ne 0 ]]; then
+                _schema-log-error "Failed to parse JSON file: $file"
+                return 3
+            fi
+            ;;
+        *)
+            _schema-log-error "Unsupported format: $format"
+            return 2
+            ;;
+    esac
+
+    ((_SCHEMA_TOTAL_LOADS++))
+    echo "$json"
+    return 0
+}
+
+# Load and expand schema (with template expansion)
+schema-load() {
+    local file="$1"
+    echo "[DEBUG schema-load] Loading: $file" >&2
+
+    common-validate-required "$file" "file" || return 2
+
+    # Load raw schema
+    echo "[DEBUG schema-load] Calling schema-load-file..." >&2
+    local schema_json=$(schema-load-file "$file")
+    local load_result=$?
+    echo "[DEBUG schema-load] schema-load-file returned: $load_result, json length: ${#schema_json}" >&2
+    if [[ $load_result -ne 0 ]]; then
+        echo "[DEBUG schema-load] Returning early due to load failure" >&2
+        return $load_result
+    fi
+
+    # Extract context for template expansion
+    echo "[DEBUG schema-load] SCHEMA_EXPAND_TEMPLATES: ${SCHEMA_EXPAND_TEMPLATES:-unset}" >&2
+    if [[ "$SCHEMA_EXPAND_TEMPLATES" == "true" ]]; then
+        echo "[DEBUG schema-load] Template expansion enabled, extracting context..." >&2
+        local context=$(echo "$schema_json" | /usr/bin/jq -r '.context // {}' 2>/dev/null)
+        echo "[DEBUG schema-load] Context extracted: $context" >&2
+        if [[ -n "$context" ]] && [[ "$context" != "null" ]] && [[ "$context" != "{}" ]]; then
+            _schema-log-debug "Expanding templates with context"
+
+            # Load context into template engine
+            # Export context as JSON for gomplate to use directly
+            template-context-set "." "$context"
+
+            # Expand templates in schema
+            echo "[DEBUG schema-load] Calling template-render..." >&2
+            schema_json=$(template-render "$schema_json" "$context")
+            if [[ $? -ne 0 ]]; then
+                _schema-log-error "Template expansion failed"
+                echo "[DEBUG schema-load] Returning early due to template expansion failure" >&2
+                return 3
+            fi
+            echo "[DEBUG schema-load] Template expansion completed" >&2
+        else
+            echo "[DEBUG schema-load] No context to expand" >&2
+        fi
+    else
+        echo "[DEBUG schema-load] Template expansion disabled, skipping..." >&2
+    fi
+
+    # Store as current schema
+    echo "[DEBUG schema-load] About to set _SCHEMA_CURRENT, schema_json length: ${#schema_json}" >&2
+    _SCHEMA_CURRENT[json]="$schema_json"
+    _SCHEMA_CURRENT[file]="$file"
+    echo "[DEBUG schema-load] _SCHEMA_CURRENT set, json length: ${#_SCHEMA_CURRENT[json]}, file: ${_SCHEMA_CURRENT[file]}" >&2
+
+    _schema-log-success "Schema loaded: $file"
+    echo "$schema_json"
+    return 0
+}
+
+# ------------------------------
+# Schema Validation
+# ------------------------------
+
+# Validate schema structure (action/v1 format)
+_schema-validate-structure() {
+    local schema_json="$1"
+
+    local errors=0
+
+    # Check required top-level fields
+    local required_fields=("schema" "actions")
+    for field in "${required_fields[@]}"; do
+        if ! echo "$schema_json" | /usr/bin/jq -e ".$field" >/dev/null 2>&1; then
+            _schema-log-error "Missing required field: $field"
+            ((errors++))
+        fi
+    done
+
+    # Validate schema version
+    local schema_version=$(echo "$schema_json" | /usr/bin/jq -r '.schema' 2>/dev/null)
+    if [[ ! " ${SCHEMA_SUPPORTED_VERSIONS} " =~ " ${schema_version} " ]]; then
+        _schema-log-error "Unsupported schema version: $schema_version (supported: $SCHEMA_SUPPORTED_VERSIONS)"
+        ((errors++))
+    fi
+
+    # Validate metadata (optional but should have structure if present)
+    if echo "$schema_json" | /usr/bin/jq -e '.metadata' >/dev/null 2>&1; then
+        if ! echo "$schema_json" | /usr/bin/jq -e '.metadata.name' >/dev/null 2>&1; then
+            _schema-log-warning "metadata.name is recommended"
+        fi
+    fi
+
+    # Validate actions array
+    if ! echo "$schema_json" | /usr/bin/jq -e '.actions | type == "array"' >/dev/null 2>&1; then
+        _schema-log-error "Field 'actions' must be an array"
+        ((errors++))
+    else
+        local action_count=$(echo "$schema_json" | /usr/bin/jq -r '.actions | length' 2>/dev/null)
+        if [[ $action_count -eq 0 ]]; then
+            _schema-log-error "Schema must have at least one action"
+            ((errors++))
+        fi
+    fi
+
+    return $errors
+}
+
+# Validate individual action
+_schema-validate-action() {
+    local action_json="$1"
+    local action_index="$2"
+
+    local errors=0
+
+    # Required fields for action
+    local required_fields=("id" "type" "action")
+    for field in "${required_fields[@]}"; do
+        if ! echo "$action_json" | /usr/bin/jq -e ".$field" >/dev/null 2>&1; then
+            _schema-log-error "Action #$action_index: Missing required field '$field'"
+            ((errors++))
+        fi
+    done
+
+    # Must have either 'resource' or 'selector'
+    if ! echo "$action_json" | /usr/bin/jq -e '.resource' >/dev/null 2>&1 && \
+       ! echo "$action_json" | /usr/bin/jq -e '.selector' >/dev/null 2>&1; then
+        _schema-log-error "Action #$action_index: Must have either 'resource' or 'selector' field"
+        ((errors++))
+    fi
+
+    # Validate ID format (kebab-case recommended)
+    local action_id=$(echo "$action_json" | /usr/bin/jq -r '.id' 2>/dev/null)
+    if [[ -n "$action_id" ]] && [[ ! "$action_id" =~ ^[a-z0-9_-]+$ ]]; then
+        _schema-log-warning "Action #$action_index: ID should be lowercase with hyphens/underscores: $action_id"
+    fi
+
+    # Validate type format (plugin.resource)
+    local action_type=$(echo "$action_json" | /usr/bin/jq -r '.type' 2>/dev/null)
+    if [[ -n "$action_type" ]] && [[ ! "$action_type" =~ ^[a-z0-9_-]+\.[a-z0-9_-]+$ ]]; then
+        _schema-log-error "Action #$action_index: Type must be in format 'plugin.resource': $action_type"
+        ((errors++))
+    fi
+
+    # Validate on_error enum
+    if echo "$action_json" | /usr/bin/jq -e '.on_error' >/dev/null 2>&1; then
+        local on_error=$(echo "$action_json" | /usr/bin/jq -r '.on_error' 2>/dev/null)
+        if [[ ! "$on_error" =~ ^(fail|warn|ignore)$ ]]; then
+            _schema-log-error "Action #$action_index: on_error must be 'fail', 'warn', or 'ignore'"
+            ((errors++))
+        fi
+    fi
+
+    return $errors
+}
+
+# Validate action dependencies
+_schema-validate-dependencies() {
+    local schema_json="$1"
+
+    local errors=0
+
+    # Build list of action IDs
+    local -a action_ids=()
+    local action_count=$(echo "$schema_json" | /usr/bin/jq -r '.actions | length' 2>/dev/null)
+
+    for ((i=0; i<action_count; i++)); do
+        local action_id=$(echo "$schema_json" | /usr/bin/jq -r ".actions[$i].id" 2>/dev/null)
+        action_ids+=("$action_id")
+    done
+
+    # Check each action's dependencies
+    for ((i=0; i<action_count; i++)); do
+        if echo "$schema_json" | /usr/bin/jq -e ".actions[$i].depends_on" >/dev/null 2>&1; then
+            local deps=$(echo "$schema_json" | /usr/bin/jq -r ".actions[$i].depends_on[]" 2>/dev/null)
+            while IFS= read -r dep; do
+                [[ -z "$dep" ]] && continue
+
+                # Check if dependency exists
+                if [[ ! " ${action_ids[@]} " =~ " ${dep} " ]]; then
+                    local action_id=$(echo "$schema_json" | /usr/bin/jq -r ".actions[$i].id" 2>/dev/null)
+                    _schema-log-error "Action '$action_id': Unknown dependency '$dep'"
+                    ((errors++))
+                fi
+            done <<< "$deps"
+        fi
+    done
+
+    # TODO: Check for circular dependencies (would require graph traversal)
+    # For now, we'll rely on _lifecycle to detect circular deps at execution time
+
+    return $errors
+}
+
+# Main schema validation function
+schema-validate() {
+    local file="$1"
+
+    common-validate-required "$file" "file" || return 2
+
+    ((_SCHEMA_TOTAL_VALIDATIONS++))
+
+    _schema-log-debug "Validating schema: $file"
+
+    # Load schema
+    local schema_json=$(schema-load-file "$file")
+    if [[ $? -ne 0 ]]; then
+        return $?
+    fi
+
+    local total_errors=0
+
+    # Validate structure
+    _schema-validate-structure "$schema_json"
+    ((total_errors += $?))
+
+    # Validate each action
+    local action_count=$(echo "$schema_json" | /usr/bin/jq -r '.actions | length' 2>/dev/null)
+    for ((i=0; i<action_count; i++)); do
+        local action_json=$(echo "$schema_json" | /usr/bin/jq -r ".actions[$i]" 2>/dev/null)
+        _schema-validate-action "$action_json" "$i"
+        ((total_errors += $?))
+    done
+
+    # Validate dependencies
+    if [[ "$SCHEMA_VALIDATE_DEPS" == "true" ]]; then
+        _schema-validate-dependencies "$schema_json"
+        ((total_errors += $?))
+    fi
+
+    if [[ $total_errors -eq 0 ]]; then
+        _schema-log-success "Schema validation passed: $file"
+        return 0
+    else
+        _schema-log-error "Schema validation failed with $total_errors error(s)"
+        return 1
+    fi
+}
+
+# ------------------------------
+# Schema Querying
+# ------------------------------
+
+# Get schema field value
+schema-get() {
+    local field="$1"
+    local default="${2:-}"
+
+    common-validate-required "$field" "field" || return 2
+
+    if [[ -z "${_SCHEMA_CURRENT[json]}" ]]; then
+        _schema-log-error "No schema loaded"
+        return 1
+    fi
+
+    local value=$(echo "${_SCHEMA_CURRENT[json]}" | /usr/bin/jq -r ".$field // empty" 2>/dev/null)
+
+    if [[ -z "$value" ]] || [[ "$value" == "null" ]]; then
+        echo "$default"
+        return 1
+    else
+        echo "$value"
+        return 0
+    fi
+}
+
+# Get schema version
+schema-get-version() {
+    schema-get "schema"
+}
+
+# Get schema metadata
+schema-get-metadata() {
+    local field="${1:-}"
+
+    if [[ -n "$field" ]]; then
+        schema-get "metadata.$field"
+    else
+        schema-get "metadata"
+    fi
+}
+
+# Get schema context
+schema-get-context() {
+    schema-get "context"
+}
+
+# Get all actions
+schema-get-actions() {
+    if [[ -z "${_SCHEMA_CURRENT[json]}" ]]; then
+        _schema-log-error "No schema loaded"
+        return 1
+    fi
+
+    echo "${_SCHEMA_CURRENT[json]}" | /usr/bin/jq -r '.actions' 2>/dev/null
+}
+
+# Get specific action by ID
+schema-get-action() {
+    local action_id="$1"
+
+    common-validate-required "$action_id" "action_id" || return 2
+
+    if [[ -z "${_SCHEMA_CURRENT[json]}" ]]; then
+        _schema-log-error "No schema loaded"
+        return 1
+    fi
+
+    echo "${_SCHEMA_CURRENT[json]}" | /usr/bin/jq -r ".actions[] | select(.id == \"$action_id\")" 2>/dev/null
+}
+
+# Get action count
+schema-get-action-count() {
+    if [[ -z "${_SCHEMA_CURRENT[json]}" ]]; then
+        echo "0"
+        return 1
+    fi
+
+    echo "${_SCHEMA_CURRENT[json]}" | /usr/bin/jq -r '.actions | length' 2>/dev/null
+}
+
+# List action IDs
+schema-list-action-ids() {
+    if [[ -z "${_SCHEMA_CURRENT[json]}" ]]; then
+        _schema-log-error "No schema loaded"
+        return 1
+    fi
+
+    echo "${_SCHEMA_CURRENT[json]}" | /usr/bin/jq -r '.actions[].id' 2>/dev/null
+}
+
+# Get rollback configuration
+schema-get-rollback() {
+    schema-get "rollback"
+}
+
+# Get config
+schema-get-config() {
+    local field="${1:-}"
+
+    if [[ -n "$field" ]]; then
+        schema-get "config.$field" "${2:-}"
+    else
+        schema-get "config"
+    fi
+}
+
+# ------------------------------
+# Schema Discovery
+# ------------------------------
+
+# Find schema file in search paths
+schema-find() {
+    local schema_name="$1"
+
+    common-validate-required "$schema_name" "schema_name" || return 2
+
+    # Check current directory first
+    if [[ -f "$schema_name" ]]; then
+        echo "$schema_name"
+        return 0
+    fi
+
+    # Check schema directory
+    if [[ -f "$SCHEMA_DIR/$schema_name" ]]; then
+        echo "$SCHEMA_DIR/$schema_name"
+        return 0
+    fi
+
+    # Check search paths
+    if [[ -n "$SCHEMA_SEARCH_PATHS" ]]; then
+        local -a paths=("${(@s[:]:)SCHEMA_SEARCH_PATHS}")
+        for path in "${paths[@]}"; do
+            local full_path="$path/$schema_name"
+            if [[ -f "$full_path" ]]; then
+                echo "$full_path"
+                return 0
+            fi
+        done
+    fi
+
+    # Not found
+    _schema-log-error "Schema not found: $schema_name"
+    return 4
+}
+
+# List available schemas
+schema-list() {
+    local pattern="${1:-*.yaml}"
+
+    # List from current directory
+    [[ -d "." ]] && find . -maxdepth 1 -name "$pattern" -type f
+
+    # List from schema directory
+    [[ -d "$SCHEMA_DIR" ]] && find "$SCHEMA_DIR" -maxdepth 1 -name "$pattern" -type f
+
+    # List from search paths
+    if [[ -n "$SCHEMA_SEARCH_PATHS" ]]; then
+        local -a paths=("${(@s[:]:)SCHEMA_SEARCH_PATHS}")
+        for path in "${paths[@]}"; do
+            [[ -d "$path" ]] && find "$path" -maxdepth 1 -name "$pattern" -type f
+        done
+    fi
+}
+
+# ------------------------------
+# Schema Cache
+# ------------------------------
+
+# Cache schema
+schema-cache-set() {
+    local name="$1"
+    local schema_json="$2"
+
+    common-validate-required "$name" "name" || return 2
+
+    _SCHEMA_CACHE[$name]="$schema_json"
+    _schema-log-debug "Cached schema: $name"
+}
+
+# Get cached schema
+schema-cache-get() {
+    local name="$1"
+
+    common-validate-required "$name" "name" || return 2
+
+    if [[ -n "${_SCHEMA_CACHE[$name]}" ]]; then
+        echo "${_SCHEMA_CACHE[$name]}"
+        return 0
+    else
+        return 1
+    fi
+}
+
+# Clear schema cache
+schema-cache-clear() {
+    _SCHEMA_CACHE=()
+    _schema-log-debug "Cleared schema cache"
+}
+
+# ------------------------------
+# Utility Functions
+# ------------------------------
+
+# Clear current schema
+schema-clear() {
+    _SCHEMA_CURRENT=()
+    _schema-log-debug "Cleared current schema"
+}
+
+# Get last error
+schema-get-error() {
+    echo "$SCHEMA_LAST_ERROR"
+}
+
+# Clear last error
+schema-clear-error() {
+    SCHEMA_LAST_ERROR=""
+}
+
+# Dump current schema (pretty-printed JSON)
+schema-dump() {
+    if [[ -z "${_SCHEMA_CURRENT[json]}" ]]; then
+        _schema-log-error "No schema loaded"
+        return 1
+    fi
+
+    echo "${_SCHEMA_CURRENT[json]}" | /usr/bin/jq '.' 2>/dev/null
+}
+
+# ------------------------------
+# Statistics
+# ------------------------------
+
+schema-stats() {
+    echo "Schema Engine Statistics:"
+    echo "  Version: $SCHEMA_VERSION"
+    echo "  YAML Support: $(schema-has-yaml && echo "Yes" || echo "No")"
+    echo "  JSON Support: $(schema-has-json && echo "Yes" || echo "No")"
+    echo "  Total Loads: $_SCHEMA_TOTAL_LOADS"
+    echo "  Total Validations: $_SCHEMA_TOTAL_VALIDATIONS"
+    echo "  Total Errors: $_SCHEMA_TOTAL_ERRORS"
+    echo "  Cached Schemas: ${#_SCHEMA_CACHE[@]}"
+    echo "  Current Schema: ${_SCHEMA_CURRENT[file]:-none}"
+    echo "  Strict Mode: $SCHEMA_STRICT"
+}
+
+# ------------------------------
+# Help
+# ------------------------------
+
+schema-help() {
+    cat <<'EOF'
+schema - Schema loading, validation, and parsing for action/v1
+Version: 1.0.0
+
+Usage:
+  source "${DOTLIB}/_schema"
+  schema-load "myschema.yaml"
+  schema-validate "myschema.yaml"
+  schema-get-actions
+
+Main Functions:
+  schema-load <file>                    Load and parse schema (with template expansion)
+  schema-load-file <file>               Load schema without template expansion
+  schema-validate <file>                Validate schema structure
+  schema-clear                          Clear current schema
+
+Querying:
+  schema-get <field> [default]          Get schema field value
+  schema-get-version                    Get schema version
+  schema-get-metadata [field]           Get metadata
+  schema-get-context                    Get template context
+  schema-get-actions                    Get all actions (JSON array)
+  schema-get-action <id>                Get specific action by ID
+  schema-get-action-count               Get number of actions
+  schema-list-action-ids                List all action IDs
+  schema-get-rollback                   Get rollback configuration
+  schema-get-config [field]             Get config
+
+Discovery:
+  schema-find <name>                    Find schema in search paths
+  schema-list [pattern]                 List available schemas
+  schema-detect-format <file>           Detect schema format (yaml/json)
+
+Cache:
+  schema-cache-set <name> <json>        Cache schema
+  schema-cache-get <name>               Get cached schema
+  schema-cache-clear                    Clear cache
+
+Utilities:
+  schema-has-yaml                       Check YAML support
+  schema-has-json                       Check JSON support
+  schema-get-error                      Get last error
+  schema-dump                           Dump current schema as JSON
+  schema-stats                          Show statistics
+  schema-help                           Show this help
+
+Configuration:
+  SCHEMA_DIR=path                       Schema directory
+  SCHEMA_SEARCH_PATHS=path1:path2       Search paths (colon-separated)
+  SCHEMA_STRICT=true/false              Strict validation mode
+  SCHEMA_VALIDATE_DEPS=true/false       Validate action dependencies
+  SCHEMA_EXPAND_TEMPLATES=true/false    Expand templates on load
+  SCHEMA_VERBOSE=true/false             Verbose output
+  SCHEMA_DEBUG=true/false               Debug output
+
+Schema Format (action/v1):
+  schema: "action/v1"                   # Required: Schema version
+  version: "1.0.0"                      # Optional: Schema version
+
+  metadata:                             # Optional: Schema metadata
+    name: "schema-name"
+    description: "Description"
+
+  context:                              # Optional: Template context
+    key: "value"
+
+  actions:                              # Required: Action sequence
+    - id: "action_id"                   # Required: Unique ID
+      type: "plugin.resource"           # Required: Resource type
+      resource: "name"                  # Required: Resource name
+      # OR
+      selector:                         # Alternative to resource
+        label: "key=value"
+      action: "operation"               # Required: Operation name
+      params:                           # Optional: Action parameters
+        key: "value"
+      depends_on: ["action_id"]         # Optional: Dependencies
+      conditions:                       # Optional: Conditions
+        - expression: "{{ .var }}"
+          on_false: "skip"
+      on_error: "fail"                  # Optional: fail|warn|ignore
+
+  config:                               # Optional: Global config
+    on_failure: "stop"
+
+  rollback:                             # Optional: Rollback config
+    enabled: true
+    actions: [...]
+
+Examples:
+  # Load and validate schema
+  schema-load "myschema.yaml"
+  schema-validate "myschema.yaml"
+
+  # Query schema
+  name=$(schema-get-metadata "name")
+  actions=$(schema-get-actions)
+  count=$(schema-get-action-count)
+
+  # List action IDs
+  schema-list-action-ids
+
+  # Find schema
+  path=$(schema-find "docker-teardown.yaml")
+  schema-load "$path"
+
+Dependencies:
+  Required: _common, _validation, _template
+  Required: yq or python3+PyYAML (for YAML)
+  Required: jq (for JSON)
+
+EOF
+}
+
+# ------------------------------
+# Script Execution Detection
+# ------------------------------
+
+if [[ "${ZSH_EVAL_CONTEXT}" == *:file || "${ZSH_EVAL_CONTEXT}" == "file" ]]; then
+    # Sourced, don't run anything
+    :
+elif [[ "${ZSH_EVAL_CONTEXT}" == "" || "${(%):-%x}" == "$0" ]]; then
+    # Executed directly
+    case "${1:-help}" in
+        help|--help|-h)
+            schema-help
+            exit 0
+            ;;
+        stats)
+            schema-stats
+            exit 0
+            ;;
+        validate)
+            if [[ -z "$2" ]]; then
+                echo "Usage: $0 validate <schema_file>" >&2
+                exit 2
+            fi
+            schema-validate "$2"
+            exit $?
+            ;;
+        *)
+            echo "Error: Extension must be sourced, not executed directly" >&2
+            echo "Usage: source \"\${DOTLIB}/_schema\"" >&2
+            echo "For help: $0 help" >&2
+            exit 1
+            ;;
+    esac
+fi
+
+# ------------------------------
+# Extension Loaded
+# ------------------------------
+
+_schema-log-debug "Extension loaded successfully"

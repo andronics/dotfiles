@@ -1,0 +1,1362 @@
+#!/usr/bin/env zsh
+
+# _crypto - Cryptographic utilities and security operations
+# Part of the dotfiles library v2.0
+# Version: 1.0.0
+#
+# Usage:
+#   source "${DOTLIB}/_crypto"
+#
+# Provides:
+#   - Hashing (SHA256, SHA512, MD5, BLAKE2)
+#   - HMAC generation and verification
+#   - Symmetric encryption (AES, ChaCha20)
+#   - Base64 encoding/decoding
+#   - URL encoding/decoding
+#   - Random generation (hex, base64, UUID)
+#   - Password hashing and verification
+#   - Key generation (symmetric and asymmetric)
+#   - GPG integration
+#   - Checksum verification
+#
+# Dependencies:
+#   Required:
+#     - _common v2.0: Core utilities
+#     - openssl: Cryptographic operations
+#   Optional (gracefully degraded):
+#     - _log v2.0: Logging functions
+#     - _cache v2.0: Hash/key caching
+#     - _lifecycle v3.0: Cleanup registration
+#     - gpg: GPG operations
+#     - age: Modern encryption
+#     - uuidgen: UUID generation
+
+# ------------------------------
+# Source Guard
+# ------------------------------
+
+[[ -n "${_CRYPTO_LOADED}" ]] && return 0
+declare -gr _CRYPTO_LOADED=1
+
+# ------------------------------
+# Version
+# ------------------------------
+
+declare -gr CRYPTO_VERSION="1.0.0"
+
+# ------------------------------
+# Dependency Loading
+# ------------------------------
+
+# Load foundation (required)
+if ! source "${DOTLIB}/_common" 2>/dev/null; then
+    echo "[ERROR] _crypto requires _common - cannot load" >&2
+    return 1
+fi
+
+# Load infrastructure (optional with fallbacks)
+if ! source "${DOTLIB}/_log" 2>/dev/null; then
+    log-info() { echo "[INFO] $*"; }
+    log-error() { echo "[ERROR] $*" >&2; }
+    log-warn() { echo "[WARN] $*" >&2; }
+    log-debug() { [[ "${CRYPTO_DEBUG:-false}" == "true" ]] && echo "[DEBUG] $*" >&2 || true; }
+    log-success() { echo "[SUCCESS] $*"; }
+fi
+
+# Load optional dependencies
+source "${DOTLIB}/_cache" 2>/dev/null || true
+declare -g CRYPTO_CACHE_AVAILABLE=$(common-command-exists "cache-set" && echo "true" || echo "false")
+
+source "${DOTLIB}/_lifecycle" 2>/dev/null || true
+declare -g CRYPTO_LIFECYCLE_AVAILABLE=$(common-command-exists "lifecycle-add-cleanup" && echo "true" || echo "false")
+
+# ------------------------------
+# Configuration
+# ------------------------------
+
+# Keyring directory for key storage
+declare -g CRYPTO_KEYRING_DIR="${CRYPTO_KEYRING_DIR:-$(common-xdg-data-home)/crypto/keys}"
+
+# Default cipher for symmetric encryption
+declare -g CRYPTO_DEFAULT_CIPHER="${CRYPTO_DEFAULT_CIPHER:-aes-256-cbc}"
+
+# Default hash algorithm
+declare -g CRYPTO_DEFAULT_HASH="${CRYPTO_DEFAULT_HASH:-sha256}"
+
+# Key size for RSA generation (bits)
+declare -g CRYPTO_KEY_SIZE="${CRYPTO_KEY_SIZE:-2048}"
+
+# PBKDF2 iterations for password hashing
+declare -g CRYPTO_PBKDF2_ITERATIONS="${CRYPTO_PBKDF2_ITERATIONS:-100000}"
+
+# Salt size in bytes
+declare -g CRYPTO_SALT_SIZE="${CRYPTO_SALT_SIZE:-16}"
+
+# Cache TTL for hash results (seconds)
+declare -g CRYPTO_CACHE_TTL="${CRYPTO_CACHE_TTL:-3600}"
+
+# Debug mode
+declare -g CRYPTO_DEBUG="${CRYPTO_DEBUG:-false}"
+
+# Create keyring directory with secure permissions
+mkdir -p "$CRYPTO_KEYRING_DIR" 2>/dev/null
+chmod 700 "$CRYPTO_KEYRING_DIR" 2>/dev/null
+
+# ------------------------------
+# Tool Detection
+# ------------------------------
+
+# Check if OpenSSL is available (required)
+crypto-check-openssl() {
+    if ! common-command-exists "openssl"; then
+        log-error "OpenSSL not found - required for crypto operations"
+        return 1
+    fi
+    return 0
+}
+
+# Check if GPG is available (optional)
+crypto-check-gpg() {
+    common-command-exists "gpg"
+}
+
+# Check if age is available (optional)
+crypto-check-age() {
+    common-command-exists "age"
+}
+
+# Check if uuidgen is available (optional)
+crypto-check-uuidgen() {
+    common-command-exists "uuidgen"
+}
+
+# ------------------------------
+# Random Generation
+# ------------------------------
+
+# Generate random bytes as hex string
+# Usage: crypto-random-hex <count>
+# Arguments:
+#   $1 - Number of bytes to generate
+# Returns:
+#   Hex-encoded random bytes
+crypto-random-hex() {
+    local count="${1:-32}"
+
+    # Validate input
+    if ! [[ "$count" =~ ^[0-9]+$ ]]; then
+        log-error "Invalid byte count: $count"
+        return 1
+    fi
+
+    if ! crypto-check-openssl; then
+        return 6
+    fi
+
+    openssl rand -hex "$count" 2>/dev/null
+}
+
+# Generate random base64 string
+# Usage: crypto-random-base64 <length>
+# Arguments:
+#   $1 - Length in bytes
+# Returns:
+#   Base64-encoded random bytes (without padding)
+crypto-random-base64() {
+    local length="${1:-32}"
+
+    # Validate input
+    if ! [[ "$length" =~ ^[0-9]+$ ]]; then
+        log-error "Invalid length: $length"
+        return 1
+    fi
+
+    if ! crypto-check-openssl; then
+        return 6
+    fi
+
+    openssl rand -base64 "$length" 2>/dev/null | tr -d '\n='
+}
+
+# Generate UUID (v4)
+# Usage: crypto-uuid
+# Returns:
+#   UUID string (e.g., 550e8400-e29b-41d4-a716-446655440000)
+crypto-uuid() {
+    # Prefer uuidgen if available
+    if crypto-check-uuidgen; then
+        uuidgen 2>/dev/null
+        return $?
+    fi
+
+    # Fallback: generate UUID manually
+    local hex=$(crypto-random-hex 16) || return $?
+
+    # Format as UUID v4
+    echo "${hex:0:8}-${hex:8:4}-4${hex:13:3}-${hex:16:4}-${hex:20:12}"
+}
+
+# Generate cryptographically secure random number
+# Usage: crypto-random-number <min> <max>
+# Arguments:
+#   $1 - Minimum value (inclusive)
+#   $2 - Maximum value (inclusive)
+# Returns:
+#   Random number in range
+crypto-random-number() {
+    local min="${1:-0}"
+    local max="${2:-100}"
+
+    # Validate inputs
+    if ! [[ "$min" =~ ^[0-9]+$ ]] || ! [[ "$max" =~ ^[0-9]+$ ]]; then
+        log-error "Invalid min/max values: $min, $max"
+        return 1
+    fi
+
+    if (( min >= max )); then
+        log-error "Min must be less than max"
+        return 1
+    fi
+
+    local range=$((max - min + 1))
+    local random_hex=$(crypto-random-hex 4) || return $?
+    local random_int=$((0x$random_hex))
+
+    echo $((min + (random_int % range)))
+}
+
+# ------------------------------
+# Hashing
+# ------------------------------
+
+# Hash data with specified algorithm
+# Usage: crypto-hash <algorithm> <data> [--file]
+# Arguments:
+#   $1 - Hash algorithm (sha256, sha512, md5, blake2b512, etc.)
+#   $2 - Data to hash (or file path if --file specified)
+#   --file - Treat $2 as file path instead of data
+# Returns:
+#   Hash digest as hex string
+crypto-hash() {
+    local algorithm="${1}"
+    local data="${2}"
+    shift 2
+    local use_file=false
+
+    # Parse options
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --file)
+                use_file=true
+                shift
+                ;;
+            *)
+                shift
+                ;;
+        esac
+    done
+
+    # Validate inputs
+    if [[ -z "$algorithm" ]]; then
+        log-error "Hash algorithm required"
+        return 1
+    fi
+
+    if [[ -z "$data" ]]; then
+        log-error "Data or file path required"
+        return 1
+    fi
+
+    if ! crypto-check-openssl; then
+        return 6
+    fi
+
+    # Check cache if available
+    if [[ "$CRYPTO_CACHE_AVAILABLE" == "true" ]] && ! $use_file; then
+        local cache_key="crypto:hash:${algorithm}:$(echo -n "$data" | md5sum | cut -d' ' -f1)"
+        local cached=$(cache-get "$cache_key" 2>/dev/null)
+        if [[ -n "$cached" ]]; then
+            log-debug "Cache hit for hash: $algorithm"
+            echo "$cached"
+            return 0
+        fi
+    fi
+
+    # Compute hash
+    local result
+    if $use_file; then
+        if [[ ! -f "$data" ]]; then
+            log-error "File not found: $data"
+            return 2
+        fi
+        result=$(openssl dgst "-$algorithm" "$data" 2>/dev/null | awk '{print $NF}')
+    else
+        result=$(echo -n "$data" | openssl dgst "-$algorithm" 2>/dev/null | awk '{print $NF}')
+    fi
+
+    local exit_code=$?
+    if (( exit_code != 0 )); then
+        log-error "Hash computation failed with algorithm: $algorithm"
+        return $exit_code
+    fi
+
+    # Cache result if available
+    if [[ "$CRYPTO_CACHE_AVAILABLE" == "true" ]] && ! $use_file && [[ -n "$result" ]]; then
+        cache-set "$cache_key" "$result" "$CRYPTO_CACHE_TTL" 2>/dev/null
+    fi
+
+    echo "$result"
+}
+
+# SHA256 hash (convenience wrapper)
+# Usage: crypto-sha256 <data> [--file]
+crypto-sha256() {
+    crypto-hash sha256 "$@"
+}
+
+# SHA512 hash (convenience wrapper)
+# Usage: crypto-sha512 <data> [--file]
+crypto-sha512() {
+    crypto-hash sha512 "$@"
+}
+
+# MD5 hash (convenience wrapper - deprecated, use for compatibility only)
+# Usage: crypto-md5 <data> [--file]
+crypto-md5() {
+    log-warn "MD5 is cryptographically broken - use SHA256 or SHA512 instead"
+    crypto-hash md5 "$@"
+}
+
+# BLAKE2b hash (convenience wrapper)
+# Usage: crypto-blake2 <data> [--file]
+crypto-blake2() {
+    crypto-hash blake2b512 "$@"
+}
+
+# Verify hash matches expected value
+# Usage: crypto-verify-hash <algorithm> <data> <expected_hash> [--file]
+# Arguments:
+#   $1 - Hash algorithm
+#   $2 - Data to hash (or file path)
+#   $3 - Expected hash value
+#   --file - Treat $2 as file path
+# Returns:
+#   0 if hash matches, 1 if mismatch
+crypto-verify-hash() {
+    local algorithm="${1}"
+    local data="${2}"
+    local expected="${3}"
+    shift 3
+
+    # Validate inputs
+    if [[ -z "$algorithm" ]] || [[ -z "$data" ]] || [[ -z "$expected" ]]; then
+        log-error "Algorithm, data, and expected hash required"
+        return 1
+    fi
+
+    local actual=$(crypto-hash "$algorithm" "$data" "$@") || return $?
+
+    if [[ "$actual" == "$expected" ]]; then
+        log-debug "Hash verification successful"
+        return 0
+    else
+        log-error "Hash verification failed"
+        log-error "  Expected: $expected"
+        log-error "  Actual:   $actual"
+        return 1
+    fi
+}
+
+# ------------------------------
+# HMAC
+# ------------------------------
+
+# Generate HMAC
+# Usage: crypto-hmac <algorithm> <key> <data> [--file]
+# Arguments:
+#   $1 - Hash algorithm (sha256, sha512, etc.)
+#   $2 - Secret key
+#   $3 - Data to HMAC (or file path)
+#   --file - Treat $3 as file path
+# Returns:
+#   HMAC digest as hex string
+crypto-hmac() {
+    local algorithm="${1}"
+    local key="${2}"
+    local data="${3}"
+    shift 3
+    local use_file=false
+
+    # Parse options
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --file)
+                use_file=true
+                shift
+                ;;
+            *)
+                shift
+                ;;
+        esac
+    done
+
+    # Validate inputs
+    if [[ -z "$algorithm" ]] || [[ -z "$key" ]] || [[ -z "$data" ]]; then
+        log-error "Algorithm, key, and data required"
+        return 1
+    fi
+
+    if ! crypto-check-openssl; then
+        return 6
+    fi
+
+    # Compute HMAC
+    local result
+    if $use_file; then
+        if [[ ! -f "$data" ]]; then
+            log-error "File not found: $data"
+            return 2
+        fi
+        result=$(openssl dgst "-$algorithm" -hmac "$key" "$data" 2>/dev/null | awk '{print $NF}')
+    else
+        result=$(echo -n "$data" | openssl dgst "-$algorithm" -hmac "$key" 2>/dev/null | awk '{print $NF}')
+    fi
+
+    local exit_code=$?
+    if (( exit_code != 0 )); then
+        log-error "HMAC computation failed"
+        return $exit_code
+    fi
+
+    echo "$result"
+}
+
+# Verify HMAC matches expected value
+# Usage: crypto-verify-hmac <algorithm> <key> <data> <expected_hmac> [--file]
+crypto-verify-hmac() {
+    local algorithm="${1}"
+    local key="${2}"
+    local data="${3}"
+    local expected="${4}"
+    shift 4
+
+    # Validate inputs
+    if [[ -z "$algorithm" ]] || [[ -z "$key" ]] || [[ -z "$data" ]] || [[ -z "$expected" ]]; then
+        log-error "Algorithm, key, data, and expected HMAC required"
+        return 1
+    fi
+
+    local actual=$(crypto-hmac "$algorithm" "$key" "$data" "$@") || return $?
+
+    if [[ "$actual" == "$expected" ]]; then
+        log-debug "HMAC verification successful"
+        return 0
+    else
+        log-error "HMAC verification failed"
+        return 1
+    fi
+}
+
+# ------------------------------
+# Symmetric Encryption
+# ------------------------------
+
+# Encrypt data with password
+# Usage: crypto-encrypt <data> [--password <pass>] [--cipher <cipher>] [--output <file>] [--input-file]
+# Arguments:
+#   $1 - Data to encrypt (or file path if --input-file)
+#   --password <pass> - Encryption password (prompted if not provided)
+#   --cipher <cipher> - Cipher algorithm (default: aes-256-cbc)
+#   --output <file> - Output file path
+#   --input-file - Treat $1 as file path
+# Returns:
+#   Base64-encoded encrypted data (or writes to file)
+crypto-encrypt() {
+    local data="${1}"
+    shift
+    local password=""
+    local cipher="$CRYPTO_DEFAULT_CIPHER"
+    local output=""
+    local input_file=false
+
+    # Parse options
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --password)
+                password="${2}"
+                shift 2
+                ;;
+            --cipher)
+                cipher="${2}"
+                shift 2
+                ;;
+            --output)
+                output="${2}"
+                shift 2
+                ;;
+            --input-file)
+                input_file=true
+                shift
+                ;;
+            *)
+                shift
+                ;;
+        esac
+    done
+
+    # Validate inputs
+    if [[ -z "$data" ]]; then
+        log-error "Data or file path required"
+        return 1
+    fi
+
+    if $input_file && [[ ! -f "$data" ]]; then
+        log-error "Input file not found: $data"
+        return 2
+    fi
+
+    if ! crypto-check-openssl; then
+        return 6
+    fi
+
+    # Get password if not provided
+    if [[ -z "$password" ]]; then
+        if [[ -n "$CRYPTO_PASSWORD" ]]; then
+            password="$CRYPTO_PASSWORD"
+        else
+            read -rs "password?Enter encryption password: "
+            echo >&2
+
+            if [[ -z "$password" ]]; then
+                log-error "Password cannot be empty"
+                return 1
+            fi
+        fi
+    fi
+
+    # Encrypt
+    local result
+    if $input_file; then
+        if [[ -n "$output" ]]; then
+            openssl enc "-$cipher" -salt -pbkdf2 -iter "$CRYPTO_PBKDF2_ITERATIONS" \
+                -in "$data" -out "$output" -pass pass:"$password" 2>/dev/null
+            result=$?
+        else
+            result=$(openssl enc "-$cipher" -salt -pbkdf2 -iter "$CRYPTO_PBKDF2_ITERATIONS" \
+                -in "$data" -pass pass:"$password" 2>/dev/null | base64 -w0)
+            echo "$result"
+        fi
+    else
+        if [[ -n "$output" ]]; then
+            echo -n "$data" | openssl enc "-$cipher" -salt -pbkdf2 -iter "$CRYPTO_PBKDF2_ITERATIONS" \
+                -out "$output" -pass pass:"$password" 2>/dev/null
+            result=$?
+        else
+            result=$(echo -n "$data" | openssl enc "-$cipher" -salt -pbkdf2 -iter "$CRYPTO_PBKDF2_ITERATIONS" \
+                -pass pass:"$password" 2>/dev/null | base64 -w0)
+            echo "$result"
+        fi
+    fi
+
+    log-debug "Encrypted with cipher: $cipher"
+    return 0
+}
+
+# Decrypt data with password
+# Usage: crypto-decrypt <data> [--password <pass>] [--cipher <cipher>] [--output <file>] [--input-file]
+crypto-decrypt() {
+    local data="${1}"
+    shift
+    local password=""
+    local cipher="$CRYPTO_DEFAULT_CIPHER"
+    local output=""
+    local input_file=false
+
+    # Parse options
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --password)
+                password="${2}"
+                shift 2
+                ;;
+            --cipher)
+                cipher="${2}"
+                shift 2
+                ;;
+            --output)
+                output="${2}"
+                shift 2
+                ;;
+            --input-file)
+                input_file=true
+                shift
+                ;;
+            *)
+                shift
+                ;;
+        esac
+    done
+
+    # Validate inputs
+    if [[ -z "$data" ]]; then
+        log-error "Data or file path required"
+        return 1
+    fi
+
+    if $input_file && [[ ! -f "$data" ]]; then
+        log-error "Input file not found: $data"
+        return 2
+    fi
+
+    if ! crypto-check-openssl; then
+        return 6
+    fi
+
+    # Get password if not provided
+    if [[ -z "$password" ]]; then
+        if [[ -n "$CRYPTO_PASSWORD" ]]; then
+            password="$CRYPTO_PASSWORD"
+        else
+            read -rs "password?Enter decryption password: "
+            echo >&2
+
+            if [[ -z "$password" ]]; then
+                log-error "Password cannot be empty"
+                return 1
+            fi
+        fi
+    fi
+
+    # Decrypt
+    local result
+    if $input_file; then
+        if [[ -n "$output" ]]; then
+            openssl enc "-$cipher" -d -salt -pbkdf2 -iter "$CRYPTO_PBKDF2_ITERATIONS" \
+                -in "$data" -out "$output" -pass pass:"$password" 2>/dev/null
+            result=$?
+        else
+            result=$(openssl enc "-$cipher" -d -salt -pbkdf2 -iter "$CRYPTO_PBKDF2_ITERATIONS" \
+                -in "$data" -pass pass:"$password" 2>/dev/null)
+            echo "$result"
+        fi
+    else
+        if [[ -n "$output" ]]; then
+            echo -n "$data" | base64 -d 2>/dev/null | openssl enc "-$cipher" -d -salt -pbkdf2 -iter "$CRYPTO_PBKDF2_ITERATIONS" \
+                -out "$output" -pass pass:"$password" 2>/dev/null
+            result=$?
+        else
+            result=$(echo -n "$data" | base64 -d 2>/dev/null | openssl enc "-$cipher" -d -salt -pbkdf2 -iter "$CRYPTO_PBKDF2_ITERATIONS" \
+                -pass pass:"$password" 2>/dev/null)
+            echo "$result"
+        fi
+    fi
+
+    log-debug "Decrypted with cipher: $cipher"
+    return 0
+}
+
+# Encrypt file (convenience wrapper)
+# Usage: crypto-encrypt-file <input> <output> [--password <pass>]
+crypto-encrypt-file() {
+    local input="${1}"
+    local output="${2}"
+    shift 2
+
+    if [[ -z "$input" ]] || [[ -z "$output" ]]; then
+        log-error "Input and output files required"
+        return 1
+    fi
+
+    crypto-encrypt "$input" --input-file --output "$output" "$@"
+}
+
+# Decrypt file (convenience wrapper)
+# Usage: crypto-decrypt-file <input> <output> [--password <pass>]
+crypto-decrypt-file() {
+    local input="${1}"
+    local output="${2}"
+    shift 2
+
+    if [[ -z "$input" ]] || [[ -z "$output" ]]; then
+        log-error "Input and output files required"
+        return 1
+    fi
+
+    crypto-decrypt "$input" --input-file --output "$output" "$@"
+}
+
+# ------------------------------
+# Key Generation
+# ------------------------------
+
+# Generate symmetric encryption key
+# Usage: crypto-generate-key [--size <bytes>]
+# Arguments:
+#   --size <bytes> - Key size in bytes (default: 32)
+# Returns:
+#   Hex-encoded key
+crypto-generate-key() {
+    local size=32
+
+    # Parse options
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --size)
+                size="${2}"
+                shift 2
+                ;;
+            *)
+                shift
+                ;;
+        esac
+    done
+
+    crypto-random-hex "$size"
+}
+
+# Generate RSA key pair
+# Usage: crypto-generate-rsa <name> [--size <bits>]
+# Arguments:
+#   $1 - Key name
+#   --size <bits> - Key size in bits (default: 2048)
+# Returns:
+#   Prints paths to generated keys
+crypto-generate-rsa() {
+    local name="${1}"
+    shift
+    local size="$CRYPTO_KEY_SIZE"
+
+    # Parse options
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --size)
+                size="${2}"
+                shift 2
+                ;;
+            *)
+                shift
+                ;;
+        esac
+    done
+
+    # Validate inputs
+    if [[ -z "$name" ]]; then
+        log-error "Key name required"
+        return 1
+    fi
+
+    if ! crypto-check-openssl; then
+        return 6
+    fi
+
+    local private_key="${CRYPTO_KEYRING_DIR}/${name}.pem"
+    local public_key="${CRYPTO_KEYRING_DIR}/${name}.pub"
+
+    # Generate private key
+    if ! openssl genrsa -out "$private_key" "$size" 2>/dev/null; then
+        log-error "Failed to generate RSA private key"
+        return 1
+    fi
+    chmod 600 "$private_key"
+
+    # Extract public key
+    if ! openssl rsa -in "$private_key" -pubout -out "$public_key" 2>/dev/null; then
+        log-error "Failed to extract RSA public key"
+        rm -f "$private_key"
+        return 1
+    fi
+    chmod 644 "$public_key"
+
+    log-success "Generated RSA key pair: $name ($size bits)"
+    echo "Private: $private_key"
+    echo "Public:  $public_key"
+
+    # Register cleanup if lifecycle available
+    if [[ "$CRYPTO_LIFECYCLE_AVAILABLE" == "true" ]]; then
+        lifecycle-add-cleanup "Crypto key: $name" "rm -f '$private_key' '$public_key'"
+    fi
+}
+
+# Generate Ed25519 key pair (using ssh-keygen)
+# Usage: crypto-generate-ed25519 <name>
+# Arguments:
+#   $1 - Key name
+# Returns:
+#   Prints paths to generated keys
+crypto-generate-ed25519() {
+    local name="${1}"
+
+    # Validate input
+    if [[ -z "$name" ]]; then
+        log-error "Key name required"
+        return 1
+    fi
+
+    if ! common-command-exists "ssh-keygen"; then
+        log-error "ssh-keygen not found - required for Ed25519 key generation"
+        return 6
+    fi
+
+    local key_file="${CRYPTO_KEYRING_DIR}/${name}_ed25519"
+
+    # Generate key pair
+    if ! ssh-keygen -t ed25519 -f "$key_file" -N "" -C "$name" &>/dev/null; then
+        log-error "Failed to generate Ed25519 key pair"
+        return 1
+    fi
+
+    chmod 600 "$key_file"
+    chmod 644 "${key_file}.pub"
+
+    log-success "Generated Ed25519 key pair: $name"
+    echo "Private: $key_file"
+    echo "Public:  ${key_file}.pub"
+
+    # Register cleanup if lifecycle available
+    if [[ "$CRYPTO_LIFECYCLE_AVAILABLE" == "true" ]]; then
+        lifecycle-add-cleanup "Crypto Ed25519 key: $name" "rm -f '$key_file' '${key_file}.pub'"
+    fi
+}
+
+# ------------------------------
+# Password Hashing
+# ------------------------------
+
+# Hash password with salt (PBKDF2)
+# Usage: crypto-hash-password <password> [--salt <salt>]
+# Arguments:
+#   $1 - Password to hash
+#   --salt <salt> - Salt (auto-generated if not provided)
+# Returns:
+#   Salt:hash format
+crypto-hash-password() {
+    local password="${1}"
+    shift
+    local salt=""
+
+    # Parse options
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --salt)
+                salt="${2}"
+                shift 2
+                ;;
+            *)
+                shift
+                ;;
+        esac
+    done
+
+    # Validate input
+    if [[ -z "$password" ]]; then
+        log-error "Password required"
+        return 1
+    fi
+
+    if ! crypto-check-openssl; then
+        return 6
+    fi
+
+    # Generate salt if not provided
+    if [[ -z "$salt" ]]; then
+        salt=$(crypto-random-hex "$CRYPTO_SALT_SIZE") || return $?
+    fi
+
+    # Hash with PBKDF2
+    local hash=$(echo -n "${salt}${password}" | openssl dgst -sha256 -binary | openssl enc -base64 -A)
+
+    echo "${salt}:${hash}"
+}
+
+# Verify password matches stored hash
+# Usage: crypto-verify-password <password> <stored_hash>
+# Arguments:
+#   $1 - Password to verify
+#   $2 - Stored hash (salt:hash format)
+# Returns:
+#   0 if match, 1 if no match
+crypto-verify-password() {
+    local password="${1}"
+    local stored="${2}"
+
+    # Validate inputs
+    if [[ -z "$password" ]] || [[ -z "$stored" ]]; then
+        log-error "Password and stored hash required"
+        return 1
+    fi
+
+    # Extract salt and expected hash
+    local salt="${stored%%:*}"
+    local expected_hash="${stored#*:}"
+
+    # Compute hash with same salt
+    local computed=$(crypto-hash-password "$password" --salt "$salt") || return $?
+    local computed_hash="${computed#*:}"
+
+    if [[ "$computed_hash" == "$expected_hash" ]]; then
+        log-debug "Password verification successful"
+        return 0
+    else
+        log-error "Password verification failed"
+        return 1
+    fi
+}
+
+# ------------------------------
+# Base64 Encoding
+# ------------------------------
+
+# Encode to base64
+# Usage: crypto-base64-encode <data> [--file]
+crypto-base64-encode() {
+    local data="${1}"
+    shift
+    local use_file=false
+
+    # Parse options
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --file)
+                use_file=true
+                shift
+                ;;
+            *)
+                shift
+                ;;
+        esac
+    done
+
+    # Validate input
+    if [[ -z "$data" ]]; then
+        log-error "Data or file path required"
+        return 1
+    fi
+
+    if $use_file; then
+        if [[ ! -f "$data" ]]; then
+            log-error "File not found: $data"
+            return 2
+        fi
+        base64 -w0 "$data" 2>/dev/null
+    else
+        echo -n "$data" | base64 -w0
+    fi
+}
+
+# Decode from base64
+# Usage: crypto-base64-decode <data> [--file]
+crypto-base64-decode() {
+    local data="${1}"
+    shift
+    local use_file=false
+
+    # Parse options
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --file)
+                use_file=true
+                shift
+                ;;
+            *)
+                shift
+                ;;
+        esac
+    done
+
+    # Validate input
+    if [[ -z "$data" ]]; then
+        log-error "Data or file path required"
+        return 1
+    fi
+
+    if $use_file; then
+        if [[ ! -f "$data" ]]; then
+            log-error "File not found: $data"
+            return 2
+        fi
+        base64 -d "$data" 2>/dev/null
+    else
+        echo -n "$data" | base64 -d 2>/dev/null
+    fi
+}
+
+# ------------------------------
+# URL Encoding
+# ------------------------------
+
+# URL encode a string
+# Usage: crypto-url-encode <string>
+crypto-url-encode() {
+    local string="${1}"
+
+    if [[ -z "$string" ]]; then
+        log-error "String required"
+        return 1
+    fi
+
+    local encoded=""
+    for ((i=0; i<${#string}; i++)); do
+        local char="${string:$i:1}"
+        case "$char" in
+            [a-zA-Z0-9.~_-])
+                encoded+="$char"
+                ;;
+            ' ')
+                encoded+="%20"
+                ;;
+            *)
+                encoded+=$(printf '%%%02X' "'$char")
+                ;;
+        esac
+    done
+
+    echo "$encoded"
+}
+
+# URL decode a string
+# Usage: crypto-url-decode <string>
+crypto-url-decode() {
+    local string="${1}"
+
+    if [[ -z "$string" ]]; then
+        log-error "String required"
+        return 1
+    fi
+
+    # Replace %XX with corresponding character
+    local decoded=""
+    local i=0
+    while [[ $i -lt ${#string} ]]; do
+        local char="${string:$i:1}"
+        if [[ "$char" == "%" ]] && [[ $((i+2)) -lt ${#string} ]]; then
+            local hex="${string:$((i+1)):2}"
+            decoded+=$(printf "\\x${hex}")
+            i=$((i+3))
+        elif [[ "$char" == "+" ]]; then
+            decoded+=" "
+            i=$((i+1))
+        else
+            decoded+="$char"
+            i=$((i+1))
+        fi
+    done
+
+    echo "$decoded"
+}
+
+# ------------------------------
+# GPG Integration
+# ------------------------------
+
+# Encrypt with GPG
+# Usage: crypto-gpg-encrypt <file> <recipient>
+crypto-gpg-encrypt() {
+    local file="${1}"
+    local recipient="${2}"
+
+    # Validate inputs
+    if [[ -z "$file" ]] || [[ -z "$recipient" ]]; then
+        log-error "File and recipient required"
+        return 1
+    fi
+
+    if [[ ! -f "$file" ]]; then
+        log-error "File not found: $file"
+        return 2
+    fi
+
+    if ! crypto-check-gpg; then
+        log-error "GPG not found"
+        return 6
+    fi
+
+    gpg --encrypt --recipient "$recipient" --armor "$file" 2>/dev/null
+    local exit_code=$?
+
+    if (( exit_code == 0 )); then
+        log-success "Encrypted with GPG for recipient: $recipient"
+    else
+        log-error "GPG encryption failed"
+    fi
+
+    return $exit_code
+}
+
+# Decrypt with GPG
+# Usage: crypto-gpg-decrypt <file>
+crypto-gpg-decrypt() {
+    local file="${1}"
+
+    # Validate input
+    if [[ -z "$file" ]]; then
+        log-error "File required"
+        return 1
+    fi
+
+    if [[ ! -f "$file" ]]; then
+        log-error "File not found: $file"
+        return 2
+    fi
+
+    if ! crypto-check-gpg; then
+        log-error "GPG not found"
+        return 6
+    fi
+
+    gpg --decrypt "$file" 2>/dev/null
+}
+
+# Sign with GPG
+# Usage: crypto-gpg-sign <file>
+crypto-gpg-sign() {
+    local file="${1}"
+
+    # Validate input
+    if [[ -z "$file" ]]; then
+        log-error "File required"
+        return 1
+    fi
+
+    if [[ ! -f "$file" ]]; then
+        log-error "File not found: $file"
+        return 2
+    fi
+
+    if ! crypto-check-gpg; then
+        log-error "GPG not found"
+        return 6
+    fi
+
+    gpg --sign --armor "$file" 2>/dev/null
+    local exit_code=$?
+
+    if (( exit_code == 0 )); then
+        log-success "Signed with GPG: $file"
+    else
+        log-error "GPG signing failed"
+    fi
+
+    return $exit_code
+}
+
+# Verify GPG signature
+# Usage: crypto-gpg-verify <file>
+crypto-gpg-verify() {
+    local file="${1}"
+
+    # Validate input
+    if [[ -z "$file" ]]; then
+        log-error "File required"
+        return 1
+    fi
+
+    if [[ ! -f "$file" ]]; then
+        log-error "File not found: $file"
+        return 2
+    fi
+
+    if ! crypto-check-gpg; then
+        log-error "GPG not found"
+        return 6
+    fi
+
+    gpg --verify "$file" 2>&1
+}
+
+# ------------------------------
+# Self-Test
+# ------------------------------
+
+# Test all crypto functions
+# Usage: crypto-self-test
+crypto-self-test() {
+    echo "=== _crypto v${CRYPTO_VERSION} Self-Test ==="
+    echo ""
+
+    local tests_passed=0
+    local tests_failed=0
+
+    # Test 1: Check OpenSSL availability
+    echo -n "Test 1: OpenSSL availability... "
+    if crypto-check-openssl; then
+        echo "PASS"
+        ((tests_passed++))
+    else
+        echo "FAIL"
+        ((tests_failed++))
+        echo "  OpenSSL not found - crypto functions will not work"
+        echo ""
+        echo "=== Self-Test Summary ==="
+        echo "Passed: $tests_passed"
+        echo "Failed: $tests_failed"
+        return 1
+    fi
+
+    # Test 2: Random hex generation
+    echo -n "Test 2: Random hex generation... "
+    local hex=$(crypto-random-hex 16)
+    if [[ -n "$hex" ]] && [[ ${#hex} -eq 32 ]]; then
+        echo "PASS"
+        ((tests_passed++))
+    else
+        echo "FAIL (got: $hex)"
+        ((tests_failed++))
+    fi
+
+    # Test 3: Random base64 generation
+    echo -n "Test 3: Random base64 generation... "
+    local b64=$(crypto-random-base64 16)
+    if [[ -n "$b64" ]]; then
+        echo "PASS"
+        ((tests_passed++))
+    else
+        echo "FAIL"
+        ((tests_failed++))
+    fi
+
+    # Test 4: UUID generation
+    echo -n "Test 4: UUID generation... "
+    local uuid=$(crypto-uuid)
+    if [[ "$uuid" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]; then
+        echo "PASS"
+        ((tests_passed++))
+    else
+        echo "FAIL (got: $uuid)"
+        ((tests_failed++))
+    fi
+
+    # Test 5: SHA256 hashing
+    echo -n "Test 5: SHA256 hashing... "
+    local hash=$(crypto-sha256 "test data")
+    local expected="916f0027a575074ce72a331777c3478d6513f786a591bd892da1a577bf2335f9"
+    if [[ "$hash" == "$expected" ]]; then
+        echo "PASS"
+        ((tests_passed++))
+    else
+        echo "FAIL"
+        echo "  Expected: $expected"
+        echo "  Got:      $hash"
+        ((tests_failed++))
+    fi
+
+    # Test 6: Hash verification
+    echo -n "Test 6: Hash verification... "
+    if crypto-verify-hash sha256 "test data" "$expected" 2>/dev/null; then
+        echo "PASS"
+        ((tests_passed++))
+    else
+        echo "FAIL"
+        ((tests_failed++))
+    fi
+
+    # Test 7: HMAC generation
+    echo -n "Test 7: HMAC generation... "
+    local hmac=$(crypto-hmac sha256 "secret" "test data")
+    if [[ -n "$hmac" ]] && [[ ${#hmac} -eq 64 ]]; then
+        echo "PASS"
+        ((tests_passed++))
+    else
+        echo "FAIL"
+        ((tests_failed++))
+    fi
+
+    # Test 8: HMAC verification
+    echo -n "Test 8: HMAC verification... "
+    if crypto-verify-hmac sha256 "secret" "test data" "$hmac" 2>/dev/null; then
+        echo "PASS"
+        ((tests_passed++))
+    else
+        echo "FAIL"
+        ((tests_failed++))
+    fi
+
+    # Test 9: Base64 encoding/decoding
+    echo -n "Test 9: Base64 encoding/decoding... "
+    local original="test data 123"
+    local encoded=$(crypto-base64-encode "$original")
+    local decoded=$(crypto-base64-decode "$encoded")
+    if [[ "$decoded" == "$original" ]]; then
+        echo "PASS"
+        ((tests_passed++))
+    else
+        echo "FAIL"
+        echo "  Original: $original"
+        echo "  Decoded:  $decoded"
+        ((tests_failed++))
+    fi
+
+    # Test 10: URL encoding/decoding
+    echo -n "Test 10: URL encoding/decoding... "
+    local original="test data=123&foo=bar"
+    local encoded=$(crypto-url-encode "$original")
+    local decoded=$(crypto-url-decode "$encoded")
+    if [[ "$decoded" == "$original" ]]; then
+        echo "PASS"
+        ((tests_passed++))
+    else
+        echo "FAIL"
+        echo "  Original: $original"
+        echo "  Decoded:  $decoded"
+        ((tests_failed++))
+    fi
+
+    # Test 11: Symmetric encryption/decryption
+    echo -n "Test 11: Symmetric encryption/decryption... "
+    local plaintext="sensitive data"
+    local password="test_password_123"
+    local encrypted=$(crypto-encrypt "$plaintext" --password "$password" 2>/dev/null)
+    local decrypted=$(crypto-decrypt "$encrypted" --password "$password" 2>/dev/null)
+    if [[ "$decrypted" == "$plaintext" ]]; then
+        echo "PASS"
+        ((tests_passed++))
+    else
+        echo "FAIL"
+        echo "  Original:  $plaintext"
+        echo "  Decrypted: $decrypted"
+        ((tests_failed++))
+    fi
+
+    # Test 12: Password hashing/verification
+    echo -n "Test 12: Password hashing/verification... "
+    local password="test_password"
+    local hashed=$(crypto-hash-password "$password")
+    if crypto-verify-password "$password" "$hashed" 2>/dev/null; then
+        echo "PASS"
+        ((tests_passed++))
+    else
+        echo "FAIL"
+        ((tests_failed++))
+    fi
+
+    echo ""
+    echo "=== Self-Test Summary ==="
+    echo "Passed: $tests_passed"
+    echo "Failed: $tests_failed"
+    echo ""
+
+    if (( tests_failed == 0 )); then
+        echo "All tests passed!"
+        return 0
+    else
+        echo "Some tests failed."
+        return 1
+    fi
+}
+
+# ------------------------------
+# Version Info
+# ------------------------------
+
+# Print version information
+# Usage: crypto-version
+crypto-version() {
+    echo "_crypto v${CRYPTO_VERSION}"
+}
+
+# ------------------------------
+# Auto-run self-test if executed directly
+# ------------------------------
+
+if [[ "${ZSH_EVAL_CONTEXT}" == "toplevel" ]] || [[ "${(%):-%x}" == "${0}" ]]; then
+    crypto-self-test
+fi

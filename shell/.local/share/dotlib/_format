@@ -1,0 +1,311 @@
+#!/usr/bin/env zsh
+
+# _format - Text formatting and styling utilities
+# Part of the dotfiles library v2.0
+# Version: 1.0.0
+
+[[ -n "${FORMAT_LOADED:-}" ]] && return 0
+
+declare -gr FORMAT_VERSION="1.0.0"
+declare -g FORMAT_LOADED=1
+
+# Load _common (required)
+if ! source "${DOTLIB}/_common" 2>/dev/null; then
+    echo "[ERROR] _format requires _common - cannot load" >&2
+    return 1
+fi
+
+# Load _log (optional)
+if ! source "${DOTLIB}/_log" 2>/dev/null; then
+    log-trace() { [[ "${TRACE:-0}" == "1" ]] && echo "[TRACE] $*" >&2 || true; }
+    log-debug() { [[ "${DEBUG:-0}" == "1" ]] && echo "[DEBUG] $*" >&2 || true; }
+    log-info() { echo "[INFO] $*" >&2; }
+    log-warn() { echo "[WARN] $*" >&2; }
+    log-error() { echo "[ERROR] $*" >&2; }
+fi
+
+# Configuration
+declare -g FORMAT_DEFAULT_WIDTH="${FORMAT_DEFAULT_WIDTH:-80}"
+declare -g FORMAT_TAB_WIDTH="${FORMAT_TAB_WIDTH:-4}"
+declare -g FORMAT_BULLET_CHAR="${FORMAT_BULLET_CHAR:-•}"
+declare -g FORMAT_TABLE_STYLE="${FORMAT_TABLE_STYLE:-unicode}"
+declare -g FORMAT_PADDING_CHAR="${FORMAT_PADDING_CHAR:- }"
+
+# Align text to the left
+format-align-left() {
+    local text="${1:?Text required}"
+    local width="${2:-$FORMAT_DEFAULT_WIDTH}"
+
+    if [[ ${#text} -ge $width ]]; then
+        echo "$text"
+    else
+        local padding_size=$((width - ${#text}))
+        local padding=$(printf "%${padding_size}s" | tr ' ' "$FORMAT_PADDING_CHAR")
+        echo "${text}${padding}"
+    fi
+}
+
+# Align text to the right
+format-align-right() {
+    local text="${1:?Text required}"
+    local width="${2:-$FORMAT_DEFAULT_WIDTH}"
+
+    if [[ ${#text} -ge $width ]]; then
+        echo "$text"
+    else
+        local padding_size=$((width - ${#text}))
+        local padding=$(printf "%${padding_size}s" | tr ' ' "$FORMAT_PADDING_CHAR")
+        echo "${padding}${text}"
+    fi
+}
+
+# Center text
+format-align-center() {
+    local text="${1:?Text required}"
+    local width="${2:-$FORMAT_DEFAULT_WIDTH}"
+
+    if [[ ${#text} -ge $width ]]; then
+        echo "$text"
+    else
+        local total_padding=$((width - ${#text}))
+        local left_padding=$((total_padding / 2))
+        local right_padding=$((total_padding - left_padding))
+
+        local left=$(printf "%${left_padding}s" | tr ' ' "$FORMAT_PADDING_CHAR")
+        local right=$(printf "%${right_padding}s" | tr ' ' "$FORMAT_PADDING_CHAR")
+
+        echo "${left}${text}${right}"
+    fi
+}
+
+# Wrap text to width
+format-wrap() {
+    local text="${1:?Text required}"
+    local width="${2:-$FORMAT_DEFAULT_WIDTH}"
+
+    echo "$text" | fold -s -w "$width"
+}
+
+# Truncate text with ellipsis
+format-truncate() {
+    local text="${1:?Text required}"
+    local max_length="${2:-$FORMAT_DEFAULT_WIDTH}"
+    local ellipsis="${3:-...}"
+
+    if [[ ${#text} -le $max_length ]]; then
+        echo "$text"
+    else
+        local truncated_length=$((max_length - ${#ellipsis}))
+        if [[ $truncated_length -lt 0 ]]; then
+            truncated_length=0
+        fi
+        echo "${text:0:$truncated_length}${ellipsis}"
+    fi
+}
+
+# Pad text
+format-pad() {
+    local text="${1:?Text required}"
+    local width="${2:-$FORMAT_DEFAULT_WIDTH}"
+    local align="${3:-left}"
+
+    case "$align" in
+        left)   format-align-left "$text" "$width" ;;
+        right)  format-align-right "$text" "$width" ;;
+        center) format-align-center "$text" "$width" ;;
+        *)      log-error "Invalid alignment: $align"; return 1 ;;
+    esac
+}
+
+# Format as bulleted list
+format-list-bullet() {
+    local indent="${FORMAT_LIST_INDENT:-  }"
+    local bullet="${FORMAT_BULLET_CHAR}"
+
+    for item in "$@"; do
+        echo "${indent}${bullet} ${item}"
+    done
+}
+
+# Format as numbered list
+format-list-number() {
+    local indent="${FORMAT_LIST_INDENT:-  }"
+    local index=1
+
+    for item in "$@"; do
+        echo "${indent}${index}. ${item}"
+        ((index++))
+    done
+}
+
+# Format number with thousands separator
+format-number() {
+    local number="${1:?Number required}"
+    local separator="${2:-,}"
+
+    number="${number//,/}"
+    number="${number//_/}"
+
+    if [[ "$number" =~ ^[0-9]+$ ]]; then
+        echo "$number" | sed ':a;s/\B[0-9]\{3\}\>/'"$separator"'&/;ta'
+    else
+        echo "$number"
+    fi
+}
+
+# Format number with decimal places
+format-decimal() {
+    local number="${1:?Number required}"
+    local places="${2:-2}"
+
+    printf "%.${places}f" "$number"
+}
+
+# Convert to uppercase
+format-uppercase() {
+    local text="${1:?Text required}"
+    echo "${text:u}"
+}
+
+# Convert to lowercase
+format-lowercase() {
+    local text="${1:?Text required}"
+    echo "${text:l}"
+}
+
+# Convert to title case
+format-titlecase() {
+    local text="${1:?Text required}"
+    local -a words=("${(@s: :)text}")
+    local result=""
+
+    for word in "${words[@]}"; do
+        local first="${word:0:1}"
+        local rest="${word:1}"
+        result+="${(U)first}${(L)rest} "
+    done
+
+    echo "${result% }"
+}
+
+# Indent text
+format-indent() {
+    local text="${1:?Text required}"
+    local levels="${2:-1}"
+    local char="${3:-  }"
+
+    local indent=""
+    for ((i = 0; i < levels; i++)); do
+        indent+="$char"
+    done
+
+    echo "${indent}${text}"
+}
+
+# Indent multi-line text
+format-indent-lines() {
+    local levels="${1:-1}"
+    local char="${2:-  }"
+
+    local indent=""
+    for ((i = 0; i < levels; i++)); do
+        indent+="$char"
+    done
+
+    while IFS= read -r line; do
+        echo "${indent}${line}"
+    done
+}
+
+# Draw a box around text
+format-box() {
+    local title="${1:?Title required}"
+    shift
+    local -a lines=("$@")
+
+    local max_width=${#title}
+    for line in "${lines[@]}"; do
+        if [[ ${#line} -gt $max_width ]]; then
+            max_width=${#line}
+        fi
+    done
+
+    ((max_width += 4))
+
+    local top_left top_right horiz vert bottom_left bottom_right
+    case "$FORMAT_TABLE_STYLE" in
+        unicode)
+            top_left="┌" top_right="┐" horiz="─" vert="│"
+            bottom_left="└" bottom_right="┘"
+            ;;
+        *)
+            top_left="+" top_right="+" horiz="-" vert="|"
+            bottom_left="+" bottom_right="+"
+            ;;
+    esac
+
+    echo -n "$top_left"
+    for ((i = 0; i < max_width; i++)); do
+        echo -n "$horiz"
+    done
+    echo "$top_right"
+
+    local padded_title=$(format-align-center "$title" "$max_width")
+    echo "${vert}${padded_title}${vert}"
+
+    if [[ ${#lines[@]} -gt 0 ]]; then
+        echo -n "$vert"
+        for ((i = 0; i < max_width; i++)); do
+            echo -n "$horiz"
+        done
+        echo "$vert"
+    fi
+
+    for line in "${lines[@]}"; do
+        local padded_line=$(format-pad "$line" "$max_width" "left")
+        echo "${vert}${padded_line}${vert}"
+    done
+
+    echo -n "$bottom_left"
+    for ((i = 0; i < max_width; i++)); do
+        echo -n "$horiz"
+    done
+    echo "$bottom_right"
+}
+
+# Self-test
+format-self-test() {
+    echo "=== Testing lib/_format v${FORMAT_VERSION} ==="
+    local tests_passed=0 tests_failed=0
+
+    # Test 1: Left alignment
+    local result=$(format-align-left "test" 10)
+    [[ ${#result} -eq 10 ]] && ((tests_passed++)) || ((tests_failed++))
+
+    # Test 2: Right alignment
+    result=$(format-align-right "test" 10)
+    [[ ${#result} -eq 10 && "$result" =~ "test$" ]] && ((tests_passed++)) || ((tests_failed++))
+
+    # Test 3: Center alignment
+    result=$(format-align-center "test" 10)
+    [[ ${#result} -eq 10 ]] && ((tests_passed++)) || ((tests_failed++))
+
+    # Test 4: Truncation
+    result=$(format-truncate "very long text here" 10)
+    [[ ${#result} -le 10 ]] && ((tests_passed++)) || ((tests_failed++))
+
+    # Test 5: Number formatting
+    result=$(format-number "1234567")
+    [[ "$result" == "1,234,567" ]] && ((tests_passed++)) || ((tests_failed++))
+
+    # Test 6-10: Case conversions and others
+    [[ "$(format-uppercase "hello")" == "HELLO" ]] && ((tests_passed++)) || ((tests_failed++))
+    [[ "$(format-lowercase "WORLD")" == "world" ]] && ((tests_passed++)) || ((tests_failed++))
+    [[ "$(format-titlecase "hello world")" == "Hello World" ]] && ((tests_passed++)) || ((tests_failed++))
+    [[ "$(format-indent "test" 2)" =~ "    test" ]] && ((tests_passed++)) || ((tests_failed++))
+    [[ "$(format-list-bullet "item1" | head -1)" =~ "${FORMAT_BULLET_CHAR}" ]] && ((tests_passed++)) || ((tests_failed++))
+
+    echo "Passed: $tests_passed/10"
+    [[ $tests_failed -eq 0 ]] && return 0 || return 1
+}
+

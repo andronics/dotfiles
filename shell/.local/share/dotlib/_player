@@ -1,0 +1,1852 @@
+#!/usr/bin/env zsh
+
+# _player - Media player control and management library (via playerctl)
+# Part of the dotfiles library v2.0
+# Version: 1.0.0
+#
+# Usage:
+#   source "${DOTLIB}/_player"
+#
+# Provides:
+#   - Player control (play, pause, stop, next, previous, seek)
+#   - Metadata queries (artist, title, album, artwork, length, position)
+#   - Status queries (playing, paused, stopped with icons)
+#   - Player instance detection and icon mapping
+#   - Configuration-driven icon/state mappings (instances.json, states.json)
+#   - Event emission for player state changes
+#   - Performance caching for metadata queries
+#   - XDG-compliant configuration paths
+#
+# Dependencies:
+#   Required:
+#     - _common v2.0: Core utilities and validation
+#     - _jq v2.0: JSON processing for configuration
+#     - _xdg v2.0: XDG-compliant paths
+#     - playerctl: Media player control utility (MPRIS)
+#   Optional (gracefully degraded):
+#     - _log v2.0: Structured logging
+#     - _config v2.0: Configuration management
+#     - _string v2.0: String manipulation
+#     - _format v2.0: Output formatting
+#     - _events v2.0: Event emission
+#     - _cache v2.0: Performance caching
+#     - _process v2.0: Process management
+#     - _notify v2.0: Desktop notifications
+#     - _lifecycle v3.0: Cleanup registration
+
+# ------------------------------
+# Source Guard
+# ------------------------------
+
+[[ -n "${PLAYER_LOADED:-}" ]] && return 0
+declare -g PLAYER_LOADED=1
+
+# ------------------------------
+# Version
+# ------------------------------
+
+declare -r PLAYER_VERSION="1.0.0"
+
+# ------------------------------
+# Dependency Loading
+# ------------------------------
+
+# Load foundation (required)
+if ! source "${DOTLIB}/_common" 2>/dev/null; then
+    echo "[ERROR] _player requires _common - cannot load" >&2
+    return 1
+fi
+
+# Load required extensions
+if ! source "${DOTLIB}/_jq" 2>/dev/null; then
+    echo "[ERROR] _player requires _jq - cannot load" >&2
+    return 1
+fi
+
+if ! source "${DOTLIB}/_xdg" 2>/dev/null; then
+    echo "[ERROR] _player requires _xdg - cannot load" >&2
+    return 1
+fi
+
+# Load infrastructure (optional with fallbacks)
+if ! source "${DOTLIB}/_log" 2>/dev/null; then
+    log-info() { echo "[INFO] $*" >&2; }
+    log-error() { echo "[ERROR] $*" >&2; }
+    log-warn() { echo "[WARN] $*" >&2; }
+    log-warning() { echo "[WARN] $*" >&2; }
+    log-debug() { [[ "${PLAYER_DEBUG:-false}" == "true" ]] && echo "[DEBUG] $*" >&2 || true; }
+    log-success() { echo "[SUCCESS] $*" >&2; }
+fi
+
+# Load optional extensions
+if source "${DOTLIB}/_config" 2>/dev/null; then
+    declare -g PLAYER_CONFIG_AVAILABLE=true
+else
+    declare -g PLAYER_CONFIG_AVAILABLE=false
+fi
+
+if source "${DOTLIB}/_string" 2>/dev/null; then
+    declare -g PLAYER_STRING_AVAILABLE=true
+else
+    declare -g PLAYER_STRING_AVAILABLE=false
+fi
+
+if source "${DOTLIB}/_format" 2>/dev/null; then
+    declare -g PLAYER_FORMAT_AVAILABLE=true
+else
+    declare -g PLAYER_FORMAT_AVAILABLE=false
+fi
+
+if source "${DOTLIB}/_events" 2>/dev/null; then
+    declare -g PLAYER_EVENTS_AVAILABLE=true
+else
+    declare -g PLAYER_EVENTS_AVAILABLE=false
+fi
+
+if source "${DOTLIB}/_cache" 2>/dev/null; then
+    declare -g PLAYER_CACHE_AVAILABLE=true
+else
+    declare -g PLAYER_CACHE_AVAILABLE=false
+fi
+
+if source "${DOTLIB}/_process" 2>/dev/null; then
+    declare -g PLAYER_PROCESS_AVAILABLE=true
+else
+    declare -g PLAYER_PROCESS_AVAILABLE=false
+fi
+
+if source "${DOTLIB}/_notify" 2>/dev/null; then
+    declare -g PLAYER_NOTIFY_AVAILABLE=true
+else
+    declare -g PLAYER_NOTIFY_AVAILABLE=false
+fi
+
+if source "${DOTLIB}/_lifecycle" 2>/dev/null; then
+    declare -g PLAYER_LIFECYCLE_AVAILABLE=true
+else
+    declare -g PLAYER_LIFECYCLE_AVAILABLE=false
+fi
+
+# ------------------------------
+# Configuration
+# ------------------------------
+
+# Paths (XDG-compliant)
+declare -g PLAYER_CONFIG_DIR=""
+declare -g PLAYER_DATA_DIR=""
+declare -g PLAYER_CACHE_DIR=""
+
+# Behavior configuration
+declare -g PLAYER_DEBUG="${PLAYER_DEBUG:-false}"                    # Enable debug logging
+declare -g PLAYER_EMIT_EVENTS="${PLAYER_EMIT_EVENTS:-true}"       # Emit events via _events
+declare -g PLAYER_USE_CACHE="${PLAYER_USE_CACHE:-true}"           # Cache metadata queries
+declare -g PLAYER_CACHE_TTL="${PLAYER_CACHE_TTL:-2}"              # Cache TTL in seconds
+declare -g PLAYER_SEEK_STEP="${PLAYER_SEEK_STEP:-10}"             # Default seek step in seconds
+declare -g PLAYER_NOTIFY_ON_CHANGE="${PLAYER_NOTIFY_ON_CHANGE:-false}"  # Desktop notifications on track change
+
+# Event names (if _events is available)
+declare -r PLAYER_EVENT_PLAY="player.action.play"
+declare -r PLAYER_EVENT_PAUSE="player.action.pause"
+declare -r PLAYER_EVENT_STOP="player.action.stop"
+declare -r PLAYER_EVENT_NEXT="player.action.next"
+declare -r PLAYER_EVENT_PREVIOUS="player.action.previous"
+declare -r PLAYER_EVENT_SEEK="player.action.seek"
+declare -r PLAYER_EVENT_SHUFFLE="player.action.shuffle"
+declare -r PLAYER_EVENT_LOOP="player.action.loop"
+declare -r PLAYER_EVENT_METADATA_CHANGED="player.metadata.changed"
+declare -r PLAYER_EVENT_STATUS_CHANGED="player.status.changed"
+
+# ------------------------------
+# Internal State
+# ------------------------------
+
+# Configuration data (loaded lazily)
+declare -g _PLAYER_INSTANCES_DATA=""
+declare -g _PLAYER_STATES_DATA=""
+
+# Initialization flag
+declare -g _PLAYER_INITIALIZED="false"
+
+# Cache keys (if _cache is available)
+declare -r _PLAYER_METADATA_CACHE_KEY="player:metadata"
+declare -r _PLAYER_STATUS_CACHE_KEY="player:status"
+
+# ------------------------------
+# Initialization
+# ------------------------------
+
+# Initialize extension
+#
+# Function: _player-init
+# Description: Lazy initialization of _player extension
+# Internal use only
+#
+_player-init() {
+    [[ "$_PLAYER_INITIALIZED" == "true" ]] && return 0
+
+    log-debug "Initializing _player v$PLAYER_VERSION"
+
+    # Initialize XDG paths
+    local app_name="player"
+    xdg-setup-all "$app_name" || {
+        log-error "Failed to setup XDG directories"
+        return 1
+    }
+
+    PLAYER_CONFIG_DIR="$(xdg-config-dir "$app_name")"
+    PLAYER_DATA_DIR="$(xdg-data-dir "$app_name")"
+    PLAYER_CACHE_DIR="$(xdg-cache-dir "$app_name")"
+
+    log-debug "XDG directories initialized" "config=$PLAYER_CONFIG_DIR" "data=$PLAYER_DATA_DIR" "cache=$PLAYER_CACHE_DIR"
+
+    # Load configuration files
+    _player-load-config
+
+    # Verify playerctl availability
+    if ! player-validate-playerctl; then
+        log-warn "playerctl not installed or not in PATH"
+    fi
+
+    _PLAYER_INITIALIZED="true"
+
+    # Emit initialization event
+    _player-emit "player.initialized" "version=$PLAYER_VERSION"
+
+    return 0
+}
+
+# Load configuration files
+#
+# Function: _player-load-config
+# Description: Load instances.json and states.json configuration
+# Internal use only
+#
+_player-load-config() {
+    local instances_file="${PLAYER_DATA_DIR}/instances.json"
+    local states_file="${PLAYER_DATA_DIR}/states.json"
+
+    # Load instances configuration
+    if [[ -f "$instances_file" ]]; then
+        _PLAYER_INSTANCES_DATA=$(<"$instances_file")
+        log-debug "Loaded instances configuration" "file=$instances_file"
+    else
+        log-warn "Instances configuration not found" "file=$instances_file"
+        _PLAYER_INSTANCES_DATA='[{"name":"default","icon":""}]'
+    fi
+
+    # Load states configuration
+    if [[ -f "$states_file" ]]; then
+        _PLAYER_STATES_DATA=$(<"$states_file")
+        log-debug "Loaded states configuration" "file=$states_file"
+    else
+        log-warn "States configuration not found" "file=$states_file"
+        _PLAYER_STATES_DATA='[{"state":"playing","icon":"▶"},{"state":"paused","icon":"⏸"},{"state":"stopped","icon":"⏹"}]'
+    fi
+
+    return 0
+}
+
+# ------------------------------
+# Internal Helpers
+# ------------------------------
+
+# Emit an event (uses _events if available)
+#
+# Function: _player-emit
+# Description: Emit event via _events extension if available and enabled
+# Parameters:
+#   $1 - Event name (required)
+#   $@ - Event data (optional)
+# Internal use only
+#
+_player-emit() {
+    [[ "$PLAYER_EMIT_EVENTS" != "true" ]] && return 0
+    [[ "$PLAYER_EVENTS_AVAILABLE" != "true" ]] && return 0
+
+    events-emit "$@"
+}
+
+# Check playerctl command availability
+#
+# Function: _player-check-command
+# Description: Verify playerctl command is available
+# Returns:
+#   0 - Command available
+#   127 - Command not found
+# Internal use only
+#
+_player-check-command() {
+    if ! common-command-exists "playerctl"; then
+        log-error "playerctl command not found"
+        return 127
+    fi
+    return 0
+}
+
+# Lowercase string (fallback if _string not available)
+#
+# Function: _player-lowercase
+# Description: Convert string to lowercase
+# Parameters:
+#   $1 - String to convert
+# Output: Lowercased string
+# Internal use only
+#
+_player-lowercase() {
+    local input="$1"
+    if [[ "$PLAYER_STRING_AVAILABLE" == "true" ]]; then
+        string-lowercase "$input"
+    else
+        echo "${input:l}"
+    fi
+}
+
+# Format duration from microseconds to HH:MM:SS
+#
+# Function: _player-format-duration
+# Description: Convert microseconds to formatted time string
+# Parameters:
+#   $1 - Microseconds (required)
+# Output: Formatted duration (HH:MM:SS)
+# Internal use only
+#
+_player-format-duration() {
+    local microseconds="$1"
+
+    [[ -z "$microseconds" || "$microseconds" == "0" ]] && {
+        echo "00:00:00"
+        return 0
+    }
+
+    # Convert microseconds to seconds
+    local seconds=$((microseconds / 1000000))
+
+    # Calculate hours, minutes, seconds
+    local hours=$((seconds / 3600))
+    local minutes=$(((seconds % 3600) / 60))
+    local secs=$((seconds % 60))
+
+    printf "%02d:%02d:%02d" "$hours" "$minutes" "$secs"
+}
+
+# ------------------------------
+# Core Infrastructure Functions
+# ------------------------------
+
+# Initialize player library
+#
+# Function: player-init
+# Description: Initialize player library (normally auto-called on source)
+# Parameters:
+#   --force - Force re-initialization (optional)
+# Returns:
+#   0 - Success
+#   1 - Failed to initialize
+# Example:
+#   player-init
+#   player-init --force
+#
+player-init() {
+    local force=false
+    [[ "$1" == "--force" ]] && force=true
+
+    if [[ "$force" == "true" ]]; then
+        _PLAYER_INITIALIZED="false"
+    fi
+
+    _player-init
+}
+
+# Cleanup player library resources
+#
+# Function: player-cleanup
+# Description: Cleanup resources allocated by player library
+# Returns:
+#   0 - Success
+# Example:
+#   player-cleanup
+#
+player-cleanup() {
+    log-debug "Cleaning up _player resources"
+
+    # Clear cache if available
+    if [[ "$PLAYER_CACHE_AVAILABLE" == "true" ]]; then
+        cache-invalidate "$_PLAYER_METADATA_CACHE_KEY" 2>/dev/null || true
+        cache-invalidate "$_PLAYER_STATUS_CACHE_KEY" 2>/dev/null || true
+    fi
+
+    return 0
+}
+
+# Validate playerctl availability
+#
+# Function: player-validate-playerctl
+# Description: Check if playerctl command is available
+# Returns:
+#   0 - playerctl is available
+#   127 - playerctl not found
+# Example:
+#   player-validate-playerctl || echo "playerctl not installed"
+#
+player-validate-playerctl() {
+    _player-check-command
+}
+
+# Validate player instance
+#
+# Function: player-validate-player
+# Description: Check if a specific player instance is available
+# Parameters:
+#   $1 - Player name (required)
+# Returns:
+#   0 - Player exists
+#   1 - Player not found
+# Example:
+#   player-validate-player "spotify"
+#
+player-validate-player() {
+    local player_name="$1"
+
+    _player-init
+    common-validate-required "$player_name" "player name" || return 2
+
+    _player-check-command || return 127
+
+    # List all players and check if our player is in the list
+    local players=$(playerctl --list-all 2>/dev/null)
+    echo "$players" | grep -q "$player_name" && return 0 || return 1
+}
+
+# Get configuration directory
+#
+# Function: player-get-config-dir
+# Description: Get XDG configuration directory for player
+# Output: Configuration directory path
+# Returns:
+#   0 - Success
+# Example:
+#   config_dir=$(player-get-config-dir)
+#
+player-get-config-dir() {
+    _player-init
+    echo "$PLAYER_CONFIG_DIR"
+    return 0
+}
+
+# ------------------------------
+# Configuration Management
+# ------------------------------
+
+# Load player instances configuration
+#
+# Function: player-load-instances
+# Description: Load or reload instances.json configuration
+# Returns:
+#   0 - Success
+#   1 - Failed to load configuration
+# Example:
+#   player-load-instances
+#
+player-load-instances() {
+    _player-init
+    _player-load-config
+}
+
+# Load player states configuration
+#
+# Function: player-load-states
+# Description: Load or reload states.json configuration
+# Returns:
+#   0 - Success
+#   1 - Failed to load configuration
+# Example:
+#   player-load-states
+#
+player-load-states() {
+    _player-init
+    _player-load-config
+}
+
+# Reload all configuration
+#
+# Function: player-reload-config
+# Description: Reload all configuration files
+# Returns:
+#   0 - Success
+#   1 - Failed to reload configuration
+# Example:
+#   player-reload-config
+#
+player-reload-config() {
+    _player-init
+    _player-load-config
+    log-info "Configuration reloaded"
+    return 0
+}
+
+# ------------------------------
+# Player Detection
+# ------------------------------
+
+# List all available players
+#
+# Function: player-list-all
+# Description: List all active player instances
+# Output: Newline-separated list of player names
+# Returns:
+#   0 - Success (even if no players)
+#   127 - playerctl not available
+# Example:
+#   players=$(player-list-all)
+#
+player-list-all() {
+    _player-init
+    _player-check-command || return 127
+
+    playerctl --list-all 2>/dev/null || true
+    return 0
+}
+
+# Get currently active player
+#
+# Function: player-get-active
+# Description: Get the currently active/playing player instance
+# Output: Player name
+# Returns:
+#   0 - Success
+#   1 - No active player found
+#   127 - playerctl not available
+# Example:
+#   active=$(player-get-active)
+#
+player-get-active() {
+    _player-init
+    _player-check-command || return 127
+
+    # Try to get status - this uses the active player
+    local active=$(playerctl --player="%any" metadata --format "{{playerInstance}}" 2>/dev/null)
+
+    if [[ -n "$active" ]]; then
+        echo "$active"
+        return 0
+    else
+        log-debug "No active player found"
+        return 1
+    fi
+}
+
+# Auto-detect best player
+#
+# Function: player-detect
+# Description: Detect the best player to use (prioritizes playing/paused over stopped)
+# Output: Player name
+# Returns:
+#   0 - Success
+#   1 - No player found
+#   127 - playerctl not available
+# Example:
+#   player=$(player-detect)
+#
+player-detect() {
+    _player-init
+    _player-check-command || return 127
+
+    # First, try to get active player
+    local active
+    active=$(player-get-active 2>/dev/null) && {
+        echo "$active"
+        return 0
+    }
+
+    # Otherwise, just get the first player
+    local first=$(player-list-all 2>/dev/null | head -n 1)
+
+    if [[ -n "$first" ]]; then
+        echo "$first"
+        return 0
+    else
+        log-debug "No player detected"
+        return 1
+    fi
+}
+
+# Check if specific player exists
+#
+# Function: player-exists
+# Description: Check if a specific player instance exists
+# Parameters:
+#   $1 - Player name (required)
+# Returns:
+#   0 - Player exists
+#   1 - Player not found
+#   127 - playerctl not available
+# Example:
+#   player-exists "spotify" && echo "Spotify is running"
+#
+player-exists() {
+    local player_name="$1"
+
+    _player-init
+    common-validate-required "$player_name" "player name" || return 2
+    _player-check-command || return 127
+
+    player-list-all | grep -q "^${player_name}$" && return 0 || return 1
+}
+
+# ------------------------------
+# Player Control
+# ------------------------------
+
+# Start playback
+#
+# Function: player-play
+# Description: Start or resume playback
+# Parameters:
+#   $1 - Player name (optional, uses active player if omitted)
+# Returns:
+#   0 - Success
+#   1 - Failed to play
+#   127 - playerctl not available
+# Example:
+#   player-play
+#   player-play "spotify"
+#
+player-play() {
+    local player="${1:-}"
+
+    _player-init
+    _player-check-command || return 127
+
+    log-debug "Starting playback" "player=$player"
+
+    local cmd="playerctl"
+    [[ -n "$player" ]] && cmd="$cmd --player=$player"
+    cmd="$cmd play"
+
+    if eval "$cmd" 2>/dev/null; then
+        _player-emit "$PLAYER_EVENT_PLAY" "player=$player"
+        return 0
+    else
+        log-error "Failed to start playback" "player=$player"
+        return 1
+    fi
+}
+
+# Pause playback
+#
+# Function: player-pause
+# Description: Pause playback
+# Parameters:
+#   $1 - Player name (optional, uses active player if omitted)
+# Returns:
+#   0 - Success
+#   1 - Failed to pause
+#   127 - playerctl not available
+# Example:
+#   player-pause
+#
+player-pause() {
+    local player="${1:-}"
+
+    _player-init
+    _player-check-command || return 127
+
+    log-debug "Pausing playback" "player=$player"
+
+    local cmd="playerctl"
+    [[ -n "$player" ]] && cmd="$cmd --player=$player"
+    cmd="$cmd pause"
+
+    if eval "$cmd" 2>/dev/null; then
+        _player-emit "$PLAYER_EVENT_PAUSE" "player=$player"
+        return 0
+    else
+        log-error "Failed to pause playback" "player=$player"
+        return 1
+    fi
+}
+
+# Toggle play/pause
+#
+# Function: player-play-pause
+# Description: Toggle between play and pause states
+# Parameters:
+#   $1 - Player name (optional, uses active player if omitted)
+# Returns:
+#   0 - Success
+#   1 - Failed to toggle
+#   127 - playerctl not available
+# Example:
+#   player-play-pause
+#
+player-play-pause() {
+    local player="${1:-}"
+
+    _player-init
+    _player-check-command || return 127
+
+    log-debug "Toggling play/pause" "player=$player"
+
+    local cmd="playerctl"
+    [[ -n "$player" ]] && cmd="$cmd --player=$player"
+    cmd="$cmd play-pause"
+
+    if eval "$cmd" 2>/dev/null; then
+        _player-emit "$PLAYER_EVENT_PLAY" "player=$player" "action=toggle"
+        return 0
+    else
+        log-error "Failed to toggle play/pause" "player=$player"
+        return 1
+    fi
+}
+
+# Stop playback
+#
+# Function: player-stop
+# Description: Stop playback
+# Parameters:
+#   $1 - Player name (optional, uses active player if omitted)
+# Returns:
+#   0 - Success
+#   1 - Failed to stop
+#   127 - playerctl not available
+# Example:
+#   player-stop
+#
+player-stop() {
+    local player="${1:-}"
+
+    _player-init
+    _player-check-command || return 127
+
+    log-debug "Stopping playback" "player=$player"
+
+    local cmd="playerctl"
+    [[ -n "$player" ]] && cmd="$cmd --player=$player"
+    cmd="$cmd stop"
+
+    if eval "$cmd" 2>/dev/null; then
+        _player-emit "$PLAYER_EVENT_STOP" "player=$player"
+        return 0
+    else
+        log-error "Failed to stop playback" "player=$player"
+        return 1
+    fi
+}
+
+# Next track
+#
+# Function: player-next
+# Description: Skip to next track
+# Parameters:
+#   $1 - Player name (optional, uses active player if omitted)
+# Returns:
+#   0 - Success
+#   1 - Failed to skip
+#   127 - playerctl not available
+# Example:
+#   player-next
+#
+player-next() {
+    local player="${1:-}"
+
+    _player-init
+    _player-check-command || return 127
+
+    log-debug "Skipping to next track" "player=$player"
+
+    local cmd="playerctl"
+    [[ -n "$player" ]] && cmd="$cmd --player=$player"
+    cmd="$cmd next"
+
+    if eval "$cmd" 2>/dev/null; then
+        _player-emit "$PLAYER_EVENT_NEXT" "player=$player"
+
+        # Invalidate metadata cache
+        [[ "$PLAYER_CACHE_AVAILABLE" == "true" ]] && \
+            cache-invalidate "$_PLAYER_METADATA_CACHE_KEY" 2>/dev/null || true
+
+        return 0
+    else
+        log-error "Failed to skip to next track" "player=$player"
+        return 1
+    fi
+}
+
+# Previous track
+#
+# Function: player-previous
+# Description: Go to previous track
+# Parameters:
+#   $1 - Player name (optional, uses active player if omitted)
+# Returns:
+#   0 - Success
+#   1 - Failed to go back
+#   127 - playerctl not available
+# Example:
+#   player-previous
+#
+player-previous() {
+    local player="${1:-}"
+
+    _player-init
+    _player-check-command || return 127
+
+    log-debug "Going to previous track" "player=$player"
+
+    local cmd="playerctl"
+    [[ -n "$player" ]] && cmd="$cmd --player=$player"
+    cmd="$cmd previous"
+
+    if eval "$cmd" 2>/dev/null; then
+        _player-emit "$PLAYER_EVENT_PREVIOUS" "player=$player"
+
+        # Invalidate metadata cache
+        [[ "$PLAYER_CACHE_AVAILABLE" == "true" ]] && \
+            cache-invalidate "$_PLAYER_METADATA_CACHE_KEY" 2>/dev/null || true
+
+        return 0
+    else
+        log-error "Failed to go to previous track" "player=$player"
+        return 1
+    fi
+}
+
+# Seek to position
+#
+# Function: player-seek
+# Description: Seek to position or relative seek
+# Parameters:
+#   $1 - Position in seconds (required)
+#        Absolute: "60" (seek to 60 seconds)
+#        Relative forward: "+10" (seek 10 seconds forward)
+#        Relative backward: "-5" (seek 5 seconds backward)
+#   $2 - Player name (optional, uses active player if omitted)
+# Returns:
+#   0 - Success
+#   1 - Failed to seek
+#   2 - Invalid arguments
+#   127 - playerctl not available
+# Example:
+#   player-seek 60          # Seek to 60 seconds
+#   player-seek +10         # Seek forward 10 seconds
+#   player-seek -5          # Seek backward 5 seconds
+#
+player-seek() {
+    local position="$1"
+    local player="${2:-}"
+
+    _player-init
+    common-validate-required "$position" "position" || return 2
+    _player-check-command || return 127
+
+    log-debug "Seeking" "position=$position" "player=$player"
+
+    local cmd="playerctl"
+    [[ -n "$player" ]] && cmd="$cmd --player=$player"
+
+    # Determine if relative or absolute
+    if [[ "$position" =~ ^[+-] ]]; then
+        # Relative seek
+        cmd="$cmd position ${position}+"
+    else
+        # Absolute seek (convert to seconds if needed)
+        cmd="$cmd position $position"
+    fi
+
+    if eval "$cmd" 2>/dev/null; then
+        _player-emit "$PLAYER_EVENT_SEEK" "player=$player" "position=$position"
+        return 0
+    else
+        log-error "Failed to seek" "position=$position" "player=$player"
+        return 1
+    fi
+}
+
+# ------------------------------
+# Advanced Control
+# ------------------------------
+
+# Cycle loop mode
+#
+# Function: player-loop
+# Description: Cycle through loop modes (None → Track → Playlist → None)
+# Parameters:
+#   $1 - Player name (optional, uses active player if omitted)
+# Output: New loop mode
+# Returns:
+#   0 - Success
+#   1 - Failed to change loop mode
+#   127 - playerctl not available
+# Example:
+#   new_mode=$(player-loop)
+#
+player-loop() {
+    local player="${1:-}"
+
+    _player-init
+    _player-check-command || return 127
+
+    # Get current loop status
+    local cmd="playerctl"
+    [[ -n "$player" ]] && cmd="$cmd --player=$player"
+
+    local current=$($cmd loop 2>/dev/null)
+    current=$(_player-lowercase "$current")
+
+    log-debug "Current loop mode" "mode=$current"
+
+    # Cycle through modes
+    local new_mode
+    case "$current" in
+        none)
+            new_mode="Track"
+            ;;
+        track)
+            new_mode="Playlist"
+            ;;
+        playlist)
+            new_mode="None"
+            ;;
+        *)
+            new_mode="Track"
+            ;;
+    esac
+
+    # Set new mode
+    eval "$cmd loop $new_mode" 2>/dev/null || {
+        log-error "Failed to set loop mode" "mode=$new_mode"
+        return 1
+    }
+
+    echo "$new_mode"
+    _player-emit "$PLAYER_EVENT_LOOP" "player=$player" "mode=$new_mode"
+    return 0
+}
+
+# Toggle shuffle
+#
+# Function: player-shuffle
+# Description: Toggle shuffle mode on/off
+# Parameters:
+#   $1 - Player name (optional, uses active player if omitted)
+# Output: New shuffle state (On/Off)
+# Returns:
+#   0 - Success
+#   1 - Failed to toggle shuffle
+#   127 - playerctl not available
+# Example:
+#   new_state=$(player-shuffle)
+#
+player-shuffle() {
+    local player="${1:-}"
+
+    _player-init
+    _player-check-command || return 127
+
+    # Get current shuffle status
+    local cmd="playerctl"
+    [[ -n "$player" ]] && cmd="$cmd --player=$player"
+
+    local current=$($cmd shuffle 2>/dev/null)
+
+    log-debug "Current shuffle state" "state=$current"
+
+    # Toggle
+    local new_state
+    if [[ "$current" == "On" ]]; then
+        new_state="Off"
+    else
+        new_state="On"
+    fi
+
+    # Set new state
+    eval "$cmd shuffle $new_state" 2>/dev/null || {
+        log-error "Failed to set shuffle state" "state=$new_state"
+        return 1
+    }
+
+    echo "$new_state"
+    _player-emit "$PLAYER_EVENT_SHUFFLE" "player=$player" "state=$new_state"
+    return 0
+}
+
+# Set volume
+#
+# Function: player-set-volume
+# Description: Set player volume (0.0 to 1.0)
+# Parameters:
+#   $1 - Volume level (required, 0.0 to 1.0)
+#   $2 - Player name (optional, uses active player if omitted)
+# Returns:
+#   0 - Success
+#   1 - Failed to set volume
+#   2 - Invalid arguments
+#   127 - playerctl not available
+# Example:
+#   player-set-volume 0.5    # Set volume to 50%
+#
+player-set-volume() {
+    local volume="$1"
+    local player="${2:-}"
+
+    _player-init
+    common-validate-required "$volume" "volume" || return 2
+    _player-check-command || return 127
+
+    log-debug "Setting volume" "volume=$volume" "player=$player"
+
+    local cmd="playerctl"
+    [[ -n "$player" ]] && cmd="$cmd --player=$player"
+    cmd="$cmd volume $volume"
+
+    if eval "$cmd" 2>/dev/null; then
+        _player-emit "player.volume.changed" "player=$player" "volume=$volume"
+        return 0
+    else
+        log-error "Failed to set volume" "volume=$volume"
+        return 1
+    fi
+}
+
+# Get volume
+#
+# Function: player-get-volume
+# Description: Get current player volume (0.0 to 1.0)
+# Parameters:
+#   $1 - Player name (optional, uses active player if omitted)
+# Output: Volume level
+# Returns:
+#   0 - Success
+#   1 - Failed to get volume
+#   127 - playerctl not available
+# Example:
+#   volume=$(player-get-volume)
+#
+player-get-volume() {
+    local player="${1:-}"
+
+    _player-init
+    _player-check-command || return 127
+
+    local cmd="playerctl"
+    [[ -n "$player" ]] && cmd="$cmd --player=$player"
+    cmd="$cmd volume"
+
+    local volume=$(eval "$cmd" 2>/dev/null)
+
+    if [[ -n "$volume" ]]; then
+        echo "$volume"
+        return 0
+    else
+        log-debug "Failed to get volume"
+        return 1
+    fi
+}
+
+# ------------------------------
+# Metadata Queries
+# ------------------------------
+
+# Get track title
+#
+# Function: player-get-title
+# Description: Get current track title
+# Parameters:
+#   $1 - Player name (optional, uses active player if omitted)
+# Output: Track title
+# Returns:
+#   0 - Success
+#   1 - Failed to get title
+#   127 - playerctl not available
+# Example:
+#   title=$(player-get-title)
+#
+player-get-title() {
+    local player="${1:-}"
+
+    _player-init
+    _player-check-command || return 127
+
+    local cmd="playerctl"
+    [[ -n "$player" ]] && cmd="$cmd --player=$player"
+    cmd="$cmd metadata xesam:title"
+
+    # Use eval to properly parse command with arguments in ZSH
+    # Without eval, ZSH treats the entire string as a single command name
+    local stderr_redirect="2>/dev/null"
+    [[ "$PLAYER_DEBUG" == "true" ]] && stderr_redirect="2>&1"
+
+    local title=$(eval "$cmd $stderr_redirect")
+
+    if [[ -n "$title" ]]; then
+        echo "$title"
+        return 0
+    else
+        log-debug "Failed to get title"
+        return 1
+    fi
+}
+
+# Get track artist
+#
+# Function: player-get-artist
+# Description: Get current track artist
+# Parameters:
+#   $1 - Player name (optional, uses active player if omitted)
+# Output: Artist name
+# Returns:
+#   0 - Success
+#   1 - Failed to get artist
+#   127 - playerctl not available
+# Example:
+#   artist=$(player-get-artist)
+#
+player-get-artist() {
+    local player="${1:-}"
+
+    _player-init
+    _player-check-command || return 127
+
+    local cmd="playerctl"
+    [[ -n "$player" ]] && cmd="$cmd --player=$player"
+    cmd="$cmd metadata xesam:artist"
+
+    local artist=$(eval "$cmd" 2>/dev/null)
+
+    if [[ -n "$artist" ]]; then
+        echo "$artist"
+        return 0
+    else
+        log-debug "Failed to get artist"
+        return 1
+    fi
+}
+
+# Get track album
+#
+# Function: player-get-album
+# Description: Get current track album
+# Parameters:
+#   $1 - Player name (optional, uses active player if omitted)
+# Output: Album name
+# Returns:
+#   0 - Success
+#   1 - Failed to get album
+#   127 - playerctl not available
+# Example:
+#   album=$(player-get-album)
+#
+player-get-album() {
+    local player="${1:-}"
+
+    _player-init
+    _player-check-command || return 127
+
+    local cmd="playerctl"
+    [[ -n "$player" ]] && cmd="$cmd --player=$player"
+    cmd="$cmd metadata xesam:album"
+
+    local album=$(eval "$cmd" 2>/dev/null)
+
+    if [[ -n "$album" ]]; then
+        echo "$album"
+        return 0
+    else
+        log-debug "Failed to get album"
+        return 1
+    fi
+}
+
+# Get all metadata
+#
+# Function: player-get-metadata
+# Description: Get all metadata as formatted string "Artist: Title"
+# Parameters:
+#   $1 - Player name (optional, uses active player if omitted)
+# Output: Formatted metadata string
+# Returns:
+#   0 - Success
+#   1 - No metadata available
+#   127 - playerctl not available
+# Example:
+#   metadata=$(player-get-metadata)
+#
+player-get-metadata() {
+    local player="${1:-}"
+
+    _player-init
+    _player-check-command || return 127
+
+    # Check cache if available
+    if [[ "$PLAYER_CACHE_AVAILABLE" == "true" && "$PLAYER_USE_CACHE" == "true" ]]; then
+        local cached=$(cache-get "$_PLAYER_METADATA_CACHE_KEY" 2>/dev/null)
+        if [[ -n "$cached" ]]; then
+            echo "$cached"
+            return 0
+        fi
+    fi
+
+    local artist=$(player-get-artist "$player" 2>/dev/null)
+    local title=$(player-get-title "$player" 2>/dev/null)
+
+    if [[ -z "$artist" && -z "$title" ]]; then
+        return 1
+    fi
+
+    local result
+    result=$(printf "%s: %s" "${artist:-Unknown Artist}" "${title:-Unknown Title}")
+
+    # Cache result if available
+    if [[ "$PLAYER_CACHE_AVAILABLE" == "true" && "$PLAYER_USE_CACHE" == "true" ]]; then
+        cache-set "$_PLAYER_METADATA_CACHE_KEY" "$result" "$PLAYER_CACHE_TTL" 2>/dev/null || true
+    fi
+
+    echo "$result"
+    return 0
+}
+
+# Get metadata as JSON
+#
+# Function: player-get-metadata-json
+# Description: Get all metadata as JSON object
+# Parameters:
+#   $1 - Player name (optional, uses active player if omitted)
+# Output: JSON object with metadata fields
+# Returns:
+#   0 - Success
+#   1 - Failed to get metadata
+#   127 - playerctl not available
+# Example:
+#   json=$(player-get-metadata-json)
+#
+player-get-metadata-json() {
+    local player="${1:-}"
+
+    _player-init
+    _player-check-command || return 127
+
+    local artist=$(player-get-artist "$player" 2>/dev/null || echo "")
+    local title=$(player-get-title "$player" 2>/dev/null || echo "")
+    local album=$(player-get-album "$player" 2>/dev/null || echo "")
+    local artwork=$(player-get-artwork "$player" 2>/dev/null || echo "")
+    local length=$(player-get-duration "$player" 2>/dev/null || echo "0")
+    local position=$(player-get-position "$player" 2>/dev/null || echo "0")
+
+    # Format durations
+    local length_formatted=$(_player-format-duration "$length")
+    local position_formatted=$(_player-format-duration "$position")
+
+    cat <<EOF
+{
+  "artist": "$artist",
+  "title": "$title",
+  "album": "$album",
+  "artwork": "$artwork",
+  "length": $length,
+  "position": $position,
+  "length_formatted": "$length_formatted",
+  "position_formatted": "$position_formatted"
+}
+EOF
+    return 0
+}
+
+# Get track artwork URL
+#
+# Function: player-get-artwork
+# Description: Get artwork URL for current track
+# Parameters:
+#   $1 - Player name (optional, uses active player if omitted)
+# Output: Artwork URL
+# Returns:
+#   0 - Success
+#   1 - Failed to get artwork
+#   127 - playerctl not available
+# Example:
+#   artwork=$(player-get-artwork)
+#
+player-get-artwork() {
+    local player="${1:-}"
+
+    _player-init
+    _player-check-command || return 127
+
+    local cmd="playerctl"
+    [[ -n "$player" ]] && cmd="$cmd --player=$player"
+    cmd="$cmd metadata mpris:artUrl"
+
+    local artwork=$(eval "$cmd" 2>/dev/null)
+
+    if [[ -n "$artwork" ]]; then
+        echo "$artwork"
+        return 0
+    else
+        log-debug "Failed to get artwork"
+        return 1
+    fi
+}
+
+# Get playback position
+#
+# Function: player-get-position
+# Description: Get current playback position in microseconds
+# Parameters:
+#   $1 - Player name (optional, uses active player if omitted)
+# Output: Position in microseconds
+# Returns:
+#   0 - Success
+#   1 - Failed to get position
+#   127 - playerctl not available
+# Example:
+#   position=$(player-get-position)
+#
+player-get-position() {
+    local player="${1:-}"
+
+    _player-init
+    _player-check-command || return 127
+
+    local cmd="playerctl"
+    [[ -n "$player" ]] && cmd="$cmd --player=$player"
+    cmd="$cmd position"
+
+    # playerctl position returns seconds as float
+    local position_sec=$(eval "$cmd" 2>/dev/null)
+
+    if [[ -n "$position_sec" ]]; then
+        # Convert to microseconds
+        local position_micro=$(echo "$position_sec * 1000000" | bc 2>/dev/null)
+        echo "${position_micro%.*}"
+        return 0
+    else
+        log-debug "Failed to get position"
+        return 1
+    fi
+}
+
+# Get track duration
+#
+# Function: player-get-duration
+# Description: Get track duration in microseconds
+# Parameters:
+#   $1 - Player name (optional, uses active player if omitted)
+# Output: Duration in microseconds
+# Returns:
+#   0 - Success
+#   1 - Failed to get duration
+#   127 - playerctl not available
+# Example:
+#   duration=$(player-get-duration)
+#
+player-get-duration() {
+    local player="${1:-}"
+
+    _player-init
+    _player-check-command || return 127
+
+    local cmd="playerctl"
+    [[ -n "$player" ]] && cmd="$cmd --player=$player"
+    cmd="$cmd metadata mpris:length"
+
+    local duration=$(eval "$cmd" 2>/dev/null)
+
+    if [[ -n "$duration" ]]; then
+        echo "$duration"
+        return 0
+    else
+        log-debug "Failed to get duration"
+        return 1
+    fi
+}
+
+# ------------------------------
+# Status Queries
+# ------------------------------
+
+# Get playback status
+#
+# Function: player-get-status
+# Description: Get current playback status (Playing/Paused/Stopped)
+# Parameters:
+#   $1 - Player name (optional, uses active player if omitted)
+# Output: Status name (lowercase)
+# Returns:
+#   0 - Success
+#   1 - Failed to get status
+#   127 - playerctl not available
+# Example:
+#   status=$(player-get-status)
+#
+player-get-status() {
+    local player="${1:-}"
+
+    _player-init
+    _player-check-command || return 127
+
+    local cmd="playerctl"
+    [[ -n "$player" ]] && cmd="$cmd --player=$player"
+    cmd="$cmd status"
+
+    local playback_status=$(eval "$cmd" 2>/dev/null)
+
+    if [[ -n "$playback_status" ]]; then
+        echo "$(_player-lowercase "$playback_status")"
+        return 0
+    else
+        log-debug "Failed to get status"
+        return 1
+    fi
+}
+
+# Get status as JSON
+#
+# Function: player-get-status-json
+# Description: Get full status information as JSON
+# Parameters:
+#   $1 - Player name (optional, uses active player if omitted)
+# Output: JSON object with status details
+# Returns:
+#   0 - Success
+#   1 - Failed to get status
+#   127 - playerctl not available
+# Example:
+#   json=$(player-get-status-json)
+#
+player-get-status-json() {
+    local player="${1:-}"
+
+    _player-init
+    _player-check-command || return 127
+
+    local playback_status=$(player-get-status "$player" 2>/dev/null || echo "unknown")
+    local status_icon=$(player-get-state-icon "$player" 2>/dev/null || echo "")
+    local instance=$(player-get-instance-name "$player" 2>/dev/null || echo "unknown")
+    local instance_icon=$(player-get-instance-icon "$player" 2>/dev/null || echo "")
+    local shuffle=$(player-shuffle "$player" 2>/dev/null || echo "Unknown")
+    local loop=$(player-loop "$player" 2>/dev/null || echo "Unknown")
+    local volume=$(player-get-volume "$player" 2>/dev/null || echo "0.0")
+
+    cat <<EOF
+{
+  "status": "$playback_status",
+  "icon": "$status_icon",
+  "instance": "$instance",
+  "instance_icon": "$instance_icon",
+  "shuffle": "$shuffle",
+  "loop": "$loop",
+  "volume": $volume
+}
+EOF
+    return 0
+}
+
+# Get state icon
+#
+# Function: player-get-state-icon
+# Description: Get icon for current playback state from states.json
+# Parameters:
+#   $1 - Player name (optional, uses active player if omitted)
+# Output: Icon string
+# Returns:
+#   0 - Success
+#   1 - Failed to get icon
+#   127 - playerctl not available
+# Example:
+#   icon=$(player-get-state-icon)
+#
+player-get-state-icon() {
+    local player="${1:-}"
+
+    _player-init
+
+    local playback_status=$(player-get-status "$player" 2>/dev/null)
+    [[ -z "$playback_status" ]] && return 1
+
+    # Query states.json for icon
+    local filter='.[] | select(.state | test($name)) | .icon'
+    local icon=$(echo "$_PLAYER_STATES_DATA" | jq-query "$filter" "name" "$playback_status" 2>/dev/null)
+
+    if [[ -n "$icon" ]]; then
+        echo "$icon"
+        return 0
+    else
+        log-debug "No icon found for state" "state=$playback_status"
+        return 1
+    fi
+}
+
+# Check if playing
+#
+# Function: player-is-playing
+# Description: Check if player is currently playing
+# Parameters:
+#   $1 - Player name (optional, uses active player if omitted)
+# Returns:
+#   0 - Player is playing
+#   1 - Player is not playing
+#   127 - playerctl not available
+# Example:
+#   player-is-playing && echo "Music is playing"
+#
+player-is-playing() {
+    local player="${1:-}"
+
+    _player-init
+
+    local playback_status=$(player-get-status "$player" 2>/dev/null)
+    [[ "$playback_status" == "playing" ]] && return 0 || return 1
+}
+
+# ------------------------------
+# Instance Detection
+# ------------------------------
+
+# Get player instance name
+#
+# Function: player-get-instance-name
+# Description: Get player application name (chrome, spotify, mpv, etc.)
+# Parameters:
+#   $1 - Player name (optional, uses active player if omitted)
+# Output: Instance name
+# Returns:
+#   0 - Success
+#   1 - Failed to get instance
+#   127 - playerctl not available
+# Example:
+#   instance=$(player-get-instance-name)
+#
+player-get-instance-name() {
+    local player="${1:-}"
+
+    _player-init
+    _player-check-command || return 127
+
+    # Get instance from metadata
+    local cmd="playerctl"
+    [[ -n "$player" ]] && cmd="$cmd --player=$player"
+    cmd="$cmd metadata"
+
+    local instance=$(eval "$cmd" 2>/dev/null | awk '/xesam:title/ {print $1}')
+
+    if [[ -z "$instance" ]]; then
+        # Fallback: try to get player name directly
+        instance=$(player-get-active 2>/dev/null || echo "default")
+    fi
+
+    echo "$instance"
+    return 0
+}
+
+# Get player instance icon
+#
+# Function: player-get-instance-icon
+# Description: Get icon for current player application from instances.json
+# Parameters:
+#   $1 - Player name (optional, uses active player if omitted)
+# Output: Icon string
+# Returns:
+#   0 - Success
+#   1 - Failed to get icon
+# Example:
+#   icon=$(player-get-instance-icon)
+#
+player-get-instance-icon() {
+    local player="${1:-}"
+
+    _player-init
+
+    local instance=$(player-get-instance-name "$player" 2>/dev/null)
+    [[ -z "$instance" ]] && instance="default"
+
+    # Query instances.json for icon
+    local filter='.[] | select(.name | test($name)) | .icon'
+    local icon=$(echo "$_PLAYER_INSTANCES_DATA" | jq-query "$filter" "name" "$instance" 2>/dev/null)
+
+    if [[ -n "$icon" ]]; then
+        echo "$icon"
+        return 0
+    else
+        log-debug "No icon found for instance" "instance=$instance"
+        # Return default icon
+        echo "$_PLAYER_INSTANCES_DATA" | jq-query '.[] | select(.name == "default") | .icon' 2>/dev/null || echo ""
+        return 1
+    fi
+}
+
+# ------------------------------
+# Advanced Features
+# ------------------------------
+
+# Watch for player changes
+#
+# Function: player-watch
+# Description: Watch for player events and output to stdout
+# Output: Event stream
+# Returns:
+#   0 - Watch ended normally
+#   1 - Failed to start watch
+#   127 - playerctl not available
+# Example:
+#   player-watch | while read event; do
+#       echo "Event: $event"
+#   done
+#
+player-watch() {
+    _player-init
+    _player-check-command || return 127
+
+    log-info "Watching for player events (Ctrl+C to stop)"
+
+    playerctl --follow metadata --format '{{status}}|{{playerInstance}}|{{artist}}|{{title}}' 2>/dev/null | \
+    while IFS='|' read -r status instance artist title; do
+        echo "status=$status instance=$instance artist=$artist title=$title"
+        _player-emit "$PLAYER_EVENT_METADATA_CHANGED" "status=$status" "instance=$instance"
+    done
+}
+
+# Format player output for display
+#
+# Function: player-format-output
+# Description: Format current player status for display (status bars, etc.)
+# Parameters:
+#   $1 - Format string (optional, default: "%icon% %artist%: %title%")
+#   $2 - Player name (optional, uses active player if omitted)
+# Output: Formatted string
+# Returns:
+#   0 - Success
+#   1 - Failed to format
+# Example:
+#   output=$(player-format-output "%icon% %artist% - %title%")
+#
+player-format-output() {
+    local format="${1:-%icon% %artist%: %title%}"
+    local player="${2:-}"
+
+    _player-init
+
+    # Get all components
+    local icon=$(player-get-state-icon "$player" 2>/dev/null || echo "")
+    local artist=$(player-get-artist "$player" 2>/dev/null || echo "Unknown Artist")
+    local title=$(player-get-title "$player" 2>/dev/null || echo "Unknown Title")
+    local album=$(player-get-album "$player" 2>/dev/null || echo "")
+    local instance=$(player-get-instance-name "$player" 2>/dev/null || echo "")
+    local instance_icon=$(player-get-instance-icon "$player" 2>/dev/null || echo "")
+    local playback_status=$(player-get-status "$player" 2>/dev/null || echo "")
+
+    # Replace placeholders
+    local result="$format"
+    result="${result//\%icon\%/$icon}"
+    result="${result//\%artist\%/$artist}"
+    result="${result//\%title\%/$title}"
+    result="${result//\%album\%/$album}"
+    result="${result//\%instance\%/$instance}"
+    result="${result//\%instance_icon\%/$instance_icon}"
+    result="${result//\%status\%/$playback_status}"
+
+    echo "$result"
+    return 0
+}
+
+# ------------------------------
+# Direct Control
+# ------------------------------
+
+# Direct playerctl command pass-through
+#
+# Function: player-control
+# Description: Execute arbitrary playerctl command
+# Parameters:
+#   $@ - playerctl arguments
+# Returns:
+#   playerctl exit code
+# Example:
+#   player-control metadata --format "{{artist}}"
+#
+player-control() {
+    _player-init
+    _player-check-command || return 127
+
+    playerctl "$@" 2>/dev/null
+}
+
+# ------------------------------
+# Utility Functions
+# ------------------------------
+
+# Display version
+#
+# Function: player-version
+# Description: Display extension version
+# Output: Version string
+# Example:
+#   player-version
+#
+player-version() {
+    echo "$PLAYER_VERSION"
+}
+
+# Display extension information
+#
+# Function: player-info
+# Description: Display comprehensive extension information
+# Output: Extension details
+# Example:
+#   player-info
+#
+player-info() {
+    _player-init
+
+    local playerctl_version=$(playerctl --version 2>/dev/null | head -n 1 || echo "not installed")
+    local active_player=$(player-get-active 2>/dev/null || echo "none")
+    local player_count=$(player-list-all 2>/dev/null | wc -l)
+
+    cat <<EOF
+_player Extension Information
+
+Version:          $PLAYER_VERSION
+Config Directory: $PLAYER_CONFIG_DIR
+Data Directory:   $PLAYER_DATA_DIR
+Cache Directory:  $PLAYER_CACHE_DIR
+
+Configuration:
+  Debug Mode:       $PLAYER_DEBUG
+  Emit Events:      $PLAYER_EMIT_EVENTS
+  Use Cache:        $PLAYER_USE_CACHE
+  Cache TTL:        ${PLAYER_CACHE_TTL}s
+  Seek Step:        ${PLAYER_SEEK_STEP}s
+  Notify on Change: $PLAYER_NOTIFY_ON_CHANGE
+
+Integration Status:
+  _common:          yes (required)
+  _jq:              yes (required)
+  _xdg:             yes (required)
+  _log:             ${LOG_LOADED:-no}
+  _config:          $PLAYER_CONFIG_AVAILABLE
+  _string:          $PLAYER_STRING_AVAILABLE
+  _format:          $PLAYER_FORMAT_AVAILABLE
+  _events:          $PLAYER_EVENTS_AVAILABLE
+  _cache:           $PLAYER_CACHE_AVAILABLE
+  _process:         $PLAYER_PROCESS_AVAILABLE
+  _notify:          $PLAYER_NOTIFY_AVAILABLE
+  _lifecycle:       $PLAYER_LIFECYCLE_AVAILABLE
+
+Playerctl Status:
+  Version:          $playerctl_version
+  Active Player:    $active_player
+  Player Count:     $player_count
+EOF
+
+    if [[ "$player_count" -gt 0 ]]; then
+        echo ""
+        echo "Available Players:"
+        player-list-all | while read player_name; do
+            local player_status=$(player-get-status "$player_name" 2>/dev/null || echo "unknown")
+            echo "  - $player_name ($player_status)"
+        done
+    fi
+}
+
+# Display help
+#
+# Function: player-help
+# Description: Display comprehensive help information
+# Output: Help text
+# Example:
+#   player-help
+#
+player-help() {
+    cat <<EOF
+_player - Media Player Control and Management
+
+Version: $PLAYER_VERSION
+
+USAGE:
+  source "\${DOTLIB}/_player"
+
+CONFIGURATION:
+  PLAYER_DEBUG               Enable debug logging (default: false)
+  PLAYER_EMIT_EVENTS         Emit events via _events (default: true)
+  PLAYER_USE_CACHE           Cache metadata queries (default: true)
+  PLAYER_CACHE_TTL           Cache TTL in seconds (default: 2)
+  PLAYER_SEEK_STEP           Default seek step (default: 10)
+  PLAYER_NOTIFY_ON_CHANGE    Desktop notifications (default: false)
+
+CORE INFRASTRUCTURE:
+  player-init [--force]      Initialize player library
+  player-cleanup             Cleanup library resources
+  player-validate-playerctl  Check playerctl availability
+  player-validate-player NAME  Check if player exists
+  player-get-config-dir      Get configuration directory
+
+CONFIGURATION:
+  player-load-instances      Load instances.json
+  player-load-states         Load states.json
+  player-reload-config       Reload all configuration
+
+PLAYER DETECTION:
+  player-list-all            List all available players
+  player-get-active          Get currently active player
+  player-detect              Auto-detect best player
+  player-exists NAME         Check if player exists
+
+PLAYER CONTROL:
+  player-play [PLAYER]       Start playback
+  player-pause [PLAYER]      Pause playback
+  player-play-pause [PLAYER] Toggle play/pause
+  player-stop [PLAYER]       Stop playback
+  player-next [PLAYER]       Next track
+  player-previous [PLAYER]   Previous track
+  player-seek POS [PLAYER]   Seek to position
+
+ADVANCED CONTROL:
+  player-loop [PLAYER]       Cycle loop mode
+  player-shuffle [PLAYER]    Toggle shuffle
+  player-set-volume VOL [PLAYER]  Set volume (0.0-1.0)
+  player-get-volume [PLAYER]      Get volume
+
+METADATA QUERIES:
+  player-get-title [PLAYER]      Get track title
+  player-get-artist [PLAYER]     Get artist name
+  player-get-album [PLAYER]      Get album name
+  player-get-metadata [PLAYER]   Get formatted metadata
+  player-get-metadata-json [PLAYER]  Get metadata as JSON
+  player-get-artwork [PLAYER]    Get artwork URL
+  player-get-position [PLAYER]   Get playback position
+  player-get-duration [PLAYER]   Get track duration
+
+STATUS QUERIES:
+  player-get-status [PLAYER]        Get playback status
+  player-get-status-json [PLAYER]   Get status as JSON
+  player-get-state-icon [PLAYER]    Get state icon
+  player-is-playing [PLAYER]        Check if playing
+
+INSTANCE DETECTION:
+  player-get-instance-name [PLAYER]  Get player app name
+  player-get-instance-icon [PLAYER]  Get player app icon
+
+ADVANCED FEATURES:
+  player-watch               Watch for player events
+  player-format-output [FMT] [PLAYER]  Format output
+
+DIRECT CONTROL:
+  player-control ARGS...     Pass-through to playerctl
+
+UTILITIES:
+  player-version             Display version
+  player-help                Display this help
+  player-info                Display system information
+
+For detailed documentation: cat ~/.local/docs/lib/_player.md
+EOF
+}
+
+# ------------------------------
+# Module Load
+# ------------------------------
+
+# Initialize eagerly to avoid log messages in command substitutions
+_player-init || true
+
+# Log module load
+log-debug "_player extension loaded" "version=$PLAYER_VERSION" "integrations=config:$PLAYER_CONFIG_AVAILABLE,string:$PLAYER_STRING_AVAILABLE,format:$PLAYER_FORMAT_AVAILABLE,events:$PLAYER_EVENTS_AVAILABLE,cache:$PLAYER_CACHE_AVAILABLE,process:$PLAYER_PROCESS_AVAILABLE,notify:$PLAYER_NOTIFY_AVAILABLE,lifecycle:$PLAYER_LIFECYCLE_AVAILABLE"

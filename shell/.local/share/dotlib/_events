@@ -1,0 +1,1090 @@
+#!/usr/bin/env zsh
+
+# _events - Event system for pub/sub communication
+# Part of the dotfiles library v2.0
+# Version: 1.0.0
+#
+# Usage:
+#   source "${DOTLIB}/_events"
+#
+# Provides:
+#   - Event registration and emission
+#   - Priority-based handler execution
+#   - Event filtering and namespacing
+#   - Async event support
+#   - Handler lifecycle management
+#   - Event history and persistence
+#   - Comprehensive error handling
+
+# ------------------------------
+# Source Guard
+# ------------------------------
+
+[[ -n "${EVENTS_LOADED:-}" ]] && return 0
+declare -g EVENTS_LOADED=1
+
+# ------------------------------
+# Version
+# ------------------------------
+
+declare -r EVENTS_VERSION="1.0.0"
+
+# ------------------------------
+# Load Dependencies
+# ------------------------------
+
+# Load _common (required)
+if ! source "${DOTLIB}/_common" 2>/dev/null; then
+    echo "[ERROR] _events requires _common - cannot load" >&2
+    return 1
+fi
+
+# Load _log (optional with fallback)
+if ! source "${DOTLIB}/_log" 2>/dev/null; then
+    log-info() { echo "[INFO] $*"; }
+    log-error() { echo "[ERROR] $*" >&2; }
+    log-warning() { echo "[WARNING] $*" >&2; }
+    log-debug() { :; }
+    log-trace() { :; }
+fi
+
+# ------------------------------
+# Configuration Variables
+# ------------------------------
+
+# Enable in-memory event history
+declare -g EVENTS_ENABLE_HISTORY="${EVENTS_ENABLE_HISTORY:-true}"
+
+# Maximum events in history
+declare -g EVENTS_HISTORY_SIZE="${EVENTS_HISTORY_SIZE:-1000}"
+
+# Enable persistent event logging
+declare -g EVENTS_ENABLE_LOGGING="${EVENTS_ENABLE_LOGGING:-false}"
+
+# Directory for persistent event logs (XDG-compliant)
+declare -g EVENTS_LOG_DIR="${EVENTS_LOG_DIR:-$(common-lib-state-dir)/events}"
+
+# Timestamp format for events
+declare -g EVENTS_TIMESTAMP_FORMAT="${EVENTS_TIMESTAMP_FORMAT:-%Y-%m-%d %H:%M:%S}"
+
+# Enable async event support
+declare -g EVENTS_ENABLE_ASYNC="${EVENTS_ENABLE_ASYNC:-false}"
+
+# Maximum async worker processes
+declare -g EVENTS_MAX_ASYNC_WORKERS="${EVENTS_MAX_ASYNC_WORKERS:-4}"
+
+# Default handler priority (0-100, higher = earlier)
+declare -g EVENTS_DEFAULT_PRIORITY="${EVENTS_DEFAULT_PRIORITY:-50}"
+
+# ------------------------------
+# Internal State
+# ------------------------------
+
+# Event handlers registry
+# Format: "event_name:priority:handler_id" -> handler_function
+declare -g -A _EVENTS_HANDLERS=()
+
+# Handler metadata
+# Format: handler_id -> "priority:function_name:registered_timestamp"
+declare -g -A _EVENTS_HANDLER_META=()
+
+# Event history (in-memory)
+declare -g -a _EVENTS_HISTORY=()
+
+# Event queue for deferred processing
+declare -g -a _EVENTS_QUEUE=()
+
+# Async worker PIDs
+declare -g -a _EVENTS_ASYNC_WORKERS=()
+
+# Next handler ID (for uniqueness)
+declare -g _EVENTS_NEXT_HANDLER_ID=1
+declare -g EVENTS_LAST_HANDLER_ID=""  # Set by events-on, readable after registration
+
+# Initialization flag
+declare -g _EVENTS_INITIALIZED="false"
+
+# ------------------------------
+# Initialization
+# ------------------------------
+
+# Initialize event system
+# Usage: events-init
+events-init() {
+    [[ "$_EVENTS_INITIALIZED" == "true" ]] && return 0
+
+    log-debug "Initializing _events v$EVENTS_VERSION"
+
+    # Ensure log directory exists if persistence enabled
+    if [[ "$EVENTS_ENABLE_LOGGING" == "true" ]]; then
+        common-ensure-dir "$EVENTS_LOG_DIR"
+    fi
+
+    _EVENTS_INITIALIZED="true"
+    log-trace "Event system initialized"
+}
+
+# ------------------------------
+# Handler Registration
+# ------------------------------
+
+# Register an event handler
+# Usage: events-on <event_name> <handler_function> [priority]
+# Priority: 0-100 (default: 50), higher = earlier execution
+# Returns: handler_id on success, empty on error
+events-on() {
+    local event_name="$1"
+    local handler="$2"
+    local priority="${3:-$EVENTS_DEFAULT_PRIORITY}"
+
+    # Lazy initialization
+    [[ "$_EVENTS_INITIALIZED" == "false" ]] && events-init
+
+    # Validate inputs
+    common-validate-required "$event_name" "event name" || return 2
+    common-validate-required "$handler" "handler function" || return 2
+    common-validate-numeric "$priority" || {
+        log-error "Priority must be numeric: $priority"
+        return 2
+    }
+
+    # Validate priority range
+    if [[ $priority -lt 0 ]] || [[ $priority -gt 100 ]]; then
+        log-error "Priority must be between 0 and 100: $priority"
+        return 2
+    fi
+
+    # Check if handler function exists
+    if ! typeset -f "$handler" >/dev/null 2>&1; then
+        log-error "Handler function not found: $handler"
+        return 1
+    fi
+
+    # Generate unique handler ID
+    local handler_id="h${_EVENTS_NEXT_HANDLER_ID}"
+    ((_EVENTS_NEXT_HANDLER_ID++))
+
+    # Create registry key (event:priority:id)
+    local key="${event_name}:${priority}:${handler_id}"
+
+    # Store handler
+    _EVENTS_HANDLERS[$key]="$handler"
+
+    # Store metadata
+    local timestamp=$(common-timestamp)
+    _EVENTS_HANDLER_META[$handler_id]="${priority}:${handler}:${timestamp}"
+
+    log-trace "Registered handler '$handler' for event '$event_name' with priority $priority (ID: $handler_id)"
+
+    # Set global variable for non-subshell access (ZSH command substitution limitation workaround)
+    EVENTS_LAST_HANDLER_ID="$handler_id"
+
+    # Return handler ID for later removal
+    echo "$handler_id"
+}
+
+# Register a one-time event handler
+# Usage: events-once <event_name> <handler_function> [priority]
+events-once() {
+    local event_name="$1"
+    local handler="$2"
+    local priority="${3:-$EVENTS_DEFAULT_PRIORITY}"
+
+    common-validate-required "$event_name" "event name" || return 2
+    common-validate-required "$handler" "handler function" || return 2
+
+    # Create wrapper that unregisters after execution
+    local wrapper_name="_events_once_${_EVENTS_NEXT_HANDLER_ID}_${handler//[^a-zA-Z0-9_]/}"
+
+    eval "
+    ${wrapper_name}() {
+        # Call original handler
+        ${handler} \"\$@\"
+        local ret=\$?
+
+        # Unregister this wrapper
+        events-off \"${event_name}\" \"${wrapper_name}\"
+        unfunction ${wrapper_name} 2>/dev/null
+
+        return \$ret
+    }
+    "
+
+    # Register the wrapper
+    events-on "$event_name" "$wrapper_name" "$priority"
+}
+
+# Unregister event handler(s)
+# Usage: events-off <event_name> [handler_id|handler_function]
+# Without handler: removes all handlers for event
+# With handler_id: removes specific handler by ID
+# With handler_function: removes all handlers with that function name
+events-off() {
+    local event_name="$1"
+    local handler="${2:-}"
+
+    common-validate-required "$event_name" "event name" || return 2
+
+    if [[ -z "$handler" ]]; then
+        # Remove all handlers for this event
+        local removed=0
+        for key in "${(@k)_EVENTS_HANDLERS}"; do
+            if [[ "$key" =~ ^${event_name}: ]]; then
+                local handler_id="${key##*:}"
+                unset "_EVENTS_HANDLERS[$key]"
+                unset "_EVENTS_HANDLER_META[$handler_id]"
+                ((removed++))
+            fi
+        done
+        log-trace "Removed $removed handler(s) for event '$event_name'"
+    else
+        # Check if handler is an ID (starts with 'h' followed by digits)
+        if [[ "$handler" =~ ^h[0-9]+$ ]]; then
+            # Remove by handler ID
+            local removed=0
+            for key in "${(@k)_EVENTS_HANDLERS}"; do
+                if [[ "$key" =~ ^${event_name}:.*:${handler}$ ]]; then
+                    unset "_EVENTS_HANDLERS[$key]"
+                    unset "_EVENTS_HANDLER_META[$handler]"
+                    ((removed++))
+                    log-trace "Removed handler '$handler' for event '$event_name'"
+                    break
+                fi
+            done
+            [[ $removed -eq 0 ]] && log-warning "Handler ID '$handler' not found for event '$event_name'"
+        else
+            # Remove by handler function name
+            local removed=0
+            for key in "${(@k)_EVENTS_HANDLERS}"; do
+                if [[ "$key" =~ ^${event_name}: ]]; then
+                    local func="${_EVENTS_HANDLERS[$key]}"
+                    if [[ "$func" == "$handler" ]]; then
+                        local handler_id="${key##*:}"
+                        unset "_EVENTS_HANDLERS[$key]"
+                        unset "_EVENTS_HANDLER_META[$handler_id]"
+                        ((removed++))
+                    fi
+                fi
+            done
+            log-trace "Removed $removed handler(s) with function '$handler' for event '$event_name'"
+        fi
+    fi
+}
+
+# Clear all event handlers
+# Usage: events-clear [event_pattern]
+# Without pattern: clears all handlers
+# With pattern: clears handlers matching pattern (supports wildcards)
+events-clear() {
+    local pattern="${1:-*}"
+
+    local removed=0
+    for key in "${(@k)_EVENTS_HANDLERS}"; do
+        local event_name="${key%%:*}"
+        if [[ "$event_name" == ${~pattern} ]]; then
+            local handler_id="${key##*:}"
+            unset "_EVENTS_HANDLERS[$key]"
+            unset "_EVENTS_HANDLER_META[$handler_id]"
+            ((removed++))
+        fi
+    done
+
+    log-trace "Cleared $removed handler(s) matching pattern '$pattern'"
+}
+
+# ------------------------------
+# Event Emission
+# ------------------------------
+
+# Emit an event
+# Usage: events-emit <event_name> [data...]
+events-emit() {
+    local event_name="$1"
+    shift
+    local event_data=("$@")
+
+    [[ "$_EVENTS_INITIALIZED" == "false" ]] && events-init
+
+    common-validate-required "$event_name" "event name" || return 2
+
+    # Create event metadata
+    local timestamp=$(/bin/date +"$EVENTS_TIMESTAMP_FORMAT")
+    local event_id="${timestamp//[: -]/}_${RANDOM}"
+
+    log-trace "Emitting event '$event_name' (ID: $event_id) with ${#event_data[@]} data items"
+
+    # Store in history
+    if [[ "$EVENTS_ENABLE_HISTORY" == "true" ]]; then
+        _events-add-to-history "$event_id" "$event_name" "$timestamp" "${event_data[@]}"
+    fi
+
+    # Log to persistent storage
+    if [[ "$EVENTS_ENABLE_LOGGING" == "true" ]]; then
+        _events-log-event "$event_id" "$event_name" "$timestamp" "${event_data[@]}"
+    fi
+
+    # Dispatch to handlers
+    _events-dispatch "$event_name" "$event_id" "$timestamp" "${event_data[@]}"
+}
+
+# Emit event asynchronously (background)
+# Usage: events-emit-async <event_name> [data...]
+events-emit-async() {
+    if [[ "$EVENTS_ENABLE_ASYNC" != "true" ]]; then
+        log-warning "Async events not enabled, falling back to synchronous"
+        events-emit "$@"
+        return
+    fi
+
+    # Check worker limit
+    if [[ ${#_EVENTS_ASYNC_WORKERS[@]} -ge $EVENTS_MAX_ASYNC_WORKERS ]]; then
+        log-warning "Max async workers reached, falling back to synchronous"
+        events-emit "$@"
+        return
+    fi
+
+    # Emit in background
+    (
+        events-emit "$@"
+    ) &
+
+    local worker_pid=$!
+    _EVENTS_ASYNC_WORKERS+=("$worker_pid")
+
+    # Cleanup completed workers
+    _events-cleanup-async-workers
+}
+
+# Internal: dispatch event to handlers
+_events-dispatch() {
+    local event_name="$1"
+    local event_id="$2"
+    local timestamp="$3"
+    shift 3
+    local event_data=("$@")
+
+    # Get matching handlers, sorted by priority (descending)
+    local -a matching_keys=()
+    for key in "${(@k)_EVENTS_HANDLERS}"; do
+        local key_event="${key%%:*}"
+        if [[ "$key_event" == "$event_name" ]]; then
+            matching_keys+=("$key")
+        fi
+    done
+
+    # Sort by priority (descending - higher priority first)
+    # Key format: event:priority:id
+    local -a sorted_keys=(${(On)matching_keys})
+
+    local handler_count=${#sorted_keys[@]}
+    log-trace "Dispatching event '$event_name' to $handler_count handler(s)"
+
+    # Call each handler in priority order
+    local executed=0
+    local failed=0
+    for key in "${sorted_keys[@]}"; do
+        local handler="${_EVENTS_HANDLERS[$key]}"
+        local priority="${key#*:}"
+        priority="${priority%%:*}"
+
+        log-trace "Calling handler '$handler' (priority: $priority) for event '$event_name'"
+
+        # Call handler with error isolation
+        if ! "$handler" "$event_name" "$event_id" "$timestamp" "${event_data[@]}" 2>/dev/null; then
+            ((failed++))
+            log-warning "Handler '$handler' failed for event '$event_name'"
+        else
+            ((executed++))
+        fi
+    done
+
+    log-trace "Event '$event_name' dispatched: $executed succeeded, $failed failed"
+}
+
+# Internal: cleanup completed async workers
+_events-cleanup-async-workers() {
+    local -a active_workers=()
+
+    for pid in "${_EVENTS_ASYNC_WORKERS[@]}"; do
+        if kill -0 "$pid" 2>/dev/null; then
+            active_workers+=("$pid")
+        fi
+    done
+
+    _EVENTS_ASYNC_WORKERS=("${active_workers[@]}")
+}
+
+# ------------------------------
+# Event Filtering
+# ------------------------------
+
+# Filter events by pattern
+# Usage: events-filter <pattern>
+# Pattern supports wildcards (e.g., "app:*", "*:error")
+# Returns: list of registered event names matching pattern
+events-filter() {
+    local pattern="${1:-*}"
+
+    common-validate-required "$pattern" "pattern" || return 2
+
+    local -a matched_events=()
+    local -A seen_events=()
+
+    for key in "${(@k)_EVENTS_HANDLERS}"; do
+        local event_name="${key%%:*}"
+
+        # Check if event matches pattern and hasn't been seen yet
+        if [[ "$event_name" == ${~pattern} ]] && [[ -z "${seen_events[$event_name]:-}" ]]; then
+            matched_events+=("$event_name")
+            seen_events[$event_name]=1
+        fi
+    done
+
+    # Sort and output
+    for event in "${(@o)matched_events}"; do
+        echo "$event"
+    done
+}
+
+# List all registered event types
+# Usage: events-list [--with-handlers]
+# Without flag: just event names
+# With flag: event names with handler counts
+events-list() {
+    local show_handlers=false
+    [[ "$1" == "--with-handlers" ]] && show_handlers=true
+
+    local -A event_counts=()
+
+    # Count handlers per event
+    for key in "${(@k)_EVENTS_HANDLERS}"; do
+        local event_name="${key%%:*}"
+        ((event_counts[$event_name]++))
+    done
+
+    # Sort and output
+    for event_name in "${(@ko)event_counts}"; do
+        if [[ "$show_handlers" == "true" ]]; then
+            echo "${event_name}: ${event_counts[$event_name]} handler(s)"
+        else
+            echo "$event_name"
+        fi
+    done
+}
+
+# List handlers for an event
+# Usage: events-list-handlers <event_name>
+events-list-handlers() {
+    local event_name="$1"
+
+    common-validate-required "$event_name" "event name" || return 2
+
+    # Get matching handlers, sorted by priority
+    local -a matching_keys=()
+    for key in "${(@k)_EVENTS_HANDLERS}"; do
+        local key_event="${key%%:*}"
+        if [[ "$key_event" == "$event_name" ]]; then
+            matching_keys+=("$key")
+        fi
+    done
+
+    # Sort by priority (descending)
+    local -a sorted_keys=(${(On)matching_keys})
+
+    for key in "${sorted_keys[@]}"; do
+        local handler="${_EVENTS_HANDLERS[$key]}"
+        local handler_id="${key##*:}"
+        local priority="${key#*:}"
+        priority="${priority%%:*}"
+
+        echo "ID: $handler_id, Function: $handler, Priority: $priority"
+    done
+}
+
+# Get handler count for event
+# Usage: events-handler-count <event_name>
+events-handler-count() {
+    local event_name="$1"
+
+    common-validate-required "$event_name" "event name" || return 2
+
+    local count=0
+    for key in "${(@k)_EVENTS_HANDLERS}"; do
+        local key_event="${key%%:*}"
+        if [[ "$key_event" == "$event_name" ]]; then
+            ((count++))
+        fi
+    done
+
+    echo "$count"
+}
+
+# ------------------------------
+# Event History
+# ------------------------------
+
+# Internal: add event to history
+_events-add-to-history() {
+    local event_id="$1"
+    local event_type="$2"
+    local timestamp="$3"
+    shift 3
+    local event_data=("$@")
+
+    # Create history entry
+    local entry="${event_id}|${event_type}|${timestamp}|${event_data[*]}"
+    _EVENTS_HISTORY+=("$entry")
+
+    # Trim history if too large
+    if [[ ${#_EVENTS_HISTORY[@]} -gt $EVENTS_HISTORY_SIZE ]]; then
+        _EVENTS_HISTORY=("${_EVENTS_HISTORY[@]: -$EVENTS_HISTORY_SIZE}")
+    fi
+}
+
+# Get event history
+# Usage: events-history [--type type] [--limit n] [--format format]
+# Formats: simple, detailed, json
+events-history() {
+    local filter_type=""
+    local limit=0
+    local format="simple"
+
+    # Parse arguments
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --type)
+                filter_type="$2"
+                shift 2
+                ;;
+            --limit)
+                limit="$2"
+                shift 2
+                ;;
+            --format)
+                format="$2"
+                shift 2
+                ;;
+            *)
+                shift
+                ;;
+        esac
+    done
+
+    local count=0
+
+    # Process in reverse order (newest first)
+    for ((i=${#_EVENTS_HISTORY[@]}; i>0; i--)); do
+        local entry="${_EVENTS_HISTORY[$i]}"
+
+        local event_id="${entry%%|*}"
+        local rest="${entry#*|}"
+        local event_type="${rest%%|*}"
+        rest="${rest#*|}"
+        local timestamp="${rest%%|*}"
+        local event_data="${rest#*|}"
+
+        # Filter by type if specified
+        if [[ -n "$filter_type" ]] && [[ "$event_type" != "$filter_type" ]]; then
+            continue
+        fi
+
+        # Apply limit
+        if [[ $limit -gt 0 ]] && [[ $count -ge $limit ]]; then
+            break
+        fi
+
+        # Format output
+        case "$format" in
+            simple)
+                echo "[$timestamp] $event_type"
+                ;;
+            detailed)
+                echo "[$timestamp] $event_type (ID: $event_id)"
+                if [[ -n "$event_data" ]]; then
+                    echo "  Data: $event_data"
+                fi
+                ;;
+            json)
+                echo "{\"id\":\"$event_id\",\"type\":\"$event_type\",\"timestamp\":\"$timestamp\",\"data\":\"$event_data\"}"
+                ;;
+        esac
+
+        ((count++))
+    done
+}
+
+# Clear event history
+# Usage: events-clear-history
+events-clear-history() {
+    _EVENTS_HISTORY=()
+    log-trace "Cleared event history"
+}
+
+# Get history size
+# Usage: events-history-size
+events-history-size() {
+    echo "${#_EVENTS_HISTORY[@]}"
+}
+
+# ------------------------------
+# Event Queue (Deferred Processing)
+# ------------------------------
+
+# Queue an event for later processing
+# Usage: events-queue <event_name> [data...]
+events-queue() {
+    local event_name="$1"
+    shift
+    local event_data=("$@")
+
+    common-validate-required "$event_name" "event name" || return 2
+
+    # Serialize event for queue
+    local queued_event="${event_name}|${event_data[*]}"
+    _EVENTS_QUEUE+=("$queued_event")
+
+    log-trace "Queued event '$event_name' for later processing"
+}
+
+# Process all queued events
+# Usage: events-process-queue
+events-process-queue() {
+    local processed=0
+
+    while [[ ${#_EVENTS_QUEUE[@]} -gt 0 ]]; do
+        local event="${_EVENTS_QUEUE[1]}"
+        _EVENTS_QUEUE=("${_EVENTS_QUEUE[@]:1}")
+
+        local event_name="${event%%|*}"
+        local event_data="${event#*|}"
+
+        events-emit "$event_name" ${(s: :)event_data}
+        ((processed++))
+    done
+
+    log-trace "Processed $processed queued event(s)"
+}
+
+# Clear event queue without processing
+# Usage: events-clear-queue
+events-clear-queue() {
+    local count=${#_EVENTS_QUEUE[@]}
+    _EVENTS_QUEUE=()
+    log-trace "Cleared $count queued event(s)"
+}
+
+# Get queue size
+# Usage: events-queue-size
+events-queue-size() {
+    echo "${#_EVENTS_QUEUE[@]}"
+}
+
+# ------------------------------
+# Persistent Logging
+# ------------------------------
+
+# Internal: log event to persistent storage
+_events-log-event() {
+    local event_id="$1"
+    local event_type="$2"
+    local timestamp="$3"
+    shift 3
+    local event_data=("$@")
+
+    local log_file="${EVENTS_LOG_DIR}/events.log"
+    local data_str="${event_data[*]}"
+
+    # Ensure directory exists
+    if [[ ! -d "$EVENTS_LOG_DIR" ]]; then
+        mkdir -p "$EVENTS_LOG_DIR" 2>/dev/null || return 1
+    fi
+
+    # Log entry format: timestamp|type|id|data
+    echo "${timestamp}|${event_type}|${event_id}|${data_str}" >> "$log_file" 2>/dev/null
+}
+
+# Query persistent event log
+# Usage: events-log-query [--type type] [--since timestamp] [--limit n]
+events-log-query() {
+    local log_file="${EVENTS_LOG_DIR}/events.log"
+
+    if [[ ! -f "$log_file" ]]; then
+        return 0
+    fi
+
+    local filter_type=""
+    local since=""
+    local limit=0
+
+    # Parse arguments
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --type)
+                filter_type="$2"
+                shift 2
+                ;;
+            --since)
+                since="$2"
+                shift 2
+                ;;
+            --limit)
+                limit="$2"
+                shift 2
+                ;;
+            *)
+                shift
+                ;;
+        esac
+    done
+
+    local count=0
+
+    # Read log file in reverse
+    tac "$log_file" 2>/dev/null | while IFS='|' read -r timestamp event_type event_id event_data; do
+        # Filter by type
+        if [[ -n "$filter_type" ]] && [[ "$event_type" != "$filter_type" ]]; then
+            continue
+        fi
+
+        # Filter by timestamp
+        if [[ -n "$since" ]] && [[ "$timestamp" < "$since" ]]; then
+            continue
+        fi
+
+        # Apply limit
+        if [[ $limit -gt 0 ]] && [[ $count -ge $limit ]]; then
+            break
+        fi
+
+        echo "[$timestamp] $event_type (ID: $event_id)"
+        if [[ -n "$event_data" ]]; then
+            echo "  Data: $event_data"
+        fi
+
+        ((count++))
+    done
+}
+
+# Clear event log
+# Usage: events-log-clear
+events-log-clear() {
+    local log_file="${EVENTS_LOG_DIR}/events.log"
+
+    if [[ -f "$log_file" ]]; then
+        : > "$log_file"
+        log-info "Cleared event log: $log_file"
+    fi
+}
+
+# Rotate event log
+# Usage: events-log-rotate
+events-log-rotate() {
+    local log_file="${EVENTS_LOG_DIR}/events.log"
+
+    if [[ ! -f "$log_file" ]]; then
+        return 0
+    fi
+
+    local timestamp=$(/bin/date +"%Y%m%d_%H%M%S")
+    local archive="${EVENTS_LOG_DIR}/events_${timestamp}.log"
+
+    mv "$log_file" "$archive"
+    log-info "Rotated event log to: $archive"
+
+    # Compress if gzip available
+    if common-command-exists "gzip"; then
+        gzip "$archive" &
+    fi
+}
+
+# ------------------------------
+# Configuration
+# ------------------------------
+
+# Enable event history
+# Usage: events-enable-history [size]
+events-enable-history() {
+    EVENTS_ENABLE_HISTORY="true"
+    if [[ -n "$1" ]]; then
+        EVENTS_HISTORY_SIZE="$1"
+    fi
+    log-debug "Enabled event history (size: $EVENTS_HISTORY_SIZE)"
+}
+
+# Disable event history
+# Usage: events-disable-history
+events-disable-history() {
+    EVENTS_ENABLE_HISTORY="false"
+    events-clear-history
+    log-debug "Disabled event history"
+}
+
+# Enable persistent logging
+# Usage: events-enable-logging [directory]
+events-enable-logging() {
+    local log_dir="${1:-$EVENTS_LOG_DIR}"
+
+    if [[ -z "$log_dir" ]]; then
+        log-error "Log directory required"
+        return 1
+    fi
+
+    EVENTS_LOG_DIR="$log_dir"
+    common-ensure-dir "$EVENTS_LOG_DIR"
+    EVENTS_ENABLE_LOGGING="true"
+
+    log-debug "Enabled persistent logging to: $EVENTS_LOG_DIR"
+}
+
+# Disable persistent logging
+# Usage: events-disable-logging
+events-disable-logging() {
+    EVENTS_ENABLE_LOGGING="false"
+    log-debug "Disabled persistent logging"
+}
+
+# Enable async events
+# Usage: events-enable-async [max_workers]
+events-enable-async() {
+    EVENTS_ENABLE_ASYNC="true"
+    if [[ -n "$1" ]]; then
+        EVENTS_MAX_ASYNC_WORKERS="$1"
+    fi
+    log-debug "Enabled async events (max workers: $EVENTS_MAX_ASYNC_WORKERS)"
+}
+
+# Disable async events
+# Usage: events-disable-async
+events-disable-async() {
+    EVENTS_ENABLE_ASYNC="false"
+    log-debug "Disabled async events"
+}
+
+# Set history size
+# Usage: events-set-history-size <size>
+events-set-history-size() {
+    local size="$1"
+
+    common-validate-numeric "$size" || return 2
+
+    EVENTS_HISTORY_SIZE="$size"
+    log-debug "Set history size to: $EVENTS_HISTORY_SIZE"
+}
+
+# Set timestamp format
+# Usage: events-set-timestamp-format <format>
+events-set-timestamp-format() {
+    local format="$1"
+
+    common-validate-required "$format" "timestamp format" || return 2
+
+    EVENTS_TIMESTAMP_FORMAT="$format"
+    log-debug "Set timestamp format to: $EVENTS_TIMESTAMP_FORMAT"
+}
+
+# ------------------------------
+# Statistics
+# ------------------------------
+
+# Get event system statistics
+# Usage: events-stats
+events-stats() {
+    echo "Event System Statistics"
+    echo "======================="
+    echo ""
+    echo "Handlers:"
+    echo "  Registered: ${#_EVENTS_HANDLERS[@]}"
+    echo "  Unique events: $(events-list | wc -l)"
+
+    echo ""
+    echo "Queue:"
+    echo "  Queued events: ${#_EVENTS_QUEUE[@]}"
+
+    echo ""
+    echo "History:"
+    echo "  Stored events: ${#_EVENTS_HISTORY[@]} / $EVENTS_HISTORY_SIZE"
+
+    echo ""
+    echo "Configuration:"
+    echo "  History enabled: $EVENTS_ENABLE_HISTORY"
+    echo "  Logging enabled: $EVENTS_ENABLE_LOGGING"
+    if [[ "$EVENTS_ENABLE_LOGGING" == "true" ]]; then
+        echo "  Log directory: $EVENTS_LOG_DIR"
+    fi
+    echo "  Async enabled: $EVENTS_ENABLE_ASYNC"
+    if [[ "$EVENTS_ENABLE_ASYNC" == "true" ]]; then
+        echo "  Active workers: ${#_EVENTS_ASYNC_WORKERS[@]} / $EVENTS_MAX_ASYNC_WORKERS"
+    fi
+}
+
+# ------------------------------
+# Utility Functions
+# ------------------------------
+
+# Register handler for multiple events
+# Usage: events-on-many <handler> [priority] <event1> [event2...]
+events-on-many() {
+    local handler="$1"
+    local priority="$EVENTS_DEFAULT_PRIORITY"
+    shift
+
+    # Check if second argument is a priority
+    if [[ "$1" =~ ^[0-9]+$ ]]; then
+        priority="$1"
+        shift
+    fi
+
+    local -a handler_ids=()
+
+    for event_name in "$@"; do
+        local handler_id=$(events-on "$event_name" "$handler" "$priority")
+        handler_ids+=("$handler_id")
+    done
+
+    # Return handler IDs
+    echo "${handler_ids[*]}"
+}
+
+# Emit event to multiple types
+# Usage: events-emit-many <event1> <event2>... -- [data...]
+events-emit-many() {
+    local -a event_names=()
+
+    # Parse event names before --
+    while [[ $# -gt 0 ]] && [[ "$1" != "--" ]]; do
+        event_names+=("$1")
+        shift
+    done
+
+    if [[ "$1" == "--" ]]; then
+        shift
+    fi
+
+    local -a event_data=("$@")
+
+    # Emit to each event
+    for event_name in "${event_names[@]}"; do
+        events-emit "$event_name" "${event_data[@]}"
+    done
+}
+
+# Check if event has any handlers
+# Usage: events-has-handlers <event_name>
+events-has-handlers() {
+    local event_name="$1"
+
+    common-validate-required "$event_name" "event name" || return 2
+
+    for key in "${(@k)_EVENTS_HANDLERS}"; do
+        local key_event="${key%%:*}"
+        if [[ "$key_event" == "$event_name" ]]; then
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+# ------------------------------
+# Self-Test
+# ------------------------------
+
+events-self-test() {
+    echo "=== Testing lib/_events v$EVENTS_VERSION ==="
+    echo ""
+
+    local failed=0
+
+    # Test 1: Initialization
+    echo "✓ Initialization:"
+    events-init
+    echo "  Initialized: $_EVENTS_INITIALIZED"
+    echo ""
+
+    # Test 2: Handler registration
+    echo "✓ Handler Registration:"
+    test_handler() {
+        echo "Handler called with event: $1"
+    }
+    local handler_id=$(events-on "test.event" "test_handler" 50)
+    echo "  Registered handler ID: $handler_id"
+    local count=$(events-handler-count "test.event")
+    [[ $count -eq 1 ]] || { echo "  FAILED: Expected 1 handler, got $count"; failed=1; }
+    echo ""
+
+    # Test 3: Event emission
+    echo "✓ Event Emission:"
+    events-emit "test.event" "data1" "data2"
+    echo "  Event emitted"
+    echo ""
+
+    # Test 4: Priority ordering
+    echo "✓ Priority Ordering:"
+    high_priority() { echo "  High priority (80)"; }
+    low_priority() { echo "  Low priority (20)"; }
+    events-on "test.priority" "high_priority" 80
+    events-on "test.priority" "low_priority" 20
+    echo "  Emitting event (should see high priority first):"
+    events-emit "test.priority"
+    echo ""
+
+    # Test 5: Event filtering
+    echo "✓ Event Filtering:"
+    events-on "app:startup" "test_handler" 50
+    events-on "app:shutdown" "test_handler" 50
+    local matches=$(events-filter "app:*" | wc -l)
+    echo "  Events matching 'app:*': $matches"
+    [[ $matches -ge 2 ]] || { echo "  FAILED: Expected >= 2 matches, got $matches"; failed=1; }
+    echo ""
+
+    # Test 6: History
+    echo "✓ Event History:"
+    events-enable-history 100
+    local history_size=$(events-history-size)
+    echo "  History size: $history_size"
+    echo ""
+
+    # Test 7: Queue
+    echo "✓ Event Queue:"
+    events-queue "test.queued" "queued_data"
+    local queue_size=$(events-queue-size)
+    echo "  Queue size: $queue_size"
+    [[ $queue_size -eq 1 ]] || { echo "  FAILED: Expected 1 queued event, got $queue_size"; failed=1; }
+    events-process-queue
+    queue_size=$(events-queue-size)
+    echo "  Queue size after processing: $queue_size"
+    [[ $queue_size -eq 0 ]] || { echo "  FAILED: Expected 0 queued events, got $queue_size"; failed=1; }
+    echo ""
+
+    # Test 8: Handler removal
+    echo "✓ Handler Removal:"
+    events-off "test.event" "$handler_id"
+    count=$(events-handler-count "test.event")
+    echo "  Handler count after removal: $count"
+    [[ $count -eq 0 ]] || { echo "  FAILED: Expected 0 handlers, got $count"; failed=1; }
+    echo ""
+
+    # Test 9: Statistics
+    echo "✓ Statistics:"
+    events-stats
+    echo ""
+
+    # Cleanup
+    events-clear
+    unfunction test_handler 2>/dev/null
+    unfunction high_priority 2>/dev/null
+    unfunction low_priority 2>/dev/null
+
+    if [[ $failed -eq 0 ]]; then
+        echo "=== All tests passed ==="
+        return 0
+    else
+        echo "=== Some tests failed ==="
+        return 1
+    fi
+}
+
+# Run self-test if executed directly
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]] || [[ "$1" == "self-test" ]]; then
+    events-self-test
+fi

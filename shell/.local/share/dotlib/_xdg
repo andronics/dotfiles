@@ -1,0 +1,657 @@
+#!/usr/bin/env zsh
+
+# _xdg - XDG Base Directory Specification utilities
+# Part of the dotfiles library v2.0
+# Version: 1.0.0
+#
+# Purpose:
+#   Provides XDG Base Directory Specification compliance utilities for
+#   consistent cross-platform directory management. Handles config, cache,
+#   data, state, and runtime directories with automatic creation and validation.
+#
+# Usage:
+#   source "${DOTLIB}/_xdg" || return 6
+#
+#   config_dir=$(xdg-config-dir "myapp")
+#   xdg-ensure-dir "$config_dir"
+#   xdg-setup-all "myapp"
+#
+# Provides:
+#   - XDG directory getters (config, cache, data, state, runtime)
+#   - Automatic directory creation
+#   - Directory validation and permission checks
+#   - Disk usage reporting
+#   - Cache management utilities
+#   - File path construction
+#   - Cleanup utilities
+#
+# References:
+#   - https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html
+#
+# Dependencies:
+#   - _common v2.0 (required, provides XDG base functions)
+#   - _log v2.0 (optional, for structured logging)
+#   - _lifecycle v3.0 (optional, for cleanup registration)
+
+# ------------------------------
+# Source Guard
+# ------------------------------
+
+[[ -n "${_XDG_LOADED}" ]] && return 0
+declare -gr _XDG_LOADED=1
+
+# ------------------------------
+# Version
+# ------------------------------
+
+declare -gr XDG_VERSION="1.0.0"
+
+# ------------------------------
+# Load Dependencies
+# ------------------------------
+
+# Required: _common (provides XDG base directory functions)
+if ! source "${DOTLIB}/_common" 2>/dev/null; then
+    echo "[ERROR] _xdg requires _common - cannot load" >&2
+    return 6
+fi
+
+# Optional: _log (use fallbacks if unavailable)
+if ! source "${DOTLIB}/_log" 2>/dev/null; then
+    log-debug() { : ; }
+    log-info() { echo "[INFO] $*" >&2; }
+    log-warning() { echo "[WARNING] $*" >&2; }
+    log-error() { echo "[ERROR] $*" >&2; }
+fi
+
+# Optional: _lifecycle (for cleanup registration)
+source "${DOTLIB}/_lifecycle" 2>/dev/null || true
+
+# ------------------------------
+# Constants
+# ------------------------------
+
+# Return codes
+declare -gr XDG_SUCCESS=0
+declare -gr XDG_ERROR=1
+declare -gr XDG_ERROR_INVALID_ARGS=2
+declare -gr XDG_ERROR_NOT_WRITABLE=3
+declare -gr XDG_ERROR_NOT_FOUND=4
+
+# ------------------------------
+# Directory Getter Functions
+# ------------------------------
+
+# Get XDG config directory for application
+# Args: app-name
+# Usage: config_dir=$(xdg-config-dir "myapp")
+# Returns: full path to config directory
+xdg-config-dir() {
+    local app_name="${1:?Application name required}"
+    echo "$(common-xdg-config-home)/$app_name"
+}
+
+# Get XDG cache directory for application
+# Args: app-name
+# Usage: cache_dir=$(xdg-cache-dir "myapp")
+# Returns: full path to cache directory
+xdg-cache-dir() {
+    local app_name="${1:?Application name required}"
+    echo "$(common-xdg-cache-home)/$app_name"
+}
+
+# Get XDG data directory for application
+# Args: app-name
+# Usage: data_dir=$(xdg-data-dir "myapp")
+# Returns: full path to data directory
+xdg-data-dir() {
+    local app_name="${1:?Application name required}"
+    echo "$(common-xdg-data-home)/$app_name"
+}
+
+# Get XDG state directory for application
+# Args: app-name
+# Usage: state_dir=$(xdg-state-dir "myapp")
+# Returns: full path to state directory
+xdg-state-dir() {
+    local app_name="${1:?Application name required}"
+    echo "$(common-xdg-state-home)/$app_name"
+}
+
+# Get XDG runtime directory for application
+# Args: app-name
+# Usage: runtime_dir=$(xdg-runtime-dir "myapp")
+# Returns: full path to runtime directory
+xdg-runtime-dir() {
+    local app_name="${1:?Application name required}"
+    echo "$(common-xdg-runtime-dir)/$app_name"
+}
+
+# ------------------------------
+# Directory Setup Functions
+# ------------------------------
+
+# Ensure directory exists (create if needed)
+# Args: directory-path
+# Usage: xdg-ensure-dir "/path/to/dir"
+# Returns: 0 on success, 1 on failure
+xdg-ensure-dir() {
+    local dir="${1:?Directory path required}"
+
+    if [[ -d "$dir" ]]; then
+        log-debug "Directory already exists: $dir"
+        return $XDG_SUCCESS
+    fi
+
+    if mkdir -p "$dir" 2>/dev/null; then
+        log-debug "Created directory: $dir"
+        return $XDG_SUCCESS
+    else
+        log-error "Failed to create directory: $dir"
+        return $XDG_ERROR
+    fi
+}
+
+# Setup all XDG directories for application
+# Creates config, cache, data, state, and runtime directories
+# Args: app-name
+# Usage: xdg-setup-all "myapp"
+# Returns: 0 on success, 1 if any directory creation fails
+xdg-setup-all() {
+    local app_name="${1:?Application name required}"
+    local failed=0
+
+    log-debug "Setting up XDG directories for: $app_name"
+
+    # Create all directories
+    xdg-ensure-dir "$(xdg-config-dir "$app_name")" || failed=1
+    xdg-ensure-dir "$(xdg-cache-dir "$app_name")" || failed=1
+    xdg-ensure-dir "$(xdg-data-dir "$app_name")" || failed=1
+    xdg-ensure-dir "$(xdg-state-dir "$app_name")" || failed=1
+
+    # Runtime directory may fail on some systems (acceptable)
+    if ! xdg-ensure-dir "$(xdg-runtime-dir "$app_name")" 2>/dev/null; then
+        log-warning "Could not create runtime directory for $app_name"
+    fi
+
+    if [[ $failed -eq 0 ]]; then
+        log-debug "XDG directories initialized for $app_name"
+        return $XDG_SUCCESS
+    else
+        log-error "Failed to initialize some XDG directories for $app_name"
+        return $XDG_ERROR
+    fi
+}
+
+# ------------------------------
+# File Path Construction
+# ------------------------------
+
+# Get full path to config file
+# Args: app-name, filename
+# Usage: config_file=$(xdg-config-file "myapp" "settings.json")
+# Returns: full path to config file
+xdg-config-file() {
+    local app_name="${1:?Application name required}"
+    local filename="${2:?Filename required}"
+    echo "$(xdg-config-dir "$app_name")/$filename"
+}
+
+# Get full path to cache file
+# Args: app-name, filename
+# Usage: cache_file=$(xdg-cache-file "myapp" "data.cache")
+# Returns: full path to cache file
+xdg-cache-file() {
+    local app_name="${1:?Application name required}"
+    local filename="${2:?Filename required}"
+    echo "$(xdg-cache-dir "$app_name")/$filename"
+}
+
+# Get full path to data file
+# Args: app-name, filename
+# Usage: data_file=$(xdg-data-file "myapp" "database.db")
+# Returns: full path to data file
+xdg-data-file() {
+    local app_name="${1:?Application name required}"
+    local filename="${2:?Filename required}"
+    echo "$(xdg-data-dir "$app_name")/$filename"
+}
+
+# Get full path to state file
+# Args: app-name, filename
+# Usage: state_file=$(xdg-state-file "myapp" "history.log")
+# Returns: full path to state file
+xdg-state-file() {
+    local app_name="${1:?Application name required}"
+    local filename="${2:?Filename required}"
+    echo "$(xdg-state-dir "$app_name")/$filename"
+}
+
+# Get full path to runtime file
+# Args: app-name, filename
+# Usage: pid_file=$(xdg-runtime-file "myapp" "daemon.pid")
+# Returns: full path to runtime file
+xdg-runtime-file() {
+    local app_name="${1:?Application name required}"
+    local filename="${2:?Filename required}"
+    echo "$(xdg-runtime-dir "$app_name")/$filename"
+}
+
+# ------------------------------
+# File Existence Checks
+# ------------------------------
+
+# Check if config file exists
+# Args: app-name, filename
+# Usage: xdg-config-exists "myapp" "settings.json" && echo "Found"
+# Returns: 0 if exists, 1 otherwise
+xdg-config-exists() {
+    local app_name="${1:?Application name required}"
+    local filename="${2:?Filename required}"
+    local filepath="$(xdg-config-file "$app_name" "$filename")"
+    [[ -f "$filepath" ]]
+}
+
+# Check if cache file exists
+# Args: app-name, filename
+# Usage: xdg-cache-exists "myapp" "data.cache" && echo "Found"
+# Returns: 0 if exists, 1 otherwise
+xdg-cache-exists() {
+    local app_name="${1:?Application name required}"
+    local filename="${2:?Filename required}"
+    local filepath="$(xdg-cache-file "$app_name" "$filename")"
+    [[ -f "$filepath" ]]
+}
+
+# Check if data file exists
+# Args: app-name, filename
+# Usage: xdg-data-exists "myapp" "database.db" && echo "Found"
+# Returns: 0 if exists, 1 otherwise
+xdg-data-exists() {
+    local app_name="${1:?Application name required}"
+    local filename="${2:?Filename required}"
+    local filepath="$(xdg-data-file "$app_name" "$filename")"
+    [[ -f "$filepath" ]]
+}
+
+# Check if state file exists
+# Args: app-name, filename
+# Usage: xdg-state-exists "myapp" "history.log" && echo "Found"
+# Returns: 0 if exists, 1 otherwise
+xdg-state-exists() {
+    local app_name="${1:?Application name required}"
+    local filename="${2:?Filename required}"
+    local filepath="$(xdg-state-file "$app_name" "$filename")"
+    [[ -f "$filepath" ]]
+}
+
+# Check if runtime file exists
+# Args: app-name, filename
+# Usage: xdg-runtime-exists "myapp" "daemon.pid" && echo "Running"
+# Returns: 0 if exists, 1 otherwise
+xdg-runtime-exists() {
+    local app_name="${1:?Application name required}"
+    local filename="${2:?Filename required}"
+    local filepath="$(xdg-runtime-file "$app_name" "$filename")"
+    [[ -f "$filepath" ]]
+}
+
+# ------------------------------
+# Directory Validation
+# ------------------------------
+
+# Check if directory is writable
+# Args: directory-path
+# Usage: xdg-dir-writable "/path/to/dir" && echo "Writable"
+# Returns: 0 if writable, 1 otherwise
+xdg-dir-writable() {
+    local dir="${1:?Directory path required}"
+    [[ -d "$dir" && -w "$dir" ]]
+}
+
+# Validate directory exists and is writable
+# Args: directory-path
+# Usage: xdg-validate-dir "/path/to/dir" || echo "Invalid"
+# Returns: 0 if valid, appropriate error code otherwise
+xdg-validate-dir() {
+    local dir="${1:?Directory path required}"
+
+    if [[ ! -d "$dir" ]]; then
+        log-error "Directory does not exist: $dir"
+        return $XDG_ERROR_NOT_FOUND
+    fi
+
+    if [[ ! -w "$dir" ]]; then
+        log-error "Directory not writable: $dir"
+        return $XDG_ERROR_NOT_WRITABLE
+    fi
+
+    return $XDG_SUCCESS
+}
+
+# ------------------------------
+# Disk Usage Functions
+# ------------------------------
+
+# Get directory size in human-readable format
+# Args: directory-path
+# Usage: size=$(xdg-dir-size "/path/to/dir")
+# Returns: size string (e.g., "1.5G") or "0" if directory doesn't exist
+xdg-dir-size() {
+    local dir="${1:?Directory path required}"
+
+    if [[ ! -d "$dir" ]]; then
+        echo "0"
+        return $XDG_ERROR_NOT_FOUND
+    fi
+
+    du -sh "$dir" 2>/dev/null | cut -f1 || echo "0"
+}
+
+# Get file count in directory
+# Args: directory-path
+# Usage: count=$(xdg-dir-file-count "/path/to/dir")
+# Returns: number of files (recursive)
+xdg-dir-file-count() {
+    local dir="${1:?Directory path required}"
+
+    if [[ ! -d "$dir" ]]; then
+        echo "0"
+        return $XDG_ERROR_NOT_FOUND
+    fi
+
+    find "$dir" -type f 2>/dev/null | wc -l
+}
+
+# Show disk usage for all app directories
+# Args: app-name
+# Usage: xdg-show-usage "myapp"
+xdg-show-usage() {
+    local app_name="${1:?Application name required}"
+
+    echo "Disk usage for: $app_name"
+    echo ""
+    printf "  %-12s : %s\n" "CONFIG" "$(xdg-dir-size "$(xdg-config-dir "$app_name")")"
+    printf "  %-12s : %s\n" "CACHE" "$(xdg-dir-size "$(xdg-cache-dir "$app_name")")"
+    printf "  %-12s : %s\n" "DATA" "$(xdg-dir-size "$(xdg-data-dir "$app_name")")"
+    printf "  %-12s : %s\n" "STATE" "$(xdg-dir-size "$(xdg-state-dir "$app_name")")"
+    printf "  %-12s : %s\n" "RUNTIME" "$(xdg-dir-size "$(xdg-runtime-dir "$app_name")")"
+}
+
+# ------------------------------
+# Cache Management
+# ------------------------------
+
+# Clean cache directory (remove all contents)
+# Args: app-name
+# Usage: xdg-clean-cache "myapp"
+# Returns: 0 on success, 1 on failure
+xdg-clean-cache() {
+    local app_name="${1:?Application name required}"
+    local cache_dir="$(xdg-cache-dir "$app_name")"
+
+    if [[ ! -d "$cache_dir" ]]; then
+        log-warning "Cache directory does not exist: $cache_dir"
+        return $XDG_SUCCESS
+    fi
+
+    log-info "Cleaning cache: $cache_dir"
+
+    if rm -rf "$cache_dir"/* 2>/dev/null; then
+        log-info "Cache cleaned successfully"
+        return $XDG_SUCCESS
+    else
+        log-error "Failed to clean cache: $cache_dir"
+        return $XDG_ERROR
+    fi
+}
+
+# Clean old cache files (older than N days)
+# Args: app-name, days
+# Usage: xdg-clean-old-cache "myapp" 30
+# Returns: 0 on success, 1 on failure
+xdg-clean-old-cache() {
+    local app_name="${1:?Application name required}"
+    local days="${2:?Days threshold required}"
+    local cache_dir="$(xdg-cache-dir "$app_name")"
+
+    if [[ ! -d "$cache_dir" ]]; then
+        log-warning "Cache directory does not exist: $cache_dir"
+        return $XDG_SUCCESS
+    fi
+
+    log-info "Cleaning cache files older than $days days: $cache_dir"
+
+    local count=$(find "$cache_dir" -type f -mtime +"$days" 2>/dev/null | wc -l)
+
+    if find "$cache_dir" -type f -mtime +"$days" -delete 2>/dev/null; then
+        log-info "Removed $count old cache file(s)"
+        return $XDG_SUCCESS
+    else
+        log-error "Failed to clean old cache files"
+        return $XDG_ERROR
+    fi
+}
+
+# ------------------------------
+# Runtime Management
+# ------------------------------
+
+# Clean runtime directory (remove all contents)
+# Args: app-name
+# Usage: xdg-clean-runtime "myapp"
+# Returns: 0 on success, 1 on failure
+xdg-clean-runtime() {
+    local app_name="${1:?Application name required}"
+    local runtime_dir="$(xdg-runtime-dir "$app_name")"
+
+    if [[ ! -d "$runtime_dir" ]]; then
+        log-warning "Runtime directory does not exist: $runtime_dir"
+        return $XDG_SUCCESS
+    fi
+
+    log-info "Cleaning runtime: $runtime_dir"
+
+    if rm -rf "$runtime_dir"/* 2>/dev/null; then
+        log-info "Runtime cleaned successfully"
+        return $XDG_SUCCESS
+    else
+        log-error "Failed to clean runtime: $runtime_dir"
+        return $XDG_ERROR
+    fi
+}
+
+# ------------------------------
+# Default Config Management
+# ------------------------------
+
+# Create default config file if it doesn't exist
+# Args: app-name, filename, default-content
+# Usage: xdg-create-default-config "myapp" "config.json" '{"key":"value"}'
+# Returns: 0 if created or already exists, 1 on failure
+xdg-create-default-config() {
+    local app_name="${1:?Application name required}"
+    local filename="${2:?Filename required}"
+    local default_content="${3:?Default content required}"
+
+    local config_dir="$(xdg-config-dir "$app_name")"
+    local config_file="$(xdg-config-file "$app_name" "$filename")"
+
+    if [[ -f "$config_file" ]]; then
+        log-debug "Config file already exists: $config_file"
+        return $XDG_SUCCESS
+    fi
+
+    # Ensure directory exists
+    xdg-ensure-dir "$config_dir" || return $XDG_ERROR
+
+    # Write default content
+    if echo "$default_content" > "$config_file" 2>/dev/null; then
+        log-info "Created default config: $config_file"
+        return $XDG_SUCCESS
+    else
+        log-error "Failed to create config file: $config_file"
+        return $XDG_ERROR
+    fi
+}
+
+# ------------------------------
+# Information Display
+# ------------------------------
+
+# Show all XDG directories for application
+# Args: app-name
+# Usage: xdg-show-dirs "myapp"
+xdg-show-dirs() {
+    local app_name="${1:?Application name required}"
+
+    echo "XDG directories for: $app_name"
+    echo ""
+    printf "  %-12s : %s\n" "CONFIG" "$(xdg-config-dir "$app_name")"
+    printf "  %-12s : %s\n" "CACHE" "$(xdg-cache-dir "$app_name")"
+    printf "  %-12s : %s\n" "DATA" "$(xdg-data-dir "$app_name")"
+    printf "  %-12s : %s\n" "STATE" "$(xdg-state-dir "$app_name")"
+    printf "  %-12s : %s\n" "RUNTIME" "$(xdg-runtime-dir "$app_name")"
+}
+
+# Show detailed information about app directories
+# Args: app-name
+# Usage: xdg-show-info "myapp"
+xdg-show-info() {
+    local app_name="${1:?Application name required}"
+
+    echo "XDG Information for: $app_name"
+    echo ""
+
+    local config_dir="$(xdg-config-dir "$app_name")"
+    local cache_dir="$(xdg-cache-dir "$app_name")"
+    local data_dir="$(xdg-data-dir "$app_name")"
+    local state_dir="$(xdg-state-dir "$app_name")"
+    local runtime_dir="$(xdg-runtime-dir "$app_name")"
+
+    printf "%-12s : %s\n" "CONFIG" "$config_dir"
+    printf "%-12s   %s (%s files)\n" "" "[$(xdg-dir-size "$config_dir")]" "$(xdg-dir-file-count "$config_dir")"
+
+    printf "%-12s : %s\n" "CACHE" "$cache_dir"
+    printf "%-12s   %s (%s files)\n" "" "[$(xdg-dir-size "$cache_dir")]" "$(xdg-dir-file-count "$cache_dir")"
+
+    printf "%-12s : %s\n" "DATA" "$data_dir"
+    printf "%-12s   %s (%s files)\n" "" "[$(xdg-dir-size "$data_dir")]" "$(xdg-dir-file-count "$data_dir")"
+
+    printf "%-12s : %s\n" "STATE" "$state_dir"
+    printf "%-12s   %s (%s files)\n" "" "[$(xdg-dir-size "$state_dir")]" "$(xdg-dir-file-count "$state_dir")"
+
+    printf "%-12s : %s\n" "RUNTIME" "$runtime_dir"
+    printf "%-12s   %s (%s files)\n" "" "[$(xdg-dir-size "$runtime_dir")]" "$(xdg-dir-file-count "$runtime_dir")"
+}
+
+# ------------------------------
+# Self-Test Function
+# ------------------------------
+
+# Comprehensive self-test for _xdg
+# Usage: xdg-self-test
+# Returns: 0 if all tests pass, 1 if any fail
+xdg-self-test() {
+    echo "=== Testing _xdg v$XDG_VERSION ==="
+    echo ""
+
+    local failed=0
+    local test_app="xdg-test-$$"
+
+    # Test 1: Directory getters
+    echo "[TEST] Directory getters"
+    local config_dir=$(xdg-config-dir "$test_app")
+    local cache_dir=$(xdg-cache-dir "$test_app")
+    local data_dir=$(xdg-data-dir "$test_app")
+    local state_dir=$(xdg-state-dir "$test_app")
+    [[ -n "$config_dir" ]] || { echo "  FAIL: config-dir empty"; failed=1; }
+    [[ -n "$cache_dir" ]] || { echo "  FAIL: cache-dir empty"; failed=1; }
+    [[ -n "$data_dir" ]] || { echo "  FAIL: data-dir empty"; failed=1; }
+    [[ -n "$state_dir" ]] || { echo "  FAIL: state-dir empty"; failed=1; }
+    echo "  PASS"
+    echo ""
+
+    # Test 2: Directory creation
+    echo "[TEST] Directory setup"
+    xdg-setup-all "$test_app" || { echo "  FAIL: setup-all failed"; failed=1; }
+    [[ -d "$config_dir" ]] || { echo "  FAIL: config dir not created"; failed=1; }
+    [[ -d "$cache_dir" ]] || { echo "  FAIL: cache dir not created"; failed=1; }
+    [[ -d "$data_dir" ]] || { echo "  FAIL: data dir not created"; failed=1; }
+    [[ -d "$state_dir" ]] || { echo "  FAIL: state dir not created"; failed=1; }
+    echo "  PASS"
+    echo ""
+
+    # Test 3: File path construction
+    echo "[TEST] File path construction"
+    local config_file=$(xdg-config-file "$test_app" "test.conf")
+    [[ "$config_file" == "$config_dir/test.conf" ]] || { echo "  FAIL: config-file path wrong"; failed=1; }
+    echo "  PASS"
+    echo ""
+
+    # Test 4: File existence checks
+    echo "[TEST] File existence checks"
+    ! xdg-config-exists "$test_app" "nonexistent.conf" || { echo "  FAIL: should not exist"; failed=1; }
+    echo "test" > "$(xdg-config-file "$test_app" "exists.conf")"
+    xdg-config-exists "$test_app" "exists.conf" || { echo "  FAIL: should exist"; failed=1; }
+    echo "  PASS"
+    echo ""
+
+    # Test 5: Directory validation
+    echo "[TEST] Directory validation"
+    xdg-validate-dir "$config_dir" || { echo "  FAIL: valid dir failed validation"; failed=1; }
+    xdg-dir-writable "$config_dir" || { echo "  FAIL: dir not writable"; failed=1; }
+    echo "  PASS"
+    echo ""
+
+    # Test 6: Disk usage functions
+    echo "[TEST] Disk usage functions"
+    local size=$(xdg-dir-size "$config_dir")
+    [[ -n "$size" ]] || { echo "  FAIL: size empty"; failed=1; }
+    local count=$(xdg-dir-file-count "$config_dir")
+    [[ "$count" -ge 0 ]] || { echo "  FAIL: count invalid"; failed=1; }
+    echo "  PASS (size: $size, files: $count)"
+    echo ""
+
+    # Test 7: Default config creation
+    echo "[TEST] Default config creation"
+    xdg-create-default-config "$test_app" "default.json" '{"test":true}' || \
+        { echo "  FAIL: create-default-config failed"; failed=1; }
+    xdg-config-exists "$test_app" "default.json" || \
+        { echo "  FAIL: default config not created"; failed=1; }
+    echo "  PASS"
+    echo ""
+
+    # Test 8: Cache cleaning
+    echo "[TEST] Cache cleaning"
+    echo "cache-data" > "$(xdg-cache-file "$test_app" "test.cache")"
+    xdg-clean-cache "$test_app" || { echo "  FAIL: clean-cache failed"; failed=1; }
+    ! xdg-cache-exists "$test_app" "test.cache" || { echo "  FAIL: cache not cleaned"; failed=1; }
+    echo "  PASS"
+    echo ""
+
+    # Test 9: Information display
+    echo "[TEST] Information display"
+    xdg-show-dirs "$test_app" >/dev/null || { echo "  FAIL: show-dirs failed"; failed=1; }
+    xdg-show-usage "$test_app" >/dev/null || { echo "  FAIL: show-usage failed"; failed=1; }
+    xdg-show-info "$test_app" >/dev/null || { echo "  FAIL: show-info failed"; failed=1; }
+    echo "  PASS"
+    echo ""
+
+    # Test 10: Cleanup
+    echo "[TEST] Cleanup test directories"
+    rm -rf "$config_dir" "$cache_dir" "$data_dir" "$state_dir" 2>/dev/null
+    echo "  PASS"
+    echo ""
+
+    # Summary
+    if [[ $failed -eq 0 ]]; then
+        echo "=== All tests PASSED ==="
+        echo "_xdg v$XDG_VERSION"
+        return $XDG_SUCCESS
+    else
+        echo "=== Some tests FAILED ==="
+        return $XDG_ERROR
+    fi
+}
+

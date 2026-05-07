@@ -1,0 +1,2042 @@
+#!/usr/bin/env zsh
+
+# _docker - Docker API Client and Management System
+# Part of the dotfiles library v2.0
+# Version: 2.1.0
+#
+# Usage:
+#   source "${DOTLIB}/_docker"
+#
+# Provides:
+#   - Low-level Docker API HTTP methods (GET, POST, PUT, DELETE, HEAD)
+#   - High-level container management
+#   - Image management and operations
+#   - Volume management
+#   - Network management
+#   - System information and monitoring
+#   - Event streaming and monitoring
+#   - Stats collection
+#   - Integration with infrastructure layer (v2.0)
+#
+# Dependencies:
+#   Required:
+#     - _common v2.0: Core utilities
+#     - curl: HTTP client for Docker API
+#     - docker daemon: Docker engine
+#   Optional (gracefully degraded):
+#     - _log v2.0: Structured logging
+#     - _events v2.0: Event system
+#     - _cache v2.0: Performance caching
+#     - _lifecycle v2.0: Cleanup management
+#     - _config v2.0: Configuration management
+#     - jq: JSON parsing enhancement
+
+# ------------------------------
+# Source Guard
+# ------------------------------
+
+[[ -n "${DOCKER_LOADED:-}" ]] && return 0
+declare -g DOCKER_LOADED=1
+
+# ------------------------------
+# Version
+# ------------------------------
+
+declare -r DOCKER_VERSION="2.1.0"
+
+# ------------------------------
+# Dependency Loading
+# ------------------------------
+
+# Load foundation (required)
+if ! source "${DOTLIB}/_common" 2>/dev/null; then
+    echo "[ERROR] _docker requires _common - cannot load" >&2
+    return 1
+fi
+
+# Load infrastructure (optional with fallbacks)
+if ! source "${DOTLIB}/_log" 2>/dev/null; then
+    log-info() { echo "[INFO] $*"; }
+    log-error() { echo "[ERROR] $*" >&2; }
+    log-warn() { echo "[WARN] $*" >&2; }
+    log-warning() { echo "[WARN] $*" >&2; }
+    log-debug() { [[ "${DOCKER_DEBUG:-false}" == "true" ]] && echo "[DEBUG] $*" >&2 || true; }
+    log-trace() { [[ "${DOCKER_DEBUG:-false}" == "true" ]] && echo "[TRACE] $*" >&2 || true; }
+    log-success() { echo "[SUCCESS] $*"; }
+fi
+
+if source "${DOTLIB}/_events" 2>/dev/null; then
+    declare -g DOCKER_EVENTS_AVAILABLE=true
+else
+    declare -g DOCKER_EVENTS_AVAILABLE=false
+fi
+
+if source "${DOTLIB}/_cache" 2>/dev/null; then
+    declare -g DOCKER_CACHE_AVAILABLE=true
+else
+    declare -g DOCKER_CACHE_AVAILABLE=false
+fi
+
+if source "${DOTLIB}/_lifecycle" 2>/dev/null; then
+    declare -g DOCKER_LIFECYCLE_AVAILABLE=true
+else
+    declare -g DOCKER_LIFECYCLE_AVAILABLE=false
+fi
+
+if source "${DOTLIB}/_config" 2>/dev/null; then
+    declare -g DOCKER_CONFIG_AVAILABLE=true
+else
+    declare -g DOCKER_CONFIG_AVAILABLE=false
+fi
+
+# ------------------------------
+# Configuration
+# ------------------------------
+
+# Paths (XDG-compliant via _common)
+declare -g DOCKER_CACHE_DIR="$(common-lib-cache-dir)/docker"
+declare -g DOCKER_STATE_DIR="$(common-lib-state-dir)/docker"
+declare -g DOCKER_CONFIG_DIR="$(common-lib-config-dir)/docker"
+
+# Docker configuration
+declare -g DOCKER_SOCKET="${DOCKER_SOCKET:-/run/docker.sock}"
+declare -g DOCKER_API_VERSION="${DOCKER_API_VERSION:-1.46}"
+declare -g DOCKER_HOST="${DOCKER_HOST:-unix://${DOCKER_SOCKET}}"
+
+# Behavior configuration
+declare -g DOCKER_DRY_RUN="${DOCKER_DRY_RUN:-false}"
+declare -g DOCKER_DEBUG="${DOCKER_DEBUG:-false}"
+declare -g DOCKER_VERBOSE="${DOCKER_VERBOSE:-false}"
+declare -g DOCKER_AUTO_CLEANUP="${DOCKER_AUTO_CLEANUP:-true}"
+
+# Event configuration
+declare -g DOCKER_EVENT_PREFIX="${DOCKER_EVENT_PREFIX:-docker}"
+declare -g DOCKER_EMIT_EVENTS="${DOCKER_EMIT_EVENTS:-true}"
+
+# Output configuration
+declare -g DOCKER_FORMAT_OUTPUT="${DOCKER_FORMAT_OUTPUT:-true}"
+declare -g DOCKER_COLOR_OUTPUT="${DOCKER_COLOR_OUTPUT:-true}"
+
+# Cache configuration
+declare -g DOCKER_CACHE_TTL="${DOCKER_CACHE_TTL:-300}"  # 5 minutes
+declare -g DOCKER_CACHE_VERSION_TTL="${DOCKER_CACHE_VERSION_TTL:-3600}"  # 1 hour
+
+# ------------------------------
+# Global State
+# ------------------------------
+
+# Tracked resources for cleanup
+declare -g -A _DOCKER_TRACKED_CONTAINERS=()
+declare -g -A _DOCKER_TRACKED_VOLUMES=()
+declare -g -A _DOCKER_TRACKED_NETWORKS=()
+
+# Event monitor state
+declare -g DOCKER_EVENT_MONITOR_PID=""
+declare -g DOCKER_EVENT_MONITOR_ACTIVE="false"
+
+# Stats monitor state
+declare -g -A _DOCKER_STATS_PIDS=()
+
+# Event names for integration
+declare -r DOCKER_EVENT_CONTAINER_CREATE="docker.container.create"
+declare -r DOCKER_EVENT_CONTAINER_START="docker.container.start"
+declare -r DOCKER_EVENT_CONTAINER_STOP="docker.container.stop"
+declare -r DOCKER_EVENT_CONTAINER_DIE="docker.container.die"
+declare -r DOCKER_EVENT_CONTAINER_DESTROY="docker.container.destroy"
+declare -r DOCKER_EVENT_IMAGE_PULL="docker.image.pull"
+declare -r DOCKER_EVENT_IMAGE_PUSH="docker.image.push"
+declare -r DOCKER_EVENT_IMAGE_DELETE="docker.image.delete"
+declare -r DOCKER_EVENT_VOLUME_CREATE="docker.volume.create"
+declare -r DOCKER_EVENT_VOLUME_DESTROY="docker.volume.destroy"
+declare -r DOCKER_EVENT_NETWORK_CREATE="docker.network.create"
+declare -r DOCKER_EVENT_NETWORK_DESTROY="docker.network.destroy"
+
+# ------------------------------
+# Internal Helpers
+# ------------------------------
+
+# Initialize directories
+_docker-init-dirs() {
+    mkdir -p "$DOCKER_CACHE_DIR" 2>/dev/null || true
+    mkdir -p "$DOCKER_STATE_DIR" 2>/dev/null || true
+    mkdir -p "$DOCKER_CONFIG_DIR" 2>/dev/null || true
+}
+
+# Emit an event (uses _events if available)
+_docker-emit() {
+    [[ "$DOCKER_EMIT_EVENTS" != "true" ]] && return 0
+    [[ "$DOCKER_EVENTS_AVAILABLE" != "true" ]] && return 0
+
+    events-emit "$@"
+}
+
+# Parse JSON with jq or fallback
+_docker-parse-json() {
+    local query="$1"
+
+    if common-command-exists jq; then
+        jq -r "$query" 2>/dev/null
+    else
+        cat  # Pass through if jq unavailable
+    fi
+}
+
+# Format API URL
+_docker-format-url() {
+    local path="$1"
+    echo "http://localhost/v${DOCKER_API_VERSION}/${path}"
+}
+
+# ------------------------------
+# Low-Level API Methods
+# ------------------------------
+
+# Execute Docker API GET request
+#
+# Function: docker-api-get
+# Description: Execute HTTP GET request to Docker API
+# Parameters:
+#   $1 - API path (e.g., "containers/json")
+# Returns:
+#   0 - Success
+#   1 - API call failed
+# Output: JSON response from Docker API
+# Example:
+#   result=$(docker-api-get "containers/json")
+#
+docker-api-get() {
+    local path="$1"
+
+    # Validation
+    common-validate-required "$path" "API path" || return 2
+
+    local url="$(_docker-format-url "$path")"
+
+    if [[ "$DOCKER_DRY_RUN" == "true" ]]; then
+        log-info "[DRY RUN] Would GET: $url"
+        return 0
+    fi
+
+    log-trace "GET $url"
+
+    # Check cache if available
+    local cache_key="docker:api:get:${path}"
+    if [[ "$DOCKER_CACHE_AVAILABLE" == "true" ]]; then
+        local cached=$(cache-get "$cache_key")
+        if [[ -n "$cached" ]]; then
+            log-trace "Cache hit for: $path"
+            echo "$cached"
+            return 0
+        fi
+    fi
+
+    local response
+    response=$(/usr/bin/curl --silent --unix-socket "$DOCKER_SOCKET" -X GET "$url" 2>&1)
+    local exit_code=$?
+
+    if [[ $exit_code -ne 0 ]]; then
+        log-error "API GET failed" "path=$path" "error=$response"
+        return 1
+    fi
+
+    # Cache successful response
+    if [[ "$DOCKER_CACHE_AVAILABLE" == "true" ]]; then
+        cache-set "$cache_key" "$response" "$DOCKER_CACHE_TTL"
+    fi
+
+    echo "$response"
+}
+
+# Execute Docker API POST request
+#
+# Function: docker-api-post
+# Description: Execute HTTP POST request to Docker API
+# Parameters:
+#   $1 - API path (required)
+#   $2 - JSON data (optional)
+# Returns:
+#   0 - Success
+#   1 - API call failed
+# Output: JSON response from Docker API
+# Example:
+#   result=$(docker-api-post "containers/create" '{"Image":"nginx"}')
+#
+docker-api-post() {
+    local path="$1"
+    local data="${2:-}"
+
+    # Validation
+    common-validate-required "$path" "API path" || return 2
+
+    local url="$(_docker-format-url "$path")"
+
+    if [[ "$DOCKER_DRY_RUN" == "true" ]]; then
+        log-info "[DRY RUN] Would POST to: $url"
+        [[ -n "$data" ]] && log-debug "[DRY RUN] Data: $data"
+        return 0
+    fi
+
+    log-trace "POST $url"
+
+    # Invalidate relevant cache entries
+    if [[ "$DOCKER_CACHE_AVAILABLE" == "true" ]]; then
+        cache-clear-namespace "docker:api:get"
+    fi
+
+    local response
+    if [[ -n "$data" ]]; then
+        response=$(/usr/bin/curl --silent --unix-socket "$DOCKER_SOCKET" \
+            -X POST \
+            -H "Content-Type: application/json" \
+            -d "$data" \
+            "$url" 2>&1)
+    else
+        response=$(/usr/bin/curl --silent --unix-socket "$DOCKER_SOCKET" -X POST "$url" 2>&1)
+    fi
+
+    local exit_code=$?
+
+    if [[ $exit_code -ne 0 ]]; then
+        log-error "API POST failed" "path=$path" "error=$response"
+        return 1
+    fi
+
+    echo "$response"
+}
+
+# Execute Docker API PUT request
+#
+# Function: docker-api-put
+# Description: Execute HTTP PUT request to Docker API
+# Parameters:
+#   $1 - API path (required)
+#   $2 - JSON data (optional)
+# Returns:
+#   0 - Success
+#   1 - API call failed
+# Example:
+#   docker-api-put "containers/abc123/rename?name=newname"
+#
+docker-api-put() {
+    local path="$1"
+    local data="${2:-}"
+
+    common-validate-required "$path" "API path" || return 2
+
+    local url="$(_docker-format-url "$path")"
+
+    if [[ "$DOCKER_DRY_RUN" == "true" ]]; then
+        log-info "[DRY RUN] Would PUT to: $url"
+        [[ -n "$data" ]] && log-debug "[DRY RUN] Data: $data"
+        return 0
+    fi
+
+    log-trace "PUT $url"
+
+    # Invalidate cache
+    if [[ "$DOCKER_CACHE_AVAILABLE" == "true" ]]; then
+        cache-clear-namespace "docker:api:get"
+    fi
+
+    local response
+    if [[ -n "$data" ]]; then
+        response=$(/usr/bin/curl --silent --unix-socket "$DOCKER_SOCKET" \
+            -X PUT \
+            -H "Content-Type: application/json" \
+            -d "$data" \
+            "$url" 2>&1)
+    else
+        response=$(/usr/bin/curl --silent --unix-socket "$DOCKER_SOCKET" -X PUT "$url" 2>&1)
+    fi
+
+    local exit_code=$?
+
+    if [[ $exit_code -ne 0 ]]; then
+        log-error "API PUT failed" "path=$path" "error=$response"
+        return 1
+    fi
+
+    echo "$response"
+}
+
+# Execute Docker API DELETE request
+#
+# Function: docker-api-delete
+# Description: Execute HTTP DELETE request to Docker API
+# Parameters:
+#   $1 - API path (required)
+# Returns:
+#   0 - Success
+#   1 - API call failed
+# Example:
+#   docker-api-delete "containers/abc123?force=true"
+#
+docker-api-delete() {
+    local path="$1"
+
+    common-validate-required "$path" "API path" || return 2
+
+    local url="$(_docker-format-url "$path")"
+
+    if [[ "$DOCKER_DRY_RUN" == "true" ]]; then
+        log-info "[DRY RUN] Would DELETE: $url"
+        return 0
+    fi
+
+    log-trace "DELETE $url"
+
+    # Invalidate cache
+    if [[ "$DOCKER_CACHE_AVAILABLE" == "true" ]]; then
+        cache-clear-namespace "docker:api:get"
+    fi
+
+    local response
+    response=$(/usr/bin/curl --silent --unix-socket "$DOCKER_SOCKET" -X DELETE "$url" 2>&1)
+    local exit_code=$?
+
+    if [[ $exit_code -ne 0 ]]; then
+        log-error "API DELETE failed" "path=$path" "error=$response"
+        return 1
+    fi
+
+    echo "$response"
+}
+
+# Execute Docker API HEAD request
+#
+# Function: docker-api-head
+# Description: Execute HTTP HEAD request to Docker API
+# Parameters:
+#   $1 - API path (required)
+# Returns:
+#   0 - Success
+#   1 - API call failed
+# Example:
+#   docker-api-head "containers/abc123/archive?path=/etc"
+#
+docker-api-head() {
+    local path="$1"
+
+    common-validate-required "$path" "API path" || return 2
+
+    local url="$(_docker-format-url "$path")"
+
+    if [[ "$DOCKER_DRY_RUN" == "true" ]]; then
+        log-info "[DRY RUN] Would HEAD: $url"
+        return 0
+    fi
+
+    log-trace "HEAD $url"
+
+    /usr/bin/curl --silent --unix-socket "$DOCKER_SOCKET" -I -X HEAD "$url"
+}
+
+# Stream Docker API (for events, logs, etc.)
+#
+# Function: docker-api-stream
+# Description: Stream data from Docker API (events, logs, stats)
+# Parameters:
+#   $1 - API path (required)
+# Output: Continuous stream of data
+# Example:
+#   docker-api-stream "events" | while read event; do ...; done
+#
+docker-api-stream() {
+    local path="$1"
+
+    common-validate-required "$path" "API path" || return 2
+
+    local url="$(_docker-format-url "$path")"
+
+    if [[ "$DOCKER_DRY_RUN" == "true" ]]; then
+        log-info "[DRY RUN] Would stream from: $url"
+        return 0
+    fi
+
+    log-trace "STREAM $url"
+
+    /usr/bin/curl --silent --no-buffer --unix-socket "$DOCKER_SOCKET" -X GET "$url"
+}
+
+# ------------------------------
+# Availability and Configuration
+# ------------------------------
+
+# Check if Docker is available
+#
+# Function: docker-check-available
+# Description: Verify Docker daemon is accessible
+# Returns:
+#   0 - Docker is available
+#   1 - Docker not available
+# Example:
+#   docker-check-available || echo "Docker not available"
+#
+docker-check-available() {
+    # Check if curl is available
+    if ! common-command-exists curl; then
+        log-error "curl not found - required for Docker API"
+        return 1
+    fi
+
+    # Check if Docker socket exists
+    if [[ ! -S "$DOCKER_SOCKET" ]]; then
+        log-error "Docker socket not found" "path=$DOCKER_SOCKET"
+        log-info "Is Docker running? Try: systemctl status docker"
+        return 1
+    fi
+
+    # Try to ping Docker
+    local result
+    result=$(docker-api-get "_ping" 2>/dev/null)
+    if [[ "$result" != "OK" ]]; then
+        log-error "Docker is not responding"
+        return 1
+    fi
+
+    return 0
+}
+
+# Require Docker to be available (exit if not)
+#
+# Function: docker-require-available
+# Description: Exit script if Docker is not available
+# Example:
+#   docker-require-available  # Script exits if Docker not running
+#
+docker-require-available() {
+    docker-check-available || exit 1
+}
+
+# Get Docker socket path
+#
+# Function: docker-get-socket
+# Description: Return configured Docker socket path
+# Output: Socket path string
+# Example:
+#   socket=$(docker-get-socket)
+#
+docker-get-socket() {
+    echo "$DOCKER_SOCKET"
+}
+
+# Get Docker API version
+#
+# Function: docker-get-api-version
+# Description: Return configured API version
+# Output: Version string (e.g., "1.46")
+# Example:
+#   version=$(docker-get-api-version)
+#
+docker-get-api-version() {
+    echo "$DOCKER_API_VERSION"
+}
+
+# Set API version for current session
+#
+# Function: docker-set-api-version
+# Description: Change Docker API version for current session
+# Parameters:
+#   $1 - API version (e.g., "1.45")
+# Example:
+#   docker-set-api-version "1.45"
+#
+docker-set-api-version() {
+    local version="$1"
+
+    common-validate-required "$version" "API version" || return 2
+
+    DOCKER_API_VERSION="$version"
+    export DOCKER_API_VERSION
+    log-debug "API version set" "version=$version"
+}
+
+# ------------------------------
+# System Information
+# ------------------------------
+
+# Get Docker system information
+#
+# Function: docker-info
+# Description: Get comprehensive Docker system information
+# Output: JSON system information
+# Example:
+#   docker-info | jq .
+#
+docker-info() {
+    docker-api-get "info"
+}
+
+# Get Docker version
+#
+# Function: docker-version
+# Description: Get Docker engine version information
+# Output: JSON version information
+# Example:
+#   docker-version | jq .Version
+#
+docker-version() {
+    # Try cache first
+    if [[ "$DOCKER_CACHE_AVAILABLE" == "true" ]]; then
+        local cached=$(cache-get "docker:version")
+        if [[ -n "$cached" ]]; then
+            echo "$cached"
+            return 0
+        fi
+    fi
+
+    local result=$(docker-api-get "version")
+
+    # Cache result
+    if [[ "$DOCKER_CACHE_AVAILABLE" == "true" ]] && [[ -n "$result" ]]; then
+        cache-set "docker:version" "$result" "$DOCKER_CACHE_VERSION_TTL"
+    fi
+
+    echo "$result"
+}
+
+# Get Docker disk usage
+#
+# Function: docker-disk-usage
+# Description: Get disk usage statistics for Docker objects
+# Output: JSON disk usage information
+# Example:
+#   docker-disk-usage | jq .
+#
+docker-disk-usage() {
+    docker-api-get "system/df"
+}
+
+# Ping Docker daemon
+#
+# Function: docker-ping
+# Description: Test Docker daemon connectivity
+# Returns:
+#   0 - Docker responding
+#   1 - Docker not responding
+# Example:
+#   docker-ping && echo "Docker is up"
+#
+docker-ping() {
+    local result
+    result=$(docker-api-get "_ping")
+    if [[ "$result" == "OK" ]]; then
+        echo "Docker daemon is responding"
+        return 0
+    else
+        echo "Docker daemon is not responding"
+        return 1
+    fi
+}
+
+# ------------------------------
+# Container Management
+# ------------------------------
+
+# List containers
+#
+# Function: docker-container-list
+# Description: List Docker containers
+# Parameters:
+#   --all|-a - Show all containers (default: running only)
+# Output: JSON array of containers
+# Example:
+#   docker-container-list --all | jq '.[].Names'
+#
+docker-container-list() {
+    local all="false"
+    if [[ "$1" == "--all" ]] || [[ "$1" == "-a" ]]; then
+        all="true"
+    fi
+
+    local path="containers/json"
+    if [[ "$all" == "true" ]]; then
+        path="containers/json?all=true"
+    fi
+
+    docker-api-get "$path"
+}
+
+# Inspect container
+#
+# Function: docker-container-inspect
+# Description: Get detailed container information
+# Parameters:
+#   $1 - Container ID or name (required)
+# Output: JSON container details
+# Example:
+#   docker-container-inspect nginx | jq .State
+#
+docker-container-inspect() {
+    local container="$1"
+
+    common-validate-required "$container" "container ID/name" || return 2
+
+    docker-api-get "containers/${container}/json"
+}
+
+# Create container
+#
+# Function: docker-container-create
+# Description: Create new container from configuration
+# Parameters:
+#   $1 - Configuration JSON (required)
+# Output: Container ID
+# Returns:
+#   0 - Success
+#   1 - Creation failed
+# Example:
+#   id=$(docker-container-create '{"Image":"nginx","name":"web"}')
+#
+docker-container-create() {
+    local config="$1"
+
+    common-validate-required "$config" "container configuration" || return 2
+
+    local response
+    response=$(docker-api-post "containers/create" "$config")
+
+    # Extract container ID
+    local container_id
+    container_id=$(echo "$response" | _docker-parse-json '.Id')
+
+    if [[ -n "$container_id" ]]; then
+        _docker-emit "$DOCKER_EVENT_CONTAINER_CREATE" "id=$container_id"
+        log-info "Container created" "id=${container_id:0:12}"
+        echo "$container_id"
+    else
+        log-error "Container creation failed" "response=$response"
+        return 1
+    fi
+}
+
+# Start container
+#
+# Function: docker-container-start
+# Description: Start a stopped container
+# Parameters:
+#   $1 - Container ID or name (required)
+# Returns:
+#   0 - Success
+#   1 - Start failed
+# Example:
+#   docker-container-start nginx
+#
+docker-container-start() {
+    local container="$1"
+
+    common-validate-required "$container" "container ID/name" || return 2
+
+    log-info "Starting container" "name=$container"
+    docker-api-post "containers/${container}/start"
+
+    if [[ $? -eq 0 ]]; then
+        _docker-emit "$DOCKER_EVENT_CONTAINER_START" "id=$container"
+        log-success "Container started" "name=$container"
+    else
+        log-error "Failed to start container" "name=$container"
+        return 1
+    fi
+}
+
+# Stop container
+#
+# Function: docker-container-stop
+# Description: Stop a running container
+# Parameters:
+#   $1 - Container ID or name (required)
+#   $2 - Timeout in seconds (optional, default: 10)
+# Returns:
+#   0 - Success
+#   1 - Stop failed
+# Example:
+#   docker-container-stop nginx 30
+#
+docker-container-stop() {
+    local container="$1"
+    local timeout="${2:-10}"
+
+    common-validate-required "$container" "container ID/name" || return 2
+    common-validate-numeric "$timeout" || return 2
+
+    log-info "Stopping container" "name=$container" "timeout=${timeout}s"
+    docker-api-post "containers/${container}/stop?t=${timeout}"
+
+    if [[ $? -eq 0 ]]; then
+        _docker-emit "$DOCKER_EVENT_CONTAINER_STOP" "id=$container"
+        log-success "Container stopped" "name=$container"
+    else
+        log-error "Failed to stop container" "name=$container"
+        return 1
+    fi
+}
+
+# Restart container
+#
+# Function: docker-container-restart
+# Description: Restart a container
+# Parameters:
+#   $1 - Container ID or name (required)
+#   $2 - Timeout in seconds (optional, default: 10)
+# Returns:
+#   0 - Success
+#   1 - Restart failed
+# Example:
+#   docker-container-restart nginx
+#
+docker-container-restart() {
+    local container="$1"
+    local timeout="${2:-10}"
+
+    common-validate-required "$container" "container ID/name" || return 2
+    common-validate-numeric "$timeout" || return 2
+
+    log-info "Restarting container" "name=$container"
+    docker-api-post "containers/${container}/restart?t=${timeout}"
+}
+
+# Kill container
+#
+# Function: docker-container-kill
+# Description: Send signal to container
+# Parameters:
+#   $1 - Container ID or name (required)
+#   $2 - Signal (optional, default: SIGKILL)
+# Returns:
+#   0 - Success
+#   1 - Kill failed
+# Example:
+#   docker-container-kill nginx SIGTERM
+#
+docker-container-kill() {
+    local container="$1"
+    local signal="${2:-SIGKILL}"
+
+    common-validate-required "$container" "container ID/name" || return 2
+
+    log-warn "Killing container" "name=$container" "signal=$signal"
+    docker-api-post "containers/${container}/kill?signal=${signal}"
+}
+
+# Remove container
+#
+# Function: docker-container-remove
+# Description: Remove container
+# Parameters:
+#   $1 - Container ID or name (required)
+#   --force|-f - Force removal
+#   --volumes|-v - Remove associated volumes
+# Returns:
+#   0 - Success
+#   1 - Removal failed
+# Example:
+#   docker-container-remove nginx --force --volumes
+#
+docker-container-remove() {
+    local container="$1"
+    shift
+
+    common-validate-required "$container" "container ID/name" || return 2
+
+    local force="false"
+    local volumes="false"
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --force|-f) force="true"; shift ;;
+            --volumes|-v) volumes="true"; shift ;;
+            *) shift ;;
+        esac
+    done
+
+    local path="containers/${container}?force=${force}&v=${volumes}"
+
+    log-info "Removing container" "name=$container" "force=$force" "volumes=$volumes"
+    docker-api-delete "$path"
+
+    if [[ $? -eq 0 ]]; then
+        _docker-emit "$DOCKER_EVENT_CONTAINER_DESTROY" "id=$container"
+        unset "_DOCKER_TRACKED_CONTAINERS[$container]"
+        log-success "Container removed" "name=$container"
+    else
+        log-error "Failed to remove container" "name=$container"
+        return 1
+    fi
+}
+
+# Get container logs
+#
+# Function: docker-container-logs
+# Description: Retrieve container logs
+# Parameters:
+#   $1 - Container ID or name (required)
+#   --tail N - Show last N lines
+#   --follow|-f - Follow log output
+# Output: Container logs
+# Example:
+#   docker-container-logs nginx --tail 100
+#
+docker-container-logs() {
+    local container="$1"
+    shift
+
+    common-validate-required "$container" "container ID/name" || return 2
+
+    local tail=""
+    local follow="false"
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --tail) tail="$2"; shift 2 ;;
+            --follow|-f) follow="true"; shift ;;
+            *) shift ;;
+        esac
+    done
+
+    local path="containers/${container}/logs?stdout=true&stderr=true"
+    [[ -n "$tail" ]] && path="${path}&tail=${tail}"
+    [[ "$follow" == "true" ]] && path="${path}&follow=true"
+
+    if [[ "$follow" == "true" ]]; then
+        docker-api-stream "$path"
+    else
+        docker-api-get "$path"
+    fi
+}
+
+# Get container stats
+#
+# Function: docker-container-stats
+# Description: Get resource usage statistics
+# Parameters:
+#   $1 - Container ID or name (required)
+#   --stream - Continuous stats stream
+# Output: Resource statistics (JSON)
+# Example:
+#   docker-container-stats nginx --stream
+#
+docker-container-stats() {
+    local container="$1"
+    local stream="false"
+
+    if [[ "$2" == "--stream" ]]; then
+        stream="true"
+    fi
+
+    common-validate-required "$container" "container ID/name" || return 2
+
+    local path="containers/${container}/stats?stream=${stream}"
+
+    if [[ "$stream" == "true" ]]; then
+        docker-api-stream "$path"
+    else
+        docker-api-get "$path"
+    fi
+}
+
+# Execute command in container
+#
+# Function: docker-container-exec
+# Description: Execute command in running container
+# Parameters:
+#   $1 - Container ID or name (required)
+#   $@ - Command and arguments (required)
+# Output: Command output
+# Example:
+#   docker-container-exec nginx ls -la /etc
+#
+docker-container-exec() {
+    local container="$1"
+    shift
+
+    common-validate-required "$container" "container ID/name" || return 2
+
+    if [[ $# -eq 0 ]]; then
+        log-error "Command required"
+        return 2
+    fi
+
+    local cmd_array="["
+    for arg in "$@"; do
+        cmd_array="${cmd_array}\"${arg}\","
+    done
+    cmd_array="${cmd_array%,}]"
+
+    local config="{\"AttachStdout\":true,\"AttachStderr\":true,\"Cmd\":${cmd_array}}"
+
+    # Create exec instance
+    local exec_response
+    exec_response=$(docker-api-post "containers/${container}/exec" "$config")
+
+    local exec_id
+    exec_id=$(echo "$exec_response" | _docker-parse-json '.Id')
+
+    if [[ -z "$exec_id" ]]; then
+        log-error "Failed to create exec instance"
+        return 1
+    fi
+
+    # Start exec instance
+    docker-api-post "exec/${exec_id}/start" '{"Detach":false}'
+}
+
+# Pause container
+#
+# Function: docker-container-pause
+# Description: Pause all processes in container
+# Parameters:
+#   $1 - Container ID or name (required)
+# Example:
+#   docker-container-pause nginx
+#
+docker-container-pause() {
+    local container="$1"
+
+    common-validate-required "$container" "container ID/name" || return 2
+
+    log-info "Pausing container" "name=$container"
+    docker-api-post "containers/${container}/pause"
+}
+
+# Unpause container
+#
+# Function: docker-container-unpause
+# Description: Resume paused container
+# Parameters:
+#   $1 - Container ID or name (required)
+# Example:
+#   docker-container-unpause nginx
+#
+docker-container-unpause() {
+    local container="$1"
+
+    common-validate-required "$container" "container ID/name" || return 2
+
+    log-info "Unpausing container" "name=$container"
+    docker-api-post "containers/${container}/unpause"
+}
+
+# Track container for cleanup
+#
+# Function: docker-container-track
+# Description: Register container for automatic cleanup on exit
+# Parameters:
+#   $1 - Container ID or name (required)
+# Example:
+#   docker-container-track test-container
+#
+docker-container-track() {
+    local container="$1"
+
+    common-validate-required "$container" "container ID/name" || return 2
+
+    _DOCKER_TRACKED_CONTAINERS[$container]="1"
+    log-debug "Tracking container" "name=$container"
+}
+
+# ------------------------------
+# Image Management
+# ------------------------------
+
+# List images
+#
+# Function: docker-image-list
+# Description: List Docker images
+# Parameters:
+#   --all|-a - Show all images (including intermediate)
+# Output: JSON array of images
+# Example:
+#   docker-image-list --all | jq '.[].RepoTags'
+#
+docker-image-list() {
+    local all="false"
+    if [[ "$1" == "--all" ]] || [[ "$1" == "-a" ]]; then
+        all="true"
+    fi
+
+    local path="images/json"
+    if [[ "$all" == "true" ]]; then
+        path="images/json?all=true"
+    fi
+
+    docker-api-get "$path"
+}
+
+# Inspect image
+#
+# Function: docker-image-inspect
+# Description: Get detailed image information
+# Parameters:
+#   $1 - Image name or ID (required)
+# Output: JSON image details
+# Example:
+#   docker-image-inspect nginx:latest | jq .Config
+#
+docker-image-inspect() {
+    local image="$1"
+
+    common-validate-required "$image" "image name/ID" || return 2
+
+    docker-api-get "images/${image}/json"
+}
+
+# Pull image
+#
+# Function: docker-image-pull
+# Description: Pull image from registry
+# Parameters:
+#   $1 - Image name (required)
+# Returns:
+#   0 - Success
+#   1 - Pull failed
+# Example:
+#   docker-image-pull nginx:alpine
+#
+docker-image-pull() {
+    local image="$1"
+
+    common-validate-required "$image" "image name" || return 2
+
+    log-info "Pulling image" "name=$image"
+    local response
+    response=$(docker-api-post "images/create?fromImage=${image}")
+
+    if [[ $? -eq 0 ]]; then
+        _docker-emit "$DOCKER_EVENT_IMAGE_PULL" "name=$image"
+        log-success "Image pulled" "name=$image"
+        echo "$response"
+    else
+        log-error "Failed to pull image" "name=$image"
+        return 1
+    fi
+}
+
+# Remove image
+#
+# Function: docker-image-remove
+# Description: Remove Docker image
+# Parameters:
+#   $1 - Image name or ID (required)
+#   --force|-f - Force removal
+# Returns:
+#   0 - Success
+#   1 - Removal failed
+# Example:
+#   docker-image-remove nginx:old --force
+#
+docker-image-remove() {
+    local image="$1"
+    local force="false"
+
+    if [[ "$2" == "--force" ]] || [[ "$2" == "-f" ]]; then
+        force="true"
+    fi
+
+    common-validate-required "$image" "image name/ID" || return 2
+
+    local path="images/${image}?force=${force}"
+
+    log-info "Removing image" "name=$image" "force=$force"
+    local response
+    response=$(docker-api-delete "$path")
+
+    if [[ $? -eq 0 ]]; then
+        _docker-emit "$DOCKER_EVENT_IMAGE_DELETE" "name=$image"
+        log-success "Image removed" "name=$image"
+        echo "$response"
+    else
+        log-error "Failed to remove image" "name=$image"
+        return 1
+    fi
+}
+
+# Tag image
+#
+# Function: docker-image-tag
+# Description: Create image tag
+# Parameters:
+#   $1 - Source image (required)
+#   $2 - Target tag (required, format: repository:tag)
+# Returns:
+#   0 - Success
+#   1 - Tagging failed
+# Example:
+#   docker-image-tag nginx:latest myrepo/nginx:v1
+#
+docker-image-tag() {
+    local image="$1"
+    local tag="$2"
+
+    common-validate-required "$image" "source image" || return 2
+    common-validate-required "$tag" "target tag" || return 2
+
+    log-info "Tagging image" "source=$image" "target=$tag"
+    docker-api-post "images/${image}/tag?repo=${tag%:*}&tag=${tag#*:}"
+}
+
+# Search images
+#
+# Function: docker-image-search
+# Description: Search Docker Hub for images
+# Parameters:
+#   $1 - Search term (required)
+# Output: JSON search results
+# Example:
+#   docker-image-search nginx | jq '.[].name'
+#
+docker-image-search() {
+    local term="$1"
+
+    common-validate-required "$term" "search term" || return 2
+
+    docker-api-get "images/search?term=${term}"
+}
+
+# Prune images
+#
+# Function: docker-image-prune
+# Description: Remove unused images
+# Parameters:
+#   --all|-a - Remove all unused images
+# Output: JSON prune results
+# Example:
+#   docker-image-prune --all
+#
+docker-image-prune() {
+    local all="false"
+    if [[ "$1" == "--all" ]] || [[ "$1" == "-a" ]]; then
+        all="true"
+    fi
+
+    local filters='{"dangling":["true"]}'
+    if [[ "$all" == "true" ]]; then
+        filters='{}'
+    fi
+
+    log-info "Pruning images" "all=$all"
+    docker-api-post "images/prune" "{\"filters\":${filters}}"
+}
+
+# ------------------------------
+# Volume Management
+# ------------------------------
+
+# List volumes
+#
+# Function: docker-volume-list
+# Description: List Docker volumes
+# Output: JSON volume list
+# Example:
+#   docker-volume-list | jq '.Volumes[].Name'
+#
+docker-volume-list() {
+    docker-api-get "volumes"
+}
+
+# Inspect volume
+#
+# Function: docker-volume-inspect
+# Description: Get detailed volume information
+# Parameters:
+#   $1 - Volume name (required)
+# Output: JSON volume details
+# Example:
+#   docker-volume-inspect mydata | jq .Mountpoint
+#
+docker-volume-inspect() {
+    local volume="$1"
+
+    common-validate-required "$volume" "volume name" || return 2
+
+    docker-api-get "volumes/${volume}"
+}
+
+# Create volume
+#
+# Function: docker-volume-create
+# Description: Create Docker volume
+# Parameters:
+#   $1 - Volume name (required)
+#   $2 - Driver (optional, default: local)
+# Returns:
+#   0 - Success
+#   1 - Creation failed
+# Example:
+#   docker-volume-create mydata
+#
+docker-volume-create() {
+    local name="$1"
+    local driver="${2:-local}"
+
+    common-validate-required "$name" "volume name" || return 2
+
+    local config="{\"Name\":\"${name}\",\"Driver\":\"${driver}\"}"
+
+    log-info "Creating volume" "name=$name" "driver=$driver"
+    local response
+    response=$(docker-api-post "volumes/create" "$config")
+
+    if [[ $? -eq 0 ]]; then
+        _docker-emit "$DOCKER_EVENT_VOLUME_CREATE" "name=$name"
+        log-success "Volume created" "name=$name"
+        echo "$response"
+    else
+        log-error "Failed to create volume" "name=$name"
+        return 1
+    fi
+}
+
+# Remove volume
+#
+# Function: docker-volume-remove
+# Description: Remove Docker volume
+# Parameters:
+#   $1 - Volume name (required)
+#   --force|-f - Force removal
+# Returns:
+#   0 - Success
+#   1 - Removal failed
+# Example:
+#   docker-volume-remove olddata --force
+#
+docker-volume-remove() {
+    local volume="$1"
+    local force="false"
+
+    if [[ "$2" == "--force" ]] || [[ "$2" == "-f" ]]; then
+        force="true"
+    fi
+
+    common-validate-required "$volume" "volume name" || return 2
+
+    local path="volumes/${volume}"
+    if [[ "$force" == "true" ]]; then
+        path="${path}?force=true"
+    fi
+
+    log-info "Removing volume" "name=$volume" "force=$force"
+    local response
+    response=$(docker-api-delete "$path")
+
+    if [[ $? -eq 0 ]]; then
+        _docker-emit "$DOCKER_EVENT_VOLUME_DESTROY" "name=$volume"
+        unset "_DOCKER_TRACKED_VOLUMES[$volume]"
+        log-success "Volume removed" "name=$volume"
+        echo "$response"
+    else
+        log-error "Failed to remove volume" "name=$volume"
+        return 1
+    fi
+}
+
+# Prune volumes
+#
+# Function: docker-volume-prune
+# Description: Remove unused volumes
+# Output: JSON prune results
+# Example:
+#   docker-volume-prune
+#
+docker-volume-prune() {
+    log-info "Pruning volumes"
+    docker-api-post "volumes/prune"
+}
+
+# Track volume for cleanup
+#
+# Function: docker-volume-track
+# Description: Register volume for automatic cleanup on exit
+# Parameters:
+#   $1 - Volume name (required)
+# Example:
+#   docker-volume-track test-volume
+#
+docker-volume-track() {
+    local volume="$1"
+
+    common-validate-required "$volume" "volume name" || return 2
+
+    _DOCKER_TRACKED_VOLUMES[$volume]="1"
+    log-debug "Tracking volume" "name=$volume"
+}
+
+# ------------------------------
+# Network Management
+# ------------------------------
+
+# List networks
+#
+# Function: docker-network-list
+# Description: List Docker networks
+# Output: JSON network list
+# Example:
+#   docker-network-list | jq '.[].Name'
+#
+docker-network-list() {
+    docker-api-get "networks"
+}
+
+# Inspect network
+#
+# Function: docker-network-inspect
+# Description: Get detailed network information
+# Parameters:
+#   $1 - Network name or ID (required)
+# Output: JSON network details
+# Example:
+#   docker-network-inspect bridge | jq .IPAM
+#
+docker-network-inspect() {
+    local network="$1"
+
+    common-validate-required "$network" "network name/ID" || return 2
+
+    docker-api-get "networks/${network}"
+}
+
+# Create network
+#
+# Function: docker-network-create
+# Description: Create Docker network
+# Parameters:
+#   $1 - Network name (required)
+#   $2 - Driver (optional, default: bridge)
+# Returns:
+#   0 - Success
+#   1 - Creation failed
+# Example:
+#   docker-network-create mynet overlay
+#
+docker-network-create() {
+    local name="$1"
+    local driver="${2:-bridge}"
+
+    common-validate-required "$name" "network name" || return 2
+
+    local config="{\"Name\":\"${name}\",\"Driver\":\"${driver}\"}"
+
+    log-info "Creating network" "name=$name" "driver=$driver"
+    local response
+    response=$(docker-api-post "networks/create" "$config")
+
+    if [[ $? -eq 0 ]]; then
+        _docker-emit "$DOCKER_EVENT_NETWORK_CREATE" "name=$name"
+        log-success "Network created" "name=$name"
+        echo "$response"
+    else
+        log-error "Failed to create network" "name=$name"
+        return 1
+    fi
+}
+
+# Remove network
+#
+# Function: docker-network-remove
+# Description: Remove Docker network
+# Parameters:
+#   $1 - Network name or ID (required)
+# Returns:
+#   0 - Success
+#   1 - Removal failed
+# Example:
+#   docker-network-remove oldnet
+#
+docker-network-remove() {
+    local network="$1"
+
+    common-validate-required "$network" "network name/ID" || return 2
+
+    log-info "Removing network" "name=$network"
+    local response
+    response=$(docker-api-delete "networks/${network}")
+
+    if [[ $? -eq 0 ]]; then
+        _docker-emit "$DOCKER_EVENT_NETWORK_DESTROY" "name=$network"
+        unset "_DOCKER_TRACKED_NETWORKS[$network]"
+        log-success "Network removed" "name=$network"
+        echo "$response"
+    else
+        log-error "Failed to remove network" "name=$network"
+        return 1
+    fi
+}
+
+# Connect container to network
+#
+# Function: docker-network-connect
+# Description: Connect container to network
+# Parameters:
+#   $1 - Network name (required)
+#   $2 - Container ID/name (required)
+# Returns:
+#   0 - Success
+#   1 - Connection failed
+# Example:
+#   docker-network-connect mynet nginx
+#
+docker-network-connect() {
+    local network="$1"
+    local container="$2"
+
+    common-validate-required "$network" "network name" || return 2
+    common-validate-required "$container" "container ID/name" || return 2
+
+    local config="{\"Container\":\"${container}\"}"
+
+    log-info "Connecting container to network" "container=$container" "network=$network"
+    docker-api-post "networks/${network}/connect" "$config"
+}
+
+# Disconnect container from network
+#
+# Function: docker-network-disconnect
+# Description: Disconnect container from network
+# Parameters:
+#   $1 - Network name (required)
+#   $2 - Container ID/name (required)
+#   --force|-f - Force disconnection
+# Returns:
+#   0 - Success
+#   1 - Disconnection failed
+# Example:
+#   docker-network-disconnect mynet nginx --force
+#
+docker-network-disconnect() {
+    local network="$1"
+    local container="$2"
+    local force="false"
+
+    if [[ "$3" == "--force" ]] || [[ "$3" == "-f" ]]; then
+        force="true"
+    fi
+
+    common-validate-required "$network" "network name" || return 2
+    common-validate-required "$container" "container ID/name" || return 2
+
+    local config="{\"Container\":\"${container}\",\"Force\":${force}}"
+
+    log-info "Disconnecting container from network" "container=$container" "network=$network"
+    docker-api-post "networks/${network}/disconnect" "$config"
+}
+
+# Prune networks
+#
+# Function: docker-network-prune
+# Description: Remove unused networks
+# Output: JSON prune results
+# Example:
+#   docker-network-prune
+#
+docker-network-prune() {
+    log-info "Pruning networks"
+    docker-api-post "networks/prune"
+}
+
+# Track network for cleanup
+#
+# Function: docker-network-track
+# Description: Register network for automatic cleanup on exit
+# Parameters:
+#   $1 - Network name (required)
+# Example:
+#   docker-network-track test-network
+#
+docker-network-track() {
+    local network="$1"
+
+    common-validate-required "$network" "network name" || return 2
+
+    _DOCKER_TRACKED_NETWORKS[$network]="1"
+    log-debug "Tracking network" "name=$network"
+}
+
+# ------------------------------
+# Event Monitoring
+# ------------------------------
+
+# Monitor Docker events
+#
+# Function: docker-events-monitor
+# Description: Start Docker event monitoring
+# Parameters:
+#   --background - Run in background
+# Returns:
+#   0 - Success
+#   1 - Already running
+# Example:
+#   docker-events-monitor --background
+#
+docker-events-monitor() {
+    if [[ "$DOCKER_EVENT_MONITOR_ACTIVE" == "true" ]]; then
+        log-warn "Event monitor already running" "pid=$DOCKER_EVENT_MONITOR_PID"
+        return 1
+    fi
+
+    local background="false"
+    if [[ "$1" == "--background" ]]; then
+        background="true"
+    fi
+
+    log-info "Starting Docker event monitor"
+
+    if [[ "$background" == "true" ]]; then
+        (docker-events-stream) &
+        DOCKER_EVENT_MONITOR_PID=$!
+        DOCKER_EVENT_MONITOR_ACTIVE="true"
+
+        # Track with lifecycle if available
+        if [[ "$DOCKER_LIFECYCLE_AVAILABLE" == "true" ]]; then
+            lifecycle-track-job $DOCKER_EVENT_MONITOR_PID
+        fi
+
+        log-info "Event monitor started in background" "pid=$DOCKER_EVENT_MONITOR_PID"
+    else
+        docker-events-stream
+    fi
+}
+
+# Stream Docker events (internal)
+#
+# Function: docker-events-stream
+# Description: Stream and process Docker events
+# Example:
+#   docker-events-stream  # Runs continuously
+#
+docker-events-stream() {
+    docker-api-stream "events" | while read -r event; do
+        if [[ -n "$event" ]]; then
+            # Parse event and emit
+            local event_type
+            event_type=$(echo "$event" | _docker-parse-json '.Type')
+
+            local action
+            action=$(echo "$event" | _docker-parse-json '.Action')
+
+            local actor_id
+            actor_id=$(echo "$event" | _docker-parse-json '.Actor.ID')
+
+            log-debug "Docker event" "type=$event_type" "action=$action" "actor=${actor_id:0:12}"
+
+            # Emit specific events based on type and action
+            case "${event_type}:${action}" in
+                container:create)
+                    _docker-emit "$DOCKER_EVENT_CONTAINER_CREATE" "id=$actor_id"
+                    ;;
+                container:start)
+                    _docker-emit "$DOCKER_EVENT_CONTAINER_START" "id=$actor_id"
+                    ;;
+                container:stop)
+                    _docker-emit "$DOCKER_EVENT_CONTAINER_STOP" "id=$actor_id"
+                    ;;
+                container:die)
+                    _docker-emit "$DOCKER_EVENT_CONTAINER_DIE" "id=$actor_id"
+                    ;;
+                container:destroy)
+                    _docker-emit "$DOCKER_EVENT_CONTAINER_DESTROY" "id=$actor_id"
+                    ;;
+                image:pull)
+                    _docker-emit "$DOCKER_EVENT_IMAGE_PULL" "id=$actor_id"
+                    ;;
+                volume:create)
+                    _docker-emit "$DOCKER_EVENT_VOLUME_CREATE" "id=$actor_id"
+                    ;;
+                network:create)
+                    _docker-emit "$DOCKER_EVENT_NETWORK_CREATE" "id=$actor_id"
+                    ;;
+            esac
+        fi
+    done
+}
+
+# Stop event monitor
+#
+# Function: docker-events-stop
+# Description: Stop Docker event monitoring
+# Returns:
+#   0 - Success
+#   1 - Not running
+# Example:
+#   docker-events-stop
+#
+docker-events-stop() {
+    if [[ "$DOCKER_EVENT_MONITOR_ACTIVE" != "true" ]]; then
+        log-warn "Event monitor not running"
+        return 1
+    fi
+
+    if [[ -n "$DOCKER_EVENT_MONITOR_PID" ]] && kill -0 "$DOCKER_EVENT_MONITOR_PID" 2>/dev/null; then
+        log-info "Stopping event monitor" "pid=$DOCKER_EVENT_MONITOR_PID"
+        kill "$DOCKER_EVENT_MONITOR_PID" 2>/dev/null || true
+        wait "$DOCKER_EVENT_MONITOR_PID" 2>/dev/null || true
+    fi
+
+    DOCKER_EVENT_MONITOR_PID=""
+    DOCKER_EVENT_MONITOR_ACTIVE="false"
+    log-info "Event monitor stopped"
+}
+
+# Check event monitor status
+#
+# Function: docker-events-status
+# Description: Check if event monitor is running
+# Output: Status message
+# Returns:
+#   0 - Running
+#   1 - Not running
+# Example:
+#   docker-events-status
+#
+docker-events-status() {
+    if [[ "$DOCKER_EVENT_MONITOR_ACTIVE" == "true" ]] && [[ -n "$DOCKER_EVENT_MONITOR_PID" ]]; then
+        if kill -0 "$DOCKER_EVENT_MONITOR_PID" 2>/dev/null; then
+            echo "Event monitor is running (PID: $DOCKER_EVENT_MONITOR_PID)"
+            return 0
+        else
+            echo "Event monitor is not running (stale PID: $DOCKER_EVENT_MONITOR_PID)"
+            DOCKER_EVENT_MONITOR_ACTIVE="false"
+            DOCKER_EVENT_MONITOR_PID=""
+            return 1
+        fi
+    else
+        echo "Event monitor is not running"
+        return 1
+    fi
+}
+
+# ------------------------------
+# System Operations
+# ------------------------------
+
+# Prune system (containers, images, volumes, networks)
+#
+# Function: docker-system-prune
+# Description: Clean up Docker system (remove unused resources)
+# Parameters:
+#   --all|-a - Remove all unused images (not just dangling)
+#   --volumes - Also prune volumes
+# Returns:
+#   0 - Success
+# Example:
+#   docker-system-prune --all --volumes
+#
+docker-system-prune() {
+    local all="false"
+    local volumes="false"
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --all|-a) all="true"; shift ;;
+            --volumes) volumes="true"; shift ;;
+            *) shift ;;
+        esac
+    done
+
+    log-warn "Pruning Docker system" "all=$all" "volumes=$volumes"
+
+    # Prune containers
+    log-info "Pruning stopped containers"
+    docker-api-post "containers/prune"
+
+    # Prune images
+    if [[ "$all" == "true" ]]; then
+        log-info "Pruning all unused images"
+        docker-image-prune --all
+    else
+        log-info "Pruning dangling images"
+        docker-image-prune
+    fi
+
+    # Prune volumes if requested
+    if [[ "$volumes" == "true" ]]; then
+        log-info "Pruning volumes"
+        docker-volume-prune
+    fi
+
+    # Prune networks
+    log-info "Pruning networks"
+    docker-network-prune
+
+    log-success "System prune complete"
+}
+
+# ------------------------------
+# Dry-Run Mode
+# ------------------------------
+
+# Enable dry-run mode
+#
+# Function: docker-enable-dry-run
+# Description: Enable dry-run mode (no actual Docker operations)
+# Example:
+#   docker-enable-dry-run
+#
+docker-enable-dry-run() {
+    export DOCKER_DRY_RUN=true
+    log-info "Dry-run mode enabled"
+}
+
+# Disable dry-run mode
+#
+# Function: docker-disable-dry-run
+# Description: Disable dry-run mode
+# Example:
+#   docker-disable-dry-run
+#
+docker-disable-dry-run() {
+    export DOCKER_DRY_RUN=false
+    log-info "Dry-run mode disabled"
+}
+
+# Check if dry-run mode is enabled
+#
+# Function: docker-is-dry-run
+# Description: Check if currently in dry-run mode
+# Returns:
+#   0 - Dry-run enabled
+#   1 - Dry-run disabled
+# Example:
+#   docker-is-dry-run && echo "Dry run mode active"
+#
+docker-is-dry-run() {
+    [[ "${DOCKER_DRY_RUN:-false}" == "true" ]]
+}
+
+# ------------------------------
+# Cleanup
+# ------------------------------
+
+# Cleanup function (called automatically via lifecycle)
+#
+# Function: docker-cleanup
+# Description: Clean up tracked Docker resources
+# Example:
+#   docker-cleanup  # Usually called automatically on exit
+#
+docker-cleanup() {
+    log-debug "Cleaning up Docker extension"
+
+    # Stop event monitor if running
+    if [[ "$DOCKER_EVENT_MONITOR_ACTIVE" == "true" ]]; then
+        docker-events-stop
+    fi
+
+    # Stop tracked containers
+    for container in "${(@k)_DOCKER_TRACKED_CONTAINERS}"; do
+        log-debug "Stopping tracked container" "name=$container"
+        docker-container-stop "$container" 2>/dev/null || true
+    done
+
+    # Remove tracked volumes
+    for volume in "${(@k)_DOCKER_TRACKED_VOLUMES}"; do
+        log-debug "Removing tracked volume" "name=$volume"
+        docker-volume-remove "$volume" 2>/dev/null || true
+    done
+
+    # Remove tracked networks
+    for network in "${(@k)_DOCKER_TRACKED_NETWORKS}"; do
+        log-debug "Removing tracked network" "name=$network"
+        docker-network-remove "$network" 2>/dev/null || true
+    done
+
+    # Clear tracking
+    _DOCKER_TRACKED_CONTAINERS=()
+    _DOCKER_TRACKED_VOLUMES=()
+    _DOCKER_TRACKED_NETWORKS=()
+}
+
+# ------------------------------
+# Utility Functions
+# ------------------------------
+
+# Display version
+#
+# Function: docker-ext-version
+# Description: Display extension version
+# Output: Version string
+# Example:
+#   docker-ext-version
+#
+docker-ext-version() {
+    echo "$DOCKER_VERSION"
+}
+
+# Display help
+#
+# Function: docker-help
+# Description: Display comprehensive help information
+# Example:
+#   docker-help
+#
+docker-help() {
+    cat <<EOF
+_docker - Docker API Client and Management System
+
+Version: $DOCKER_VERSION
+
+INTEGRATION STATUS:
+  _common:    yes (required)
+  _log:       ${DOCKER_LOG_AVAILABLE:-false}
+  _events:    ${DOCKER_EVENTS_AVAILABLE:-false}
+  _cache:     ${DOCKER_CACHE_AVAILABLE:-false}
+  _lifecycle: ${DOCKER_LIFECYCLE_AVAILABLE:-false}
+  _config:    ${DOCKER_CONFIG_AVAILABLE:-false}
+
+USAGE:
+  source "\${DOTLIB}/_docker"
+
+LOW-LEVEL API:
+  docker-api-get PATH           Execute GET request
+  docker-api-post PATH [DATA]   Execute POST request
+  docker-api-put PATH [DATA]    Execute PUT request
+  docker-api-delete PATH        Execute DELETE request
+  docker-api-head PATH          Execute HEAD request
+  docker-api-stream PATH        Stream API endpoint
+
+SYSTEM:
+  docker-check-available        Check if Docker is accessible
+  docker-require-available      Exit if Docker not available
+  docker-info                   Get system information
+  docker-version                Get Docker version
+  docker-disk-usage             Get disk usage statistics
+  docker-ping                   Test Docker connectivity
+  docker-system-prune [FLAGS]   Clean up unused resources
+
+CONTAINERS:
+  docker-container-list [--all]
+  docker-container-inspect ID
+  docker-container-create CONFIG
+  docker-container-start ID
+  docker-container-stop ID [TIMEOUT]
+  docker-container-restart ID
+  docker-container-kill ID [SIGNAL]
+  docker-container-remove ID [FLAGS]
+  docker-container-logs ID [FLAGS]
+  docker-container-stats ID [--stream]
+  docker-container-exec ID COMMAND...
+  docker-container-pause ID
+  docker-container-unpause ID
+  docker-container-track ID
+
+IMAGES:
+  docker-image-list [--all]
+  docker-image-inspect NAME
+  docker-image-pull NAME
+  docker-image-remove NAME [--force]
+  docker-image-tag SOURCE TARGET
+  docker-image-search TERM
+  docker-image-prune [--all]
+
+VOLUMES:
+  docker-volume-list
+  docker-volume-inspect NAME
+  docker-volume-create NAME [DRIVER]
+  docker-volume-remove NAME [--force]
+  docker-volume-prune
+  docker-volume-track NAME
+
+NETWORKS:
+  docker-network-list
+  docker-network-inspect NAME
+  docker-network-create NAME [DRIVER]
+  docker-network-remove NAME
+  docker-network-connect NETWORK CONTAINER
+  docker-network-disconnect NETWORK CONTAINER [--force]
+  docker-network-prune
+  docker-network-track NAME
+
+EVENTS:
+  docker-events-monitor [--background]
+  docker-events-stop
+  docker-events-status
+
+UTILITIES:
+  docker-enable-dry-run
+  docker-disable-dry-run
+  docker-is-dry-run
+  docker-cleanup
+  docker-ext-version
+  docker-help
+  docker-self-test
+
+For detailed documentation: cat ~/.local/docs/lib/_docker.md
+EOF
+}
+
+# Self-test
+#
+# Function: docker-self-test
+# Description: Run comprehensive self-tests
+# Returns:
+#   0 - All tests passed
+#   1 - Some tests failed
+# Example:
+#   docker-self-test
+#
+docker-self-test() {
+    log-info "Running _docker v$DOCKER_VERSION self-test"
+    local tests_passed=0
+    local tests_failed=0
+
+    # Test 1: Docker availability
+    if docker-check-available 2>/dev/null; then
+        log-info "✓ Docker is available"
+        ((tests_passed++))
+    else
+        log-warn "✗ Docker is not available (expected if not running)"
+        ((tests_failed++))
+    fi
+
+    # Test 2: Dry-run mode
+    docker-enable-dry-run
+    if docker-is-dry-run; then
+        log-info "✓ Dry-run mode works"
+        ((tests_passed++))
+    else
+        log-error "✗ Dry-run mode failed"
+        ((tests_failed++))
+    fi
+    docker-disable-dry-run
+
+    # Test 3: Integration detection
+    log-info "Integration status:"
+    log-info "  _events:    $DOCKER_EVENTS_AVAILABLE"
+    log-info "  _cache:     $DOCKER_CACHE_AVAILABLE"
+    log-info "  _lifecycle: $DOCKER_LIFECYCLE_AVAILABLE"
+    log-info "  _config:    $DOCKER_CONFIG_AVAILABLE"
+    ((tests_passed++))
+
+    # Test 4: Tracking
+    docker-container-track "test-container"
+    if [[ -n "${_DOCKER_TRACKED_CONTAINERS[test-container]}" ]]; then
+        log-info "✓ Container tracking works"
+        ((tests_passed++))
+    else
+        log-error "✗ Container tracking failed"
+        ((tests_failed++))
+    fi
+    unset "_DOCKER_TRACKED_CONTAINERS[test-container]"
+
+    log-info ""
+    log-info "Self-tests complete: $tests_passed passed, $tests_failed failed"
+
+    if [[ $tests_failed -eq 0 ]]; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+# ------------------------------
+# Initialization
+# ------------------------------
+
+# Initialize directories
+_docker-init-dirs
+
+# Auto-cleanup integration
+if [[ "$DOCKER_AUTO_CLEANUP" == "true" ]] && [[ "$DOCKER_LIFECYCLE_AVAILABLE" == "true" ]]; then
+    lifecycle-cleanup docker-cleanup
+fi
+
+# Log module load
+log-debug "_docker extension loaded" "version=$DOCKER_VERSION" "integrations=events:$DOCKER_EVENTS_AVAILABLE,cache:$DOCKER_CACHE_AVAILABLE,lifecycle:$DOCKER_LIFECYCLE_AVAILABLE"

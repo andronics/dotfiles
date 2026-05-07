@@ -1,0 +1,962 @@
+#!/usr/bin/env zsh
+# _ai_claude - Claude Code adapter for AI definition system
+# Part of the dotfiles library ecosystem
+# Version: 1.0.0
+
+# Source guard
+[[ -n "$_AI_CLAUDE_LOADED" ]] && return 0
+declare -g -r _AI_CLAUDE_LOADED=true
+
+# Version declaration
+declare -g -r AI_CLAUDE_VERSION="1.0.0"
+
+# ------------------------------
+# Dependencies
+# ------------------------------
+
+# Load core AI library (required)
+if ! source "${DOTLIB}/_ai_core" 2>/dev/null; then
+    echo "[ERROR] _ai_claude requires _ai_core - cannot load" >&2
+    return 1
+fi
+
+# Load common library (optional)
+if source "${DOTLIB}/_common" 2>/dev/null; then
+    declare -g AI_COMMON_AVAILABLE=true
+else
+    declare -g AI_COMMON_AVAILABLE=false
+fi
+
+# Load log library if available (optional)
+declare -g AI_LOG_AVAILABLE=false
+if command -v log-info >/dev/null 2>&1; then
+    AI_LOG_AVAILABLE=true
+fi
+
+# ------------------------------
+# Configuration Variables
+# ------------------------------
+
+# Claude Code CLI settings
+declare -g CLAUDE_CLI_PATH="${CLAUDE_CLI_PATH:-claude}"
+declare -g CLAUDE_MIN_VERSION="${CLAUDE_MIN_VERSION:-0.1.0}"
+declare -g CLAUDE_EXEC_TIMEOUT="${CLAUDE_EXEC_TIMEOUT:-120}"  # seconds
+declare -g CLAUDE_SESSION_TTL="${CLAUDE_SESSION_TTL:-3600}"   # 1 hour
+
+# Default model
+declare -g CLAUDE_DEFAULT_MODEL="${CLAUDE_DEFAULT_MODEL:-sonnet}"
+
+# Session management
+declare -g CLAUDE_SESSION_DIR="${AI_STATE_DIR}/claude/sessions"
+declare -g CLAUDE_CONFIG_FILE="${AI_DATA_DIR}/claude/config.json"
+
+# ------------------------------
+# Internal State
+# ------------------------------
+
+# Track Claude availability
+declare -g _CLAUDE_AVAILABLE=""
+declare -g _CLAUDE_VERSION=""
+
+# Session cache
+declare -g -A _CLAUDE_SESSIONS=()
+
+# ------------------------------
+# Event Names
+# ------------------------------
+
+declare -g -r AI_EVENT_CLAUDE_DETECTED="ai.claude.detected"
+declare -g -r AI_EVENT_CLAUDE_EXEC="ai.claude.exec"
+declare -g -r AI_EVENT_CLAUDE_SESSION_START="ai.claude.session.start"
+declare -g -r AI_EVENT_CLAUDE_SESSION_END="ai.claude.session.end"
+
+# ------------------------------
+# Error Codes
+# ------------------------------
+
+declare -g -r CLAUDE_ERR_NOT_INSTALLED=30
+declare -g -r CLAUDE_ERR_INCOMPATIBLE=31
+declare -g -r CLAUDE_ERR_EXEC_FAILED=32
+declare -g -r CLAUDE_ERR_TIMEOUT=33
+declare -g -r CLAUDE_ERR_JSON_PARSE=34
+declare -g -r CLAUDE_ERR_SESSION_NOT_FOUND=35
+declare -g -r CLAUDE_ERR_CONFIG_FAILED=36
+
+# ------------------------------
+# Logging Wrapper
+# ------------------------------
+
+_claude-log() {
+    if [[ "$AI_LOG_AVAILABLE" == "true" ]]; then
+        _ai-log "$@"
+    else
+        local level="$1"
+        shift
+        echo "[$level] claude $*" >&2
+    fi
+}
+
+# ------------------------------
+# Detection & Validation
+# ------------------------------
+
+# Check if Claude Code CLI is installed
+# Usage: claude-check-installed
+# Returns: 0 if installed, 1 otherwise
+claude-check-installed() {
+    if [[ -n "$_CLAUDE_AVAILABLE" ]]; then
+        [[ "$_CLAUDE_AVAILABLE" == "true" ]] && return 0 || return 1
+    fi
+
+    if command -v "$CLAUDE_CLI_PATH" >/dev/null 2>&1; then
+        _CLAUDE_AVAILABLE="true"
+        _claude-log debug "Claude Code CLI found at: $(which $CLAUDE_CLI_PATH)"
+        _ai-emit "$AI_EVENT_CLAUDE_DETECTED" "path=$(which $CLAUDE_CLI_PATH)"
+        return 0
+    else
+        _CLAUDE_AVAILABLE="false"
+        _claude-log debug "Claude Code CLI not found"
+        return 1
+    fi
+}
+
+# Get Claude Code CLI version
+# Usage: claude-get-version
+# Returns: 0 on success (version to stdout), non-zero on error
+claude-get-version() {
+    if [[ -n "$_CLAUDE_VERSION" ]]; then
+        echo "$_CLAUDE_VERSION"
+        return 0
+    fi
+
+    if ! claude-check-installed; then
+        _claude-log error "Claude Code CLI not installed"
+        return $CLAUDE_ERR_NOT_INSTALLED
+    fi
+
+    # Try to get version from claude --version
+    local version
+    version=$($CLAUDE_CLI_PATH --version 2>/dev/null | grep -oP '\d+\.\d+\.\d+' | head -1)
+
+    if [[ -z "$version" ]]; then
+        _claude-log warn "Could not determine Claude Code version"
+        version="unknown"
+    fi
+
+    _CLAUDE_VERSION="$version"
+    echo "$version"
+    return 0
+}
+
+# Check if Claude Code version is compatible
+# Usage: claude-check-compatibility
+# Returns: 0 if compatible, 1 otherwise
+claude-check-compatibility() {
+    local version
+    version=$(claude-get-version)
+    if [[ $? -ne 0 ]]; then
+        return $CLAUDE_ERR_NOT_INSTALLED
+    fi
+
+    if [[ "$version" == "unknown" ]]; then
+        _claude-log warn "Cannot verify compatibility (version unknown)"
+        return 0  # Assume compatible if we can't check
+    fi
+
+    # Simple version comparison (assumes semantic versioning)
+    local min_version="$CLAUDE_MIN_VERSION"
+
+    if [[ "$version" < "$min_version" ]]; then
+        _claude-log error "Claude Code version $version < required $min_version"
+        return $CLAUDE_ERR_INCOMPATIBLE
+    fi
+
+    _claude-log debug "Claude Code version $version is compatible"
+    return 0
+}
+
+# ------------------------------
+# Headless Execution
+# ------------------------------
+
+# Execute Claude Code command with text output
+# Usage: claude-exec <prompt> [--model <model>] [--timeout <seconds>]
+# Returns: 0 on success (output to stdout), non-zero on error
+claude-exec() {
+    local prompt=""
+    local model="$CLAUDE_DEFAULT_MODEL"
+    local timeout="$CLAUDE_EXEC_TIMEOUT"
+
+    # Parse arguments
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --model)
+                model="$2"
+                shift 2
+                ;;
+            --timeout)
+                timeout="$2"
+                shift 2
+                ;;
+            *)
+                if [[ -z "$prompt" ]]; then
+                    prompt="$1"
+                else
+                    _claude-log error "Unexpected argument: $1"
+                    return $AI_ERR_INVALID_ARGUMENT
+                fi
+                shift
+                ;;
+        esac
+    done
+
+    if [[ -z "$prompt" ]]; then
+        _claude-log error "claude-exec: prompt required"
+        return $AI_ERR_INVALID_ARGUMENT
+    fi
+
+    if ! claude-check-installed; then
+        return $CLAUDE_ERR_NOT_INSTALLED
+    fi
+
+    _claude-log debug "Executing Claude: $prompt (model=$model, timeout=$timeout)"
+
+    # Execute with timeout
+    local output
+    local exit_code
+
+    # Use timeout command if available
+    if command -v timeout >/dev/null 2>&1; then
+        output=$(timeout "$timeout" "$CLAUDE_CLI_PATH" --model "$model" "$prompt" 2>&1)
+        exit_code=$?
+    else
+        output=$($CLAUDE_CLI_PATH --model "$model" "$prompt" 2>&1)
+        exit_code=$?
+    fi
+
+    if [[ $exit_code -eq 124 ]]; then
+        _claude-log error "Claude execution timed out after ${timeout}s"
+        return $CLAUDE_ERR_TIMEOUT
+    elif [[ $exit_code -ne 0 ]]; then
+        _claude-log error "Claude execution failed: $output"
+        return $CLAUDE_ERR_EXEC_FAILED
+    fi
+
+    _ai-emit "$AI_EVENT_CLAUDE_EXEC" "model=$model" "prompt_len=${#prompt}"
+
+    echo "$output"
+    return 0
+}
+
+# Execute Claude Code command with JSON output
+# Usage: claude-exec-json <prompt> [--model <model>] [--timeout <seconds>]
+# Returns: 0 on success (JSON to stdout), non-zero on error
+claude-exec-json() {
+    local prompt=""
+    local model="$CLAUDE_DEFAULT_MODEL"
+    local timeout="$CLAUDE_EXEC_TIMEOUT"
+
+    # Parse arguments
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --model)
+                model="$2"
+                shift 2
+                ;;
+            --timeout)
+                timeout="$2"
+                shift 2
+                ;;
+            *)
+                if [[ -z "$prompt" ]]; then
+                    prompt="$1"
+                else
+                    _claude-log error "Unexpected argument: $1"
+                    return $AI_ERR_INVALID_ARGUMENT
+                fi
+                shift
+                ;;
+        esac
+    done
+
+    if [[ -z "$prompt" ]]; then
+        _claude-log error "claude-exec-json: prompt required"
+        return $AI_ERR_INVALID_ARGUMENT
+    fi
+
+    # Get text output
+    local text_output
+    text_output=$(claude-exec "$prompt" --model "$model" --timeout "$timeout")
+    local exec_status=$?
+
+    if [[ $exec_status -ne 0 ]]; then
+        return $exec_status
+    fi
+
+    # Wrap in JSON
+    local json_output
+    json_output=$(jq -n --arg text "$text_output" '{text: $text, model: $model, timestamp: now}' --arg model "$model")
+
+    if [[ $? -ne 0 ]]; then
+        _claude-log error "Failed to create JSON output"
+        return $CLAUDE_ERR_JSON_PARSE
+    fi
+
+    echo "$json_output"
+    return 0
+}
+
+# ------------------------------
+# Session Management
+# ------------------------------
+
+# Start a new Claude session
+# Usage: claude-session-start <initial_prompt> [--model <model>]
+# Returns: 0 on success (session_id to stdout), non-zero on error
+claude-session-start() {
+    local prompt=""
+    local model="$CLAUDE_DEFAULT_MODEL"
+
+    # Parse arguments
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --model)
+                model="$2"
+                shift 2
+                ;;
+            *)
+                if [[ -z "$prompt" ]]; then
+                    prompt="$1"
+                else
+                    _claude-log error "Unexpected argument: $1"
+                    return $AI_ERR_INVALID_ARGUMENT
+                fi
+                shift
+                ;;
+        esac
+    done
+
+    if [[ -z "$prompt" ]]; then
+        _claude-log error "claude-session-start: initial_prompt required"
+        return $AI_ERR_INVALID_ARGUMENT
+    fi
+
+    # Generate session ID
+    local session_id="claude_$(date +%s)_$$_$RANDOM"
+
+    # Create session directory
+    local session_dir="$CLAUDE_SESSION_DIR/$session_id"
+    mkdir -p "$session_dir"
+
+    # Execute initial prompt
+    local response
+    response=$(claude-exec "$prompt" --model "$model")
+    local exec_status=$?
+
+    if [[ $exec_status -ne 0 ]]; then
+        rm -rf "$session_dir"
+        return $exec_status
+    fi
+
+    # Store session metadata
+    cat > "$session_dir/meta.json" <<EOF
+{
+  "session_id": "$session_id",
+  "model": "$model",
+  "created": $(date +%s),
+  "last_accessed": $(date +%s),
+  "message_count": 1
+}
+EOF
+
+    # Store conversation history
+    cat > "$session_dir/history.json" <<EOF
+[
+  {
+    "role": "user",
+    "content": $(echo "$prompt" | jq -R -s .),
+    "timestamp": $(date +%s)
+  },
+  {
+    "role": "assistant",
+    "content": $(echo "$response" | jq -R -s .),
+    "timestamp": $(date +%s)
+  }
+]
+EOF
+
+    # Cache session in memory
+    _CLAUDE_SESSIONS[$session_id]="$session_dir"
+
+    _ai-emit "$AI_EVENT_CLAUDE_SESSION_START" "session_id=$session_id" "model=$model"
+    _claude-log info "Claude session started: $session_id"
+
+    echo "$session_id"
+    return 0
+}
+
+# Continue an existing Claude session
+# Usage: claude-session-continue <session_id> <prompt>
+# Returns: 0 on success (response to stdout), non-zero on error
+claude-session-continue() {
+    local session_id="$1"
+    local prompt="$2"
+
+    if [[ -z "$session_id" || -z "$prompt" ]]; then
+        _claude-log error "claude-session-continue: session_id and prompt required"
+        return $AI_ERR_INVALID_ARGUMENT
+    fi
+
+    # Find session directory
+    local session_dir="${_CLAUDE_SESSIONS[$session_id]:-}"
+    if [[ -z "$session_dir" ]]; then
+        session_dir="$CLAUDE_SESSION_DIR/$session_id"
+    fi
+
+    if [[ ! -d "$session_dir" ]]; then
+        _claude-log error "Session not found: $session_id"
+        return $CLAUDE_ERR_SESSION_NOT_FOUND
+    fi
+
+    # Load session metadata
+    local meta
+    meta=$(<"$session_dir/meta.json")
+    local model
+    model=$(echo "$meta" | jq -r '.model')
+
+    # Execute prompt
+    local response
+    response=$(claude-exec "$prompt" --model "$model")
+    local exec_status=$?
+
+    if [[ $exec_status -ne 0 ]]; then
+        return $exec_status
+    fi
+
+    # Update history
+    local history
+    history=$(<"$session_dir/history.json")
+
+    history=$(echo "$history" | jq --arg prompt "$prompt" --arg response "$response" '. += [
+      {
+        "role": "user",
+        "content": $prompt,
+        "timestamp": now
+      },
+      {
+        "role": "assistant",
+        "content": $response,
+        "timestamp": now
+      }
+    ]')
+
+    echo "$history" > "$session_dir/history.json"
+
+    # Update metadata
+    meta=$(echo "$meta" | jq '.last_accessed = now | .message_count += 2')
+    echo "$meta" > "$session_dir/meta.json"
+
+    echo "$response"
+    return 0
+}
+
+# End a Claude session
+# Usage: claude-session-end <session_id>
+# Returns: 0 on success, non-zero on error
+claude-session-end() {
+    local session_id="$1"
+
+    if [[ -z "$session_id" ]]; then
+        _claude-log error "claude-session-end: session_id required"
+        return $AI_ERR_INVALID_ARGUMENT
+    fi
+
+    local session_dir="${_CLAUDE_SESSIONS[$session_id]:-}"
+    if [[ -z "$session_dir" ]]; then
+        session_dir="$CLAUDE_SESSION_DIR/$session_id"
+    fi
+
+    if [[ ! -d "$session_dir" ]]; then
+        _claude-log warn "Session not found: $session_id"
+        return 0  # Already ended
+    fi
+
+    # Remove from memory cache
+    unset "_CLAUDE_SESSIONS[$session_id]"
+
+    # Archive or delete session
+    if [[ "$AI_KEEP_SESSION_HISTORY" == "true" ]]; then
+        _claude-log debug "Session archived: $session_id"
+    else
+        rm -rf "$session_dir"
+        _claude-log debug "Session deleted: $session_id"
+    fi
+
+    _ai-emit "$AI_EVENT_CLAUDE_SESSION_END" "session_id=$session_id"
+
+    return 0
+}
+
+# ------------------------------
+# Configuration Management
+# ------------------------------
+
+# Get Claude configuration value
+# Usage: claude-config-get <key> [default]
+# Returns: 0 on success (value to stdout), 1 if not found
+claude-config-get() {
+    local key="$1"
+    local default="${2:-}"
+
+    if [[ -z "$key" ]]; then
+        _claude-log error "claude-config-get: key required"
+        return $AI_ERR_INVALID_ARGUMENT
+    fi
+
+    if [[ ! -f "$CLAUDE_CONFIG_FILE" ]]; then
+        echo "$default"
+        return 1
+    fi
+
+    local value
+    value=$(jq -r ".$key // empty" "$CLAUDE_CONFIG_FILE" 2>/dev/null)
+
+    if [[ -z "$value" ]]; then
+        echo "$default"
+        return 1
+    fi
+
+    echo "$value"
+    return 0
+}
+
+# Set Claude configuration value
+# Usage: claude-config-set <key> <value>
+# Returns: 0 on success, non-zero on error
+claude-config-set() {
+    local key="$1"
+    local value="$2"
+
+    if [[ -z "$key" ]]; then
+        _claude-log error "claude-config-set: key and value required"
+        return $AI_ERR_INVALID_ARGUMENT
+    fi
+
+    mkdir -p "$(dirname "$CLAUDE_CONFIG_FILE")"
+
+    # Create config if it doesn't exist
+    if [[ ! -f "$CLAUDE_CONFIG_FILE" ]]; then
+        echo '{}' > "$CLAUDE_CONFIG_FILE"
+    fi
+
+    # Update config
+    local new_config
+    new_config=$(jq --arg key "$key" --arg value "$value" '.[$key] = $value' "$CLAUDE_CONFIG_FILE")
+
+    if [[ $? -ne 0 ]]; then
+        _claude-log error "Failed to update configuration"
+        return $CLAUDE_ERR_CONFIG_FAILED
+    fi
+
+    echo "$new_config" > "$CLAUDE_CONFIG_FILE"
+    _claude-log debug "Config updated: $key=$value"
+
+    return 0
+}
+
+# Get current Claude model
+# Usage: claude-model-get
+# Returns: 0 (model name to stdout)
+claude-model-get() {
+    local model
+    model=$(claude-config-get "model" "$CLAUDE_DEFAULT_MODEL")
+    echo "$model"
+    return 0
+}
+
+# Set Claude model
+# Usage: claude-model-set <model>
+# Returns: 0 on success
+claude-model-set() {
+    local model="$1"
+
+    if [[ -z "$model" ]]; then
+        _claude-log error "claude-model-set: model required"
+        return $AI_ERR_INVALID_ARGUMENT
+    fi
+
+    claude-config-set "model" "$model"
+}
+
+# ------------------------------
+# Initialization
+# ------------------------------
+
+# Initialize Claude adapter
+# Usage: claude-init
+claude-init() {
+    _claude-log debug "Initializing Claude adapter v$AI_CLAUDE_VERSION"
+
+    # Ensure directories exist
+    mkdir -p "$CLAUDE_SESSION_DIR"
+    mkdir -p "$(dirname "$CLAUDE_CONFIG_FILE")"
+
+    # Check if Claude is installed
+    if claude-check-installed; then
+        local version
+        version=$(claude-get-version)
+        _claude-log info "Claude Code CLI detected (version: $version)"
+    else
+        _claude-log warn "Claude Code CLI not found - some features will be unavailable"
+    fi
+
+    return 0
+}
+
+# ------------------------------
+# Artifact Generation
+# ------------------------------
+
+# Generate Claude skill artifact
+# Usage: claude-generate-skill <skill_name> [--force]
+# Returns: 0 on success (artifact to stdout), non-zero on error
+claude-generate-skill() {
+    local name=""
+    local force=false
+
+    # Parse arguments
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --force|-f)
+                force=true
+                shift
+                ;;
+            *)
+                if [[ -z "$name" ]]; then
+                    name="$1"
+                else
+                    _claude-log error "Unexpected argument: $1"
+                    return $AI_ERR_INVALID_ARGUMENT
+                fi
+                shift
+                ;;
+        esac
+    done
+
+    if [[ -z "$name" ]]; then
+        _claude-log error "claude-generate-skill: skill_name required"
+        return $AI_ERR_INVALID_ARGUMENT
+    fi
+
+    _claude-log debug "Generating skill: $name"
+
+    # Use ai-generate-artifact from core library
+    local force_flag=""
+    [[ "$force" == "true" ]] && force_flag="--force"
+
+    ai-generate-artifact claude "$name" $force_flag
+}
+
+# Generate Claude command artifact
+# Usage: claude-generate-command <command_name> [--force]
+# Returns: 0 on success (artifact to stdout), non-zero on error
+claude-generate-command() {
+    local name=""
+    local force=false
+
+    # Parse arguments
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --force|-f)
+                force=true
+                shift
+                ;;
+            *)
+                if [[ -z "$name" ]]; then
+                    name="$1"
+                else
+                    _claude-log error "Unexpected argument: $1"
+                    return $AI_ERR_INVALID_ARGUMENT
+                fi
+                shift
+                ;;
+        esac
+    done
+
+    if [[ -z "$name" ]]; then
+        _claude-log error "claude-generate-command: command_name required"
+        return $AI_ERR_INVALID_ARGUMENT
+    fi
+
+    _claude-log debug "Generating command: $name"
+
+    local force_flag=""
+    [[ "$force" == "true" ]] && force_flag="--force"
+
+    ai-generate-artifact claude "$name" $force_flag
+}
+
+# Generate Claude agent artifact
+# Usage: claude-generate-agent <agent_name> [--force]
+# Returns: 0 on success (artifact to stdout), non-zero on error
+claude-generate-agent() {
+    local name=""
+    local force=false
+
+    # Parse arguments
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --force|-f)
+                force=true
+                shift
+                ;;
+            *)
+                if [[ -z "$name" ]]; then
+                    name="$1"
+                else
+                    _claude-log error "Unexpected argument: $1"
+                    return $AI_ERR_INVALID_ARGUMENT
+                fi
+                shift
+                ;;
+        esac
+    done
+
+    if [[ -z "$name" ]]; then
+        _claude-log error "claude-generate-agent: agent_name required"
+        return $AI_ERR_INVALID_ARGUMENT
+    fi
+
+    _claude-log debug "Generating agent: $name"
+
+    local force_flag=""
+    [[ "$force" == "true" ]] && force_flag="--force"
+
+    ai-generate-artifact claude "$name" $force_flag
+}
+
+# ------------------------------
+# Artifact Installation
+# ------------------------------
+
+# Get installation path for artifact type
+# Usage: _claude-get-install-path <type> <name>
+# Returns: 0 (path to stdout)
+_claude-get-install-path() {
+    local type="$1"
+    local name="$2"
+
+    local base_dir="${CLAUDE_INSTALL_DIR:-$HOME/.claude}"
+
+    case "$type" in
+        skill)
+            echo "$base_dir/skills/SKILL.md"
+            ;;
+        command)
+            echo "$base_dir/commands/${name}.md"
+            ;;
+        agent)
+            echo "$base_dir/agents/${name}.md"
+            ;;
+        *)
+            _claude-log error "Unknown artifact type: $type"
+            return $AI_ERR_INVALID_ARGUMENT
+            ;;
+    esac
+
+    return 0
+}
+
+# Install Claude artifact
+# Usage: claude-install-artifact <type> <name> <content>
+# Returns: 0 on success, non-zero on error
+claude-install-artifact() {
+    local type="$1"
+    local name="$2"
+    local content="$3"
+
+    if [[ -z "$type" || -z "$name" || -z "$content" ]]; then
+        _claude-log error "claude-install-artifact: type, name, and content required"
+        return $AI_ERR_INVALID_ARGUMENT
+    fi
+
+    local install_path
+    install_path=$(_claude-get-install-path "$type" "$name")
+    local path_status=$?
+
+    if [[ $path_status -ne 0 ]]; then
+        return $path_status
+    fi
+
+    # Create parent directory
+    local parent_dir="$(dirname "$install_path")"
+    if [[ ! -d "$parent_dir" ]]; then
+        mkdir -p "$parent_dir"
+        _claude-log debug "Created directory: $parent_dir"
+    fi
+
+    # Write artifact
+    echo "$content" > "$install_path"
+
+    if [[ $? -ne 0 ]]; then
+        _claude-log error "Failed to write artifact: $install_path"
+        return $AI_ERR_CACHE_OPERATION_FAILED
+    fi
+
+    # Set permissions (readable)
+    chmod 644 "$install_path"
+
+    _claude-log info "Installed $type artifact: $install_path"
+
+    return 0
+}
+
+# Ensure Claude artifact (smart installation)
+# Usage: claude-ensure-artifact <type> <name> [--force]
+# Returns: 0 on success, non-zero on error
+claude-ensure-artifact() {
+    local type=""
+    local name=""
+    local force=false
+
+    # Parse arguments
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --force|-f)
+                force=true
+                shift
+                ;;
+            *)
+                if [[ -z "$type" ]]; then
+                    type="$1"
+                elif [[ -z "$name" ]]; then
+                    name="$1"
+                else
+                    _claude-log error "Unexpected argument: $1"
+                    return $AI_ERR_INVALID_ARGUMENT
+                fi
+                shift
+                ;;
+        esac
+    done
+
+    if [[ -z "$type" || -z "$name" ]]; then
+        _claude-log error "claude-ensure-artifact: type and name required"
+        return $AI_ERR_INVALID_ARGUMENT
+    fi
+
+    local install_path
+    install_path=$(_claude-get-install-path "$type" "$name")
+
+    # Check if already installed and not forced
+    if [[ "$force" == "false" && -f "$install_path" ]]; then
+        # TODO: Add timestamp/hash comparison to detect outdated artifacts
+        _claude-log debug "Artifact already installed: $install_path"
+        return 0
+    fi
+
+    # Generate artifact
+    local artifact
+    case "$type" in
+        skill)
+            artifact=$(claude-generate-skill "$name" --force)
+            ;;
+        command)
+            artifact=$(claude-generate-command "$name" --force)
+            ;;
+        agent)
+            artifact=$(claude-generate-agent "$name" --force)
+            ;;
+        *)
+            _claude-log error "Unknown artifact type: $type"
+            return $AI_ERR_INVALID_ARGUMENT
+            ;;
+    esac
+
+    local gen_status=$?
+    if [[ $gen_status -ne 0 ]]; then
+        _claude-log error "Failed to generate $type artifact: $name"
+        return $gen_status
+    fi
+
+    # Install artifact
+    claude-install-artifact "$type" "$name" "$artifact"
+}
+
+# Ensure all artifacts (batch installation)
+# Usage: claude-ensure-all [--force]
+# Returns: 0 on success
+claude-ensure-all() {
+    local force=false
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --force|-f)
+                force=true
+                shift
+                ;;
+            *)
+                _claude-log error "Unexpected argument: $1"
+                return $AI_ERR_INVALID_ARGUMENT
+                ;;
+        esac
+    done
+
+    _claude-log info "Ensuring all Claude artifacts..."
+
+    # Get all definitions
+    local definitions
+    definitions=$(ai-list-definitions)
+
+    if [[ -z "$definitions" ]]; then
+        _claude-log warn "No definitions found"
+        return 0
+    fi
+
+    local total=0
+    local installed=0
+    local failed=0
+
+    while IFS= read -r def_file; do
+        [[ -z "$def_file" ]] && continue
+        ((total++))
+
+        local name
+        name=$(basename "$def_file" .yml)
+
+        # Load definition to get type
+        local definition
+        definition=$(ai-load-definition "$def_file")
+        local type
+        type=$(printf '%s\n' "$definition" | jq -r '.type // empty' 2>/dev/null)
+
+        if [[ -z "$type" ]]; then
+            _claude-log warn "Skipping $name: no type field"
+            ((failed++))
+            continue
+        fi
+
+        _claude-log debug "[$total] Ensuring $type: $name"
+
+        local force_flag=""
+        [[ "$force" == "true" ]] && force_flag="--force"
+
+        if claude-ensure-artifact "$type" "$name" $force_flag; then
+            ((installed++))
+        else
+            _claude-log error "Failed to ensure $type: $name"
+            ((failed++))
+        fi
+    done <<< "$definitions"
+
+    _claude-log info "Batch ensure complete: total=$total installed=$installed failed=$failed"
+
+    if [[ $failed -gt 0 ]]; then
+        return 1
+    fi
+
+    return 0
+}
+
+# Auto-initialize on load
+claude-init 2>/dev/null || true

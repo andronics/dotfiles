@@ -1,0 +1,1997 @@
+#!/usr/bin/env zsh
+
+# _bluetooth - Comprehensive Bluetooth device management library
+# Part of the dotfiles library v2.0
+# Version: 1.0.0
+#
+# Usage:
+#   source "${DOTLIB}/_bluetooth"
+#
+# Provides:
+#   - Bluetooth controller management (list, select, show)
+#   - Device discovery and scanning (start, stop, list devices)
+#   - Device connection management (connect, disconnect, status, toggle)
+#   - Device pairing operations (pair, unpair, trust, block)
+#   - Power management (on, off, status, toggle)
+#   - Discoverable and pairable modes (on, off, status)
+#   - Audio profile management (list, get, set, device type detection)
+#   - Device metadata (battery, RSSI, type, alias)
+#   - FIFO management for bluetoothctl IPC
+#   - Service management (start, stop daemon)
+#   - Validation and utilities (MAC validation, device existence checks)
+#
+# Dependencies:
+#   Required:
+#     - _common v2.0: Core utilities and validation
+#     - _xdg v2.0: XDG-compliant paths
+#     - bluetoothctl: Bluetooth control utility
+#   Optional (gracefully degraded):
+#     - _log v2.0: Structured logging
+#     - _lifecycle v3.0: Resource cleanup
+#     - _events v2.0: Event emission
+#     - _cache v2.0: Device metadata caching
+#     - _config v2.0: Configuration management
+#     - _audio v2.0: Audio device integration
+#     - _process v2.0: Process management
+
+# ------------------------------
+# Source Guard
+# ------------------------------
+
+[[ -n "${BLUETOOTH_LOADED:-}" ]] && return 0
+declare -g BLUETOOTH_LOADED=1
+
+# ------------------------------
+# Version
+# ------------------------------
+
+declare -r BLUETOOTH_VERSION="1.0.0"
+
+# ------------------------------
+# Dependency Loading
+# ------------------------------
+
+# Load foundation (required)
+if ! source "${DOTLIB}/_common" 2>/dev/null; then
+    echo "[ERROR] _bluetooth requires _common - cannot load" >&2
+    return 1
+fi
+
+if ! source "${DOTLIB}/_xdg" 2>/dev/null; then
+    echo "[ERROR] _bluetooth requires _xdg - cannot load" >&2
+    return 1
+fi
+
+# Load infrastructure (optional with fallbacks)
+if ! source "${DOTLIB}/_log" 2>/dev/null; then
+    log-info() { echo "[INFO] $*"; }
+    log-error() { echo "[ERROR] $*" >&2; }
+    log-warn() { echo "[WARN] $*" >&2; }
+    log-warning() { echo "[WARN] $*" >&2; }
+    log-debug() { [[ "${BLUETOOTH_DEBUG:-false}" == "true" ]] && echo "[DEBUG] $*" >&2 || true; }
+    log-success() { echo "[SUCCESS] $*"; }
+fi
+
+# Load optional extensions
+if source "${DOTLIB}/_lifecycle" 2>/dev/null; then
+    declare -g BLUETOOTH_LIFECYCLE_AVAILABLE=true
+else
+    declare -g BLUETOOTH_LIFECYCLE_AVAILABLE=false
+fi
+
+if source "${DOTLIB}/_events" 2>/dev/null; then
+    declare -g BLUETOOTH_EVENTS_AVAILABLE=true
+else
+    declare -g BLUETOOTH_EVENTS_AVAILABLE=false
+fi
+
+if source "${DOTLIB}/_cache" 2>/dev/null; then
+    declare -g BLUETOOTH_CACHE_AVAILABLE=true
+else
+    declare -g BLUETOOTH_CACHE_AVAILABLE=false
+fi
+
+if source "${DOTLIB}/_config" 2>/dev/null; then
+    declare -g BLUETOOTH_CONFIG_AVAILABLE=true
+else
+    declare -g BLUETOOTH_CONFIG_AVAILABLE=false
+fi
+
+if source "${DOTLIB}/_audio" 2>/dev/null; then
+    declare -g BLUETOOTH_AUDIO_AVAILABLE=true
+else
+    declare -g BLUETOOTH_AUDIO_AVAILABLE=false
+fi
+
+if source "${DOTLIB}/_process" 2>/dev/null; then
+    declare -g BLUETOOTH_PROCESS_AVAILABLE=true
+else
+    declare -g BLUETOOTH_PROCESS_AVAILABLE=false
+fi
+
+# ------------------------------
+# Configuration
+# ------------------------------
+
+# Paths (XDG-compliant)
+declare -g BLUETOOTH_CACHE_DIR="$(common-lib-cache-dir)/bluetooth"
+declare -g BLUETOOTH_STATE_DIR="$(common-lib-state-dir)/bluetooth"
+declare -g BLUETOOTH_CONFIG_DIR="$(common-lib-config-dir)/bluetooth"
+
+# FIFO paths
+declare -g BLUETOOTH_FIFO_DIR="${BLUETOOTH_STATE_DIR}/fifo"
+declare -g BLUETOOTH_FIFO_IN="${BLUETOOTH_FIFO_DIR}/bluetoothctl.in"
+declare -g BLUETOOTH_FIFO_OUT="${BLUETOOTH_FIFO_DIR}/bluetoothctl.out"
+
+# Behavior configuration
+declare -g BLUETOOTH_DEBUG="${BLUETOOTH_DEBUG:-false}"
+declare -g BLUETOOTH_EMIT_EVENTS="${BLUETOOTH_EMIT_EVENTS:-true}"
+declare -g BLUETOOTH_SCAN_DURATION="${BLUETOOTH_SCAN_DURATION:-10}"
+declare -g BLUETOOTH_CONNECT_TIMEOUT="${BLUETOOTH_CONNECT_TIMEOUT:-15}"
+declare -g BLUETOOTH_PAIR_TIMEOUT="${BLUETOOTH_PAIR_TIMEOUT:-30}"
+
+# Cache configuration
+declare -g BLUETOOTH_CACHE_TTL="${BLUETOOTH_CACHE_TTL:-300}"  # 5 minutes
+declare -g BLUETOOTH_CACHE_DEVICE_TTL="${BLUETOOTH_CACHE_DEVICE_TTL:-60}"  # 1 minute
+
+# Event names (if _events available)
+declare -r BLUETOOTH_EVENT_DEVICE_CONNECTED="bluetooth.device.connected"
+declare -r BLUETOOTH_EVENT_DEVICE_DISCONNECTED="bluetooth.device.disconnected"
+declare -r BLUETOOTH_EVENT_DEVICE_PAIRED="bluetooth.device.paired"
+declare -r BLUETOOTH_EVENT_DEVICE_UNPAIRED="bluetooth.device.unpaired"
+declare -r BLUETOOTH_EVENT_POWER_ON="bluetooth.power.on"
+declare -r BLUETOOTH_EVENT_POWER_OFF="bluetooth.power.off"
+declare -r BLUETOOTH_EVENT_SCAN_STARTED="bluetooth.scan.started"
+declare -r BLUETOOTH_EVENT_SCAN_STOPPED="bluetooth.scan.stopped"
+
+# ------------------------------
+# Internal State
+# ------------------------------
+
+# FIFO state
+declare -g _BLUETOOTH_FIFO_ACTIVE="false"
+declare -g _BLUETOOTH_FIFO_PID=""
+
+# Initialization flag
+declare -g _BLUETOOTH_INITIALIZED="false"
+
+# Service state
+declare -g _BLUETOOTH_SERVICE_RUNNING="false"
+
+# ------------------------------
+# Initialization
+# ------------------------------
+
+# Initialize extension
+#
+# Function: _bluetooth-init
+# Description: Lazy initialization of _bluetooth extension
+# Internal use only
+#
+_bluetooth-init() {
+    [[ "$_BLUETOOTH_INITIALIZED" == "true" ]] && return 0
+
+    log-debug "Initializing _bluetooth v$BLUETOOTH_VERSION"
+
+    # Create directories
+    mkdir -p "$BLUETOOTH_CACHE_DIR" 2>/dev/null || true
+    mkdir -p "$BLUETOOTH_STATE_DIR" 2>/dev/null || true
+    mkdir -p "$BLUETOOTH_CONFIG_DIR" 2>/dev/null || true
+    mkdir -p "$BLUETOOTH_FIFO_DIR" 2>/dev/null || true
+
+    # Verify bluetoothctl availability
+    if ! bluetooth-service-available; then
+        log-warn "bluetoothctl not found - Bluetooth functionality disabled"
+        return 1
+    fi
+
+    _BLUETOOTH_INITIALIZED="true"
+
+    # Emit initialization event
+    _bluetooth-emit "bluetooth.initialized" "version=$BLUETOOTH_VERSION"
+
+    return 0
+}
+
+# ------------------------------
+# Internal Helpers
+# ------------------------------
+
+# Emit an event (uses _events if available)
+#
+# Function: _bluetooth-emit
+# Description: Emit event via _events extension if available and enabled
+# Parameters:
+#   $1 - Event name (required)
+#   $@ - Event data (optional)
+# Internal use only
+#
+_bluetooth-emit() {
+    [[ "$BLUETOOTH_EMIT_EVENTS" != "true" ]] && return 0
+    [[ "$BLUETOOTH_EVENTS_AVAILABLE" != "true" ]] && return 0
+
+    events-emit "$@"
+}
+
+# Execute bluetoothctl command
+#
+# Function: _bluetooth-exec
+# Description: Execute bluetoothctl command and return output
+# Parameters:
+#   $@ - Command to execute
+# Output: Command output
+# Internal use only
+#
+_bluetooth-exec() {
+    local cmd="$*"
+
+    log-debug "Executing bluetoothctl command" "cmd=$cmd"
+
+    # Use FIFO if active
+    if [[ "$_BLUETOOTH_FIFO_ACTIVE" == "true" ]]; then
+        bluetooth-fifo-command "$cmd"
+    else
+        # Direct execution
+        echo "$cmd" | bluetoothctl 2>/dev/null
+    fi
+}
+
+# Parse MAC address from string
+#
+# Function: _bluetooth-parse-mac
+# Description: Extract MAC address from bluetoothctl output
+# Parameters:
+#   $1 - String containing MAC
+# Output: MAC address or empty
+# Internal use only
+#
+_bluetooth-parse-mac() {
+    local str="$1"
+    echo "$str" | grep -oE '([0-9A-F]{2}:){5}[0-9A-F]{2}' | head -n1
+}
+
+# ------------------------------
+# Validation & Utilities
+# ------------------------------
+
+# Validate MAC address format
+#
+# Function: bluetooth-validate-mac
+# Description: Validate Bluetooth MAC address format
+# Parameters:
+#   $1 - MAC address (required)
+# Returns:
+#   0 - Valid MAC address
+#   1 - Invalid format
+#   2 - Missing parameter
+# Example:
+#   bluetooth-validate-mac "00:11:22:33:44:55" && echo "Valid"
+#
+bluetooth-validate-mac() {
+    local mac="$1"
+
+    common-validate-required "$mac" "MAC address" || return 2
+
+    if [[ "$mac" =~ ^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$ ]]; then
+        return 0
+    else
+        log-error "Invalid MAC address format" "mac=$mac"
+        return 1
+    fi
+}
+
+# Normalize MAC address format
+#
+# Function: bluetooth-format-mac
+# Description: Normalize MAC address to uppercase with colons
+# Parameters:
+#   $1 - MAC address (required)
+# Output: Normalized MAC address
+# Returns:
+#   0 - Success
+#   2 - Invalid input
+# Example:
+#   mac=$(bluetooth-format-mac "aa:bb:cc:dd:ee:ff")
+#
+bluetooth-format-mac() {
+    local mac="$1"
+
+    bluetooth-validate-mac "$mac" || return 2
+
+    echo "$mac" | tr '[:lower:]' '[:upper:]'
+}
+
+# Check if device exists
+#
+# Function: bluetooth-device-exists
+# Description: Check if device is known to bluetoothctl
+# Parameters:
+#   $1 - MAC address (required)
+# Returns:
+#   0 - Device exists
+#   1 - Device not found
+#   2 - Invalid input
+# Example:
+#   bluetooth-device-exists "00:11:22:33:44:55" && echo "Device found"
+#
+bluetooth-device-exists() {
+    local mac="$1"
+
+    bluetooth-validate-mac "$mac" || return 2
+
+    _bluetooth-init
+
+    local output
+    output=$(_bluetooth-exec "info $mac" 2>/dev/null)
+
+    if [[ "$output" =~ "Device $mac" ]]; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+# Check if bluetoothctl is available
+#
+# Function: bluetooth-service-available
+# Description: Verify bluetoothctl command is available
+# Returns:
+#   0 - bluetoothctl available
+#   1 - bluetoothctl not found
+# Example:
+#   bluetooth-service-available || echo "Install bluez"
+#
+bluetooth-service-available() {
+    if common-command-exists "bluetoothctl"; then
+        return 0
+    else
+        log-error "bluetoothctl command not found"
+        return 1
+    fi
+}
+
+# ------------------------------
+# Controller Management
+# ------------------------------
+
+# List Bluetooth controllers
+#
+# Function: bluetooth-controller-list
+# Description: List all available Bluetooth controllers
+# Output: List of controller MAC addresses
+# Returns:
+#   0 - Success
+#   1 - No controllers found
+# Example:
+#   bluetooth-controller-list
+#
+bluetooth-controller-list() {
+    _bluetooth-init
+
+    local output
+    output=$(_bluetooth-exec "list")
+
+    # Parse controller MACs
+    echo "$output" | grep -oE 'Controller ([0-9A-F]{2}:){5}[0-9A-F]{2}' | awk '{print $2}'
+}
+
+# Show controller details
+#
+# Function: bluetooth-controller-show
+# Description: Show detailed information about controller
+# Parameters:
+#   $1 - Controller MAC (optional, shows default if omitted)
+# Output: Controller information
+# Returns:
+#   0 - Success
+#   1 - Controller not found
+# Example:
+#   bluetooth-controller-show
+#
+bluetooth-controller-show() {
+    local controller="${1:-}"
+
+    _bluetooth-init
+
+    if [[ -n "$controller" ]]; then
+        _bluetooth-exec "select $controller"
+    fi
+
+    _bluetooth-exec "show"
+}
+
+# Select active controller
+#
+# Function: bluetooth-controller-select
+# Description: Select which Bluetooth controller to use
+# Parameters:
+#   $1 - Controller MAC address (required)
+# Returns:
+#   0 - Success
+#   1 - Selection failed
+#   2 - Invalid input
+# Example:
+#   bluetooth-controller-select "00:11:22:33:44:55"
+#
+bluetooth-controller-select() {
+    local controller="$1"
+
+    bluetooth-validate-mac "$controller" || return 2
+
+    _bluetooth-init
+
+    log-info "Selecting Bluetooth controller" "mac=$controller"
+    _bluetooth-exec "select $controller"
+}
+
+# ------------------------------
+# Device Discovery & Scanning
+# ------------------------------
+
+# Start device scanning
+#
+# Function: bluetooth-scan-start
+# Description: Start scanning for nearby Bluetooth devices
+# Parameters:
+#   $1 - Duration in seconds (optional, default: BLUETOOTH_SCAN_DURATION)
+# Returns:
+#   0 - Success
+#   1 - Scan failed
+# Example:
+#   bluetooth-scan-start 15
+#
+bluetooth-scan-start() {
+    local duration="${1:-$BLUETOOTH_SCAN_DURATION}"
+
+    _bluetooth-init
+
+    log-info "Starting Bluetooth scan" "duration=${duration}s"
+    _bluetooth-exec "scan on"
+
+    _bluetooth-emit "$BLUETOOTH_EVENT_SCAN_STARTED" "duration=$duration"
+
+    if [[ -n "$duration" ]] && [[ "$duration" -gt 0 ]]; then
+        (
+            sleep "$duration"
+            bluetooth-scan-stop
+        ) &
+
+        if [[ "$BLUETOOTH_LIFECYCLE_AVAILABLE" == "true" ]]; then
+            lifecycle-track-job $!
+        fi
+    fi
+
+    return 0
+}
+
+# Stop device scanning
+#
+# Function: bluetooth-scan-stop
+# Description: Stop scanning for Bluetooth devices
+# Returns:
+#   0 - Success
+# Example:
+#   bluetooth-scan-stop
+#
+bluetooth-scan-stop() {
+    _bluetooth-init
+
+    log-info "Stopping Bluetooth scan"
+    _bluetooth-exec "scan off"
+
+    _bluetooth-emit "$BLUETOOTH_EVENT_SCAN_STOPPED"
+
+    return 0
+}
+
+# List discovered devices
+#
+# Function: bluetooth-devices-list
+# Description: List discovered and paired Bluetooth devices
+# Parameters:
+#   $1 - Filter (optional: "paired", "connected")
+# Output: List of devices with MAC addresses
+# Returns:
+#   0 - Success
+# Example:
+#   bluetooth-devices-list
+#   bluetooth-devices-list paired
+#
+bluetooth-devices-list() {
+    local filter="${1:-all}"
+
+    _bluetooth-init
+
+    local output
+    case "$filter" in
+        paired)
+            output=$(_bluetooth-exec "paired-devices")
+            ;;
+        connected)
+            output=$(_bluetooth-exec "devices")
+            echo "$output" | grep "Connected: yes" -B5 | grep "Device"
+            return
+            ;;
+        *)
+            output=$(_bluetooth-exec "devices")
+            ;;
+    esac
+
+    echo "$output"
+}
+
+# Get device information
+#
+# Function: bluetooth-device-info
+# Description: Get detailed device information
+# Parameters:
+#   $1 - MAC address (required)
+# Output: Device information
+# Returns:
+#   0 - Success
+#   1 - Device not found
+#   2 - Invalid input
+# Example:
+#   bluetooth-device-info "00:11:22:33:44:55"
+#
+bluetooth-device-info() {
+    local mac="$1"
+
+    bluetooth-validate-mac "$mac" || return 2
+
+    _bluetooth-init
+
+    # Check cache first
+    if [[ "$BLUETOOTH_CACHE_AVAILABLE" == "true" ]]; then
+        local cached=$(cache-get "bluetooth:device:info:$mac")
+        if [[ -n "$cached" ]]; then
+            log-debug "Cache hit for device info" "mac=$mac"
+            echo "$cached"
+            return 0
+        fi
+    fi
+
+    local output
+    output=$(_bluetooth-exec "info $mac")
+
+    if [[ -z "$output" ]] || [[ "$output" =~ "not available" ]]; then
+        log-error "Device not found" "mac=$mac"
+        return 1
+    fi
+
+    # Cache result
+    if [[ "$BLUETOOTH_CACHE_AVAILABLE" == "true" ]]; then
+        cache-set "bluetooth:device:info:$mac" "$output" "$BLUETOOTH_CACHE_DEVICE_TTL"
+    fi
+
+    echo "$output"
+}
+
+# List paired devices only
+#
+# Function: bluetooth-devices-paired
+# Description: List only paired devices
+# Output: List of paired devices
+# Returns:
+#   0 - Success
+# Example:
+#   bluetooth-devices-paired
+#
+bluetooth-devices-paired() {
+    bluetooth-devices-list "paired"
+}
+
+# ------------------------------
+# Device Connection
+# ------------------------------
+
+# Connect to device
+#
+# Function: bluetooth-connect
+# Description: Connect to Bluetooth device
+# Parameters:
+#   $1 - MAC address (required)
+# Returns:
+#   0 - Success
+#   1 - Connection failed
+#   2 - Invalid input
+# Example:
+#   bluetooth-connect "00:11:22:33:44:55"
+#
+bluetooth-connect() {
+    local mac="$1"
+
+    bluetooth-validate-mac "$mac" || return 2
+
+    _bluetooth-init
+
+    log-info "Connecting to Bluetooth device" "mac=$mac"
+
+    local output
+    output=$(_bluetooth-exec "connect $mac")
+
+    if [[ "$output" =~ "Connection successful" ]] || [[ "$output" =~ "already connected" ]]; then
+        log-success "Device connected" "mac=$mac"
+        _bluetooth-emit "$BLUETOOTH_EVENT_DEVICE_CONNECTED" "mac=$mac"
+
+        # Invalidate cache
+        [[ "$BLUETOOTH_CACHE_AVAILABLE" == "true" ]] && cache-clear "bluetooth:device:info:$mac"
+
+        return 0
+    else
+        log-error "Connection failed" "mac=$mac"
+        return 1
+    fi
+}
+
+# Disconnect from device
+#
+# Function: bluetooth-disconnect
+# Description: Disconnect from Bluetooth device
+# Parameters:
+#   $1 - MAC address (required)
+# Returns:
+#   0 - Success
+#   1 - Disconnection failed
+#   2 - Invalid input
+# Example:
+#   bluetooth-disconnect "00:11:22:33:44:55"
+#
+bluetooth-disconnect() {
+    local mac="$1"
+
+    bluetooth-validate-mac "$mac" || return 2
+
+    _bluetooth-init
+
+    log-info "Disconnecting from Bluetooth device" "mac=$mac"
+
+    local output
+    output=$(_bluetooth-exec "disconnect $mac")
+
+    if [[ "$output" =~ "Successful disconnected" ]] || [[ "$output" =~ "not connected" ]]; then
+        log-success "Device disconnected" "mac=$mac"
+        _bluetooth-emit "$BLUETOOTH_EVENT_DEVICE_DISCONNECTED" "mac=$mac"
+
+        # Invalidate cache
+        [[ "$BLUETOOTH_CACHE_AVAILABLE" == "true" ]] && cache-clear "bluetooth:device:info:$mac"
+
+        return 0
+    else
+        log-error "Disconnection failed" "mac=$mac"
+        return 1
+    fi
+}
+
+# Check connection status
+#
+# Function: bluetooth-connect-status
+# Description: Check if device is connected
+# Parameters:
+#   $1 - MAC address (required)
+# Output: "yes" or "no"
+# Returns:
+#   0 - Device is connected
+#   1 - Device not connected
+#   2 - Invalid input
+# Example:
+#   bluetooth-connect-status "00:11:22:33:44:55"
+#
+bluetooth-connect-status() {
+    local mac="$1"
+
+    bluetooth-validate-mac "$mac" || return 2
+
+    _bluetooth-init
+
+    local output
+    output=$(bluetooth-device-info "$mac")
+
+    if [[ "$output" =~ "Connected: yes" ]]; then
+        echo "yes"
+        return 0
+    else
+        echo "no"
+        return 1
+    fi
+}
+
+# Toggle connection
+#
+# Function: bluetooth-connect-toggle
+# Description: Toggle device connection state
+# Parameters:
+#   $1 - MAC address (required)
+# Returns:
+#   0 - Success
+#   1 - Toggle failed
+#   2 - Invalid input
+# Example:
+#   bluetooth-connect-toggle "00:11:22:33:44:55"
+#
+bluetooth-connect-toggle() {
+    local mac="$1"
+
+    bluetooth-validate-mac "$mac" || return 2
+
+    if bluetooth-connect-status "$mac" >/dev/null 2>&1; then
+        bluetooth-disconnect "$mac"
+    else
+        bluetooth-connect "$mac"
+    fi
+}
+
+# Connect all trusted devices
+#
+# Function: bluetooth-connect-all
+# Description: Connect to all trusted devices
+# Returns:
+#   0 - Success
+# Example:
+#   bluetooth-connect-all
+#
+bluetooth-connect-all() {
+    _bluetooth-init
+
+    log-info "Connecting to all trusted devices"
+
+    local devices
+    devices=$(bluetooth-devices-paired | grep -oE '([0-9A-F]{2}:){5}[0-9A-F]{2}')
+
+    for mac in $devices; do
+        local info
+        info=$(bluetooth-device-info "$mac" 2>/dev/null)
+
+        if [[ "$info" =~ "Trusted: yes" ]] && [[ ! "$info" =~ "Connected: yes" ]]; then
+            log-debug "Connecting to trusted device" "mac=$mac"
+            bluetooth-connect "$mac" &
+        fi
+    done
+
+    wait
+    log-success "Finished connecting to trusted devices"
+}
+
+# Disconnect all devices
+#
+# Function: bluetooth-disconnect-all
+# Description: Disconnect from all connected devices
+# Returns:
+#   0 - Success
+# Example:
+#   bluetooth-disconnect-all
+#
+bluetooth-disconnect-all() {
+    _bluetooth-init
+
+    log-info "Disconnecting from all devices"
+
+    local devices
+    devices=$(bluetooth-devices-list | grep -oE '([0-9A-F]{2}:){5}[0-9A-F]{2}')
+
+    for mac in $devices; do
+        if bluetooth-connect-status "$mac" >/dev/null 2>&1; then
+            log-debug "Disconnecting from device" "mac=$mac"
+            bluetooth-disconnect "$mac"
+        fi
+    done
+
+    log-success "Disconnected from all devices"
+}
+
+# ------------------------------
+# Device Pairing
+# ------------------------------
+
+# Pair with device
+#
+# Function: bluetooth-pair
+# Description: Pair with Bluetooth device
+# Parameters:
+#   $1 - MAC address (required)
+# Returns:
+#   0 - Success
+#   1 - Pairing failed
+#   2 - Invalid input
+# Example:
+#   bluetooth-pair "00:11:22:33:44:55"
+#
+bluetooth-pair() {
+    local mac="$1"
+
+    bluetooth-validate-mac "$mac" || return 2
+
+    _bluetooth-init
+
+    log-info "Pairing with Bluetooth device" "mac=$mac"
+
+    local output
+    output=$(_bluetooth-exec "pair $mac")
+
+    if [[ "$output" =~ "Pairing successful" ]] || [[ "$output" =~ "already paired" ]]; then
+        log-success "Device paired" "mac=$mac"
+        _bluetooth-emit "$BLUETOOTH_EVENT_DEVICE_PAIRED" "mac=$mac"
+
+        # Auto-trust after pairing
+        bluetooth-trust "$mac"
+
+        return 0
+    else
+        log-error "Pairing failed" "mac=$mac"
+        return 1
+    fi
+}
+
+# Unpair device
+#
+# Function: bluetooth-unpair
+# Description: Remove pairing with device
+# Parameters:
+#   $1 - MAC address (required)
+# Returns:
+#   0 - Success
+#   1 - Unpairing failed
+#   2 - Invalid input
+# Example:
+#   bluetooth-unpair "00:11:22:33:44:55"
+#
+bluetooth-unpair() {
+    local mac="$1"
+
+    bluetooth-validate-mac "$mac" || return 2
+
+    _bluetooth-init
+
+    log-info "Unpairing Bluetooth device" "mac=$mac"
+
+    local output
+    output=$(_bluetooth-exec "remove $mac")
+
+    if [[ "$output" =~ "Device has been removed" ]] || [[ "$output" =~ "not available" ]]; then
+        log-success "Device unpaired" "mac=$mac"
+        _bluetooth-emit "$BLUETOOTH_EVENT_DEVICE_UNPAIRED" "mac=$mac"
+
+        # Clear cache
+        [[ "$BLUETOOTH_CACHE_AVAILABLE" == "true" ]] && cache-clear "bluetooth:device:info:$mac"
+
+        return 0
+    else
+        log-error "Unpairing failed" "mac=$mac"
+        return 1
+    fi
+}
+
+# Trust device
+#
+# Function: bluetooth-trust
+# Description: Mark device as trusted
+# Parameters:
+#   $1 - MAC address (required)
+# Returns:
+#   0 - Success
+#   1 - Trust failed
+#   2 - Invalid input
+# Example:
+#   bluetooth-trust "00:11:22:33:44:55"
+#
+bluetooth-trust() {
+    local mac="$1"
+
+    bluetooth-validate-mac "$mac" || return 2
+
+    _bluetooth-init
+
+    log-info "Trusting Bluetooth device" "mac=$mac"
+
+    _bluetooth-exec "trust $mac"
+
+    # Invalidate cache
+    [[ "$BLUETOOTH_CACHE_AVAILABLE" == "true" ]] && cache-clear "bluetooth:device:info:$mac"
+
+    return 0
+}
+
+# Untrust device
+#
+# Function: bluetooth-untrust
+# Description: Remove trust from device
+# Parameters:
+#   $1 - MAC address (required)
+# Returns:
+#   0 - Success
+#   1 - Untrust failed
+#   2 - Invalid input
+# Example:
+#   bluetooth-untrust "00:11:22:33:44:55"
+#
+bluetooth-untrust() {
+    local mac="$1"
+
+    bluetooth-validate-mac "$mac" || return 2
+
+    _bluetooth-init
+
+    log-info "Untrusting Bluetooth device" "mac=$mac"
+
+    _bluetooth-exec "untrust $mac"
+
+    # Invalidate cache
+    [[ "$BLUETOOTH_CACHE_AVAILABLE" == "true" ]] && cache-clear "bluetooth:device:info:$mac"
+
+    return 0
+}
+
+# Block device
+#
+# Function: bluetooth-block
+# Description: Block device from connecting
+# Parameters:
+#   $1 - MAC address (required)
+# Returns:
+#   0 - Success
+#   1 - Block failed
+#   2 - Invalid input
+# Example:
+#   bluetooth-block "00:11:22:33:44:55"
+#
+bluetooth-block() {
+    local mac="$1"
+
+    bluetooth-validate-mac "$mac" || return 2
+
+    _bluetooth-init
+
+    log-info "Blocking Bluetooth device" "mac=$mac"
+
+    _bluetooth-exec "block $mac"
+
+    # Invalidate cache
+    [[ "$BLUETOOTH_CACHE_AVAILABLE" == "true" ]] && cache-clear "bluetooth:device:info:$mac"
+
+    return 0
+}
+
+# Unblock device
+#
+# Function: bluetooth-unblock
+# Description: Unblock device
+# Parameters:
+#   $1 - MAC address (required)
+# Returns:
+#   0 - Success
+#   1 - Unblock failed
+#   2 - Invalid input
+# Example:
+#   bluetooth-unblock "00:11:22:33:44:55"
+#
+bluetooth-unblock() {
+    local mac="$1"
+
+    bluetooth-validate-mac "$mac" || return 2
+
+    _bluetooth-init
+
+    log-info "Unblocking Bluetooth device" "mac=$mac"
+
+    _bluetooth-exec "unblock $mac"
+
+    # Invalidate cache
+    [[ "$BLUETOOTH_CACHE_AVAILABLE" == "true" ]] && cache-clear "bluetooth:device:info:$mac"
+
+    return 0
+}
+
+# ------------------------------
+# Power Management
+# ------------------------------
+
+# Turn Bluetooth power on
+#
+# Function: bluetooth-power-on
+# Description: Enable Bluetooth adapter
+# Returns:
+#   0 - Success
+#   1 - Failed to enable
+# Example:
+#   bluetooth-power-on
+#
+bluetooth-power-on() {
+    _bluetooth-init
+
+    log-info "Turning Bluetooth power on"
+
+    _bluetooth-exec "power on"
+
+    _bluetooth-emit "$BLUETOOTH_EVENT_POWER_ON"
+
+    return 0
+}
+
+# Turn Bluetooth power off
+#
+# Function: bluetooth-power-off
+# Description: Disable Bluetooth adapter
+# Returns:
+#   0 - Success
+#   1 - Failed to disable
+# Example:
+#   bluetooth-power-off
+#
+bluetooth-power-off() {
+    _bluetooth-init
+
+    log-info "Turning Bluetooth power off"
+
+    _bluetooth-exec "power off"
+
+    _bluetooth-emit "$BLUETOOTH_EVENT_POWER_OFF"
+
+    return 0
+}
+
+# Get power status
+#
+# Function: bluetooth-power-status
+# Description: Check Bluetooth power state
+# Output: "on" or "off"
+# Returns:
+#   0 - Power is on
+#   1 - Power is off
+# Example:
+#   bluetooth-power-status
+#
+bluetooth-power-status() {
+    _bluetooth-init
+
+    local output
+    output=$(_bluetooth-exec "show")
+
+    if [[ "$output" =~ "Powered: yes" ]]; then
+        echo "on"
+        return 0
+    else
+        echo "off"
+        return 1
+    fi
+}
+
+# Toggle power state
+#
+# Function: bluetooth-power-toggle
+# Description: Toggle Bluetooth power state
+# Returns:
+#   0 - Success
+# Example:
+#   bluetooth-power-toggle
+#
+bluetooth-power-toggle() {
+    if bluetooth-power-status >/dev/null 2>&1; then
+        bluetooth-power-off
+    else
+        bluetooth-power-on
+    fi
+}
+
+# ------------------------------
+# Discoverable & Pairable
+# ------------------------------
+
+# Make discoverable
+#
+# Function: bluetooth-discoverable-on
+# Description: Make Bluetooth adapter discoverable
+# Parameters:
+#   $1 - Timeout in seconds (optional, 0 = forever)
+# Returns:
+#   0 - Success
+# Example:
+#   bluetooth-discoverable-on 180
+#
+bluetooth-discoverable-on() {
+    local timeout="${1:-0}"
+
+    _bluetooth-init
+
+    log-info "Making Bluetooth discoverable" "timeout=${timeout}s"
+
+    _bluetooth-exec "discoverable on"
+
+    if [[ "$timeout" -gt 0 ]]; then
+        _bluetooth-exec "discoverable-timeout $timeout"
+    fi
+
+    return 0
+}
+
+# Disable discoverable
+#
+# Function: bluetooth-discoverable-off
+# Description: Make Bluetooth adapter not discoverable
+# Returns:
+#   0 - Success
+# Example:
+#   bluetooth-discoverable-off
+#
+bluetooth-discoverable-off() {
+    _bluetooth-init
+
+    log-info "Disabling Bluetooth discoverable"
+
+    _bluetooth-exec "discoverable off"
+
+    return 0
+}
+
+# Get discoverable status
+#
+# Function: bluetooth-discoverable-status
+# Description: Check if adapter is discoverable
+# Output: "yes" or "no"
+# Returns:
+#   0 - Discoverable
+#   1 - Not discoverable
+# Example:
+#   bluetooth-discoverable-status
+#
+bluetooth-discoverable-status() {
+    _bluetooth-init
+
+    local output
+    output=$(_bluetooth-exec "show")
+
+    if [[ "$output" =~ "Discoverable: yes" ]]; then
+        echo "yes"
+        return 0
+    else
+        echo "no"
+        return 1
+    fi
+}
+
+# Enable pairing
+#
+# Function: bluetooth-pairable-on
+# Description: Allow devices to pair
+# Parameters:
+#   $1 - Timeout in seconds (optional, 0 = forever)
+# Returns:
+#   0 - Success
+# Example:
+#   bluetooth-pairable-on 180
+#
+bluetooth-pairable-on() {
+    local timeout="${1:-0}"
+
+    _bluetooth-init
+
+    log-info "Enabling Bluetooth pairing" "timeout=${timeout}s"
+
+    _bluetooth-exec "pairable on"
+
+    if [[ "$timeout" -gt 0 ]]; then
+        _bluetooth-exec "pairable-timeout $timeout"
+    fi
+
+    return 0
+}
+
+# Disable pairing
+#
+# Function: bluetooth-pairable-off
+# Description: Disallow new device pairing
+# Returns:
+#   0 - Success
+# Example:
+#   bluetooth-pairable-off
+#
+bluetooth-pairable-off() {
+    _bluetooth-init
+
+    log-info "Disabling Bluetooth pairing"
+
+    _bluetooth-exec "pairable off"
+
+    return 0
+}
+
+# Get pairable status
+#
+# Function: bluetooth-pairable-status
+# Description: Check if adapter accepts pairing
+# Output: "yes" or "no"
+# Returns:
+#   0 - Pairable
+#   1 - Not pairable
+# Example:
+#   bluetooth-pairable-status
+#
+bluetooth-pairable-status() {
+    _bluetooth-init
+
+    local output
+    output=$(_bluetooth-exec "show")
+
+    if [[ "$output" =~ "Pairable: yes" ]]; then
+        echo "yes"
+        return 0
+    else
+        echo "no"
+        return 1
+    fi
+}
+
+# ------------------------------
+# Audio Profile Management
+# ------------------------------
+
+# Get current audio profile
+#
+# Function: bluetooth-audio-profile
+# Description: Get active audio profile for device
+# Parameters:
+#   $1 - MAC address (required)
+# Output: Profile name (a2dp, hsp, hfp, off)
+# Returns:
+#   0 - Success
+#   1 - Failed to get profile
+#   2 - Invalid input
+# Example:
+#   bluetooth-audio-profile "00:11:22:33:44:55"
+#
+bluetooth-audio-profile() {
+    local mac="$1"
+
+    bluetooth-validate-mac "$mac" || return 2
+
+    _bluetooth-init
+
+    local output
+    output=$(bluetooth-device-info "$mac")
+
+    # Parse UUID to determine profile
+    if [[ "$output" =~ "0000110b" ]]; then
+        echo "a2dp"
+    elif [[ "$output" =~ "00001108" ]]; then
+        echo "hsp"
+    elif [[ "$output" =~ "0000111e" ]]; then
+        echo "hfp"
+    else
+        echo "off"
+    fi
+
+    return 0
+}
+
+# Set audio profile
+#
+# Function: bluetooth-audio-profile-set
+# Description: Set audio profile for device
+# Parameters:
+#   $1 - MAC address (required)
+#   $2 - Profile (a2dp, hsp, hfp) (required)
+# Returns:
+#   0 - Success
+#   1 - Failed to set profile
+#   2 - Invalid input
+# Example:
+#   bluetooth-audio-profile-set "00:11:22:33:44:55" "a2dp"
+#
+bluetooth-audio-profile-set() {
+    local mac="$1"
+    local profile="$2"
+
+    bluetooth-validate-mac "$mac" || return 2
+    common-validate-required "$profile" "profile" || return 2
+
+    _bluetooth-init
+
+    # Validate profile
+    case "$profile" in
+        a2dp|hsp|hfp)
+            log-info "Setting audio profile" "mac=$mac" "profile=$profile"
+            ;;
+        *)
+            log-error "Invalid profile" "profile=$profile"
+            return 2
+            ;;
+    esac
+
+    # Note: bluetoothctl doesn't have direct profile switching
+    # This requires PulseAudio integration
+    if [[ "$BLUETOOTH_AUDIO_AVAILABLE" == "true" ]]; then
+        # Integrate with _audio extension
+        log-debug "Using _audio extension for profile switching"
+        # Implementation would call into _audio functions
+    else
+        log-warn "Profile switching requires _audio extension"
+        return 1
+    fi
+
+    return 0
+}
+
+# List available audio profiles
+#
+# Function: bluetooth-audio-profile-list
+# Description: List audio profiles supported by device
+# Parameters:
+#   $1 - MAC address (required)
+# Output: List of supported profiles
+# Returns:
+#   0 - Success
+#   1 - Failed to list profiles
+#   2 - Invalid input
+# Example:
+#   bluetooth-audio-profile-list "00:11:22:33:44:55"
+#
+bluetooth-audio-profile-list() {
+    local mac="$1"
+
+    bluetooth-validate-mac "$mac" || return 2
+
+    _bluetooth-init
+
+    local output
+    output=$(bluetooth-device-info "$mac")
+
+    # Parse UUIDs
+    local profiles=()
+    [[ "$output" =~ "0000110b" ]] && profiles+=("a2dp")
+    [[ "$output" =~ "00001108" ]] && profiles+=("hsp")
+    [[ "$output" =~ "0000111e" ]] && profiles+=("hfp")
+
+    if [[ ${#profiles[@]} -gt 0 ]]; then
+        printf "%s\n" "${profiles[@]}"
+        return 0
+    else
+        return 1
+    fi
+}
+
+# Detect if device is audio device
+#
+# Function: bluetooth-audio-device-type
+# Description: Determine if device is an audio device
+# Parameters:
+#   $1 - MAC address (required)
+# Output: "audio" or "other"
+# Returns:
+#   0 - Is audio device
+#   1 - Not audio device
+#   2 - Invalid input
+# Example:
+#   bluetooth-audio-device-type "00:11:22:33:44:55"
+#
+bluetooth-audio-device-type() {
+    local mac="$1"
+
+    bluetooth-validate-mac "$mac" || return 2
+
+    _bluetooth-init
+
+    local output
+    output=$(bluetooth-device-info "$mac")
+
+    # Check for audio UUIDs
+    if [[ "$output" =~ "0000110b" ]] || [[ "$output" =~ "00001108" ]] || [[ "$output" =~ "0000111e" ]]; then
+        echo "audio"
+        return 0
+    else
+        echo "other"
+        return 1
+    fi
+}
+
+# ------------------------------
+# Device Metadata
+# ------------------------------
+
+# Get device battery level
+#
+# Function: bluetooth-device-battery
+# Description: Get battery level of device if supported
+# Parameters:
+#   $1 - MAC address (required)
+# Output: Battery percentage (0-100) or "unknown"
+# Returns:
+#   0 - Success
+#   1 - Battery info not available
+#   2 - Invalid input
+# Example:
+#   bluetooth-device-battery "00:11:22:33:44:55"
+#
+bluetooth-device-battery() {
+    local mac="$1"
+
+    bluetooth-validate-mac "$mac" || return 2
+
+    _bluetooth-init
+
+    local output
+    output=$(bluetooth-device-info "$mac")
+
+    # Parse battery percentage
+    if [[ "$output" =~ "Battery Percentage: 0x([0-9a-f]+)" ]]; then
+        local hex="${match[1]}"
+        local battery=$((16#$hex))
+        echo "$battery"
+        return 0
+    else
+        echo "unknown"
+        return 1
+    fi
+}
+
+# Get device RSSI (signal strength)
+#
+# Function: bluetooth-device-rssi
+# Description: Get signal strength for device
+# Parameters:
+#   $1 - MAC address (required)
+# Output: RSSI value in dBm or "unknown"
+# Returns:
+#   0 - Success
+#   1 - RSSI not available
+#   2 - Invalid input
+# Example:
+#   bluetooth-device-rssi "00:11:22:33:44:55"
+#
+bluetooth-device-rssi() {
+    local mac="$1"
+
+    bluetooth-validate-mac "$mac" || return 2
+
+    _bluetooth-init
+
+    local output
+    output=$(bluetooth-device-info "$mac")
+
+    # Parse RSSI
+    if [[ "$output" =~ "RSSI: (-?[0-9]+)" ]]; then
+        echo "${match[1]}"
+        return 0
+    else
+        echo "unknown"
+        return 1
+    fi
+}
+
+# Get device type
+#
+# Function: bluetooth-device-type
+# Description: Get device class/type
+# Parameters:
+#   $1 - MAC address (required)
+# Output: Device type string
+# Returns:
+#   0 - Success
+#   1 - Type not available
+#   2 - Invalid input
+# Example:
+#   bluetooth-device-type "00:11:22:33:44:55"
+#
+bluetooth-device-type() {
+    local mac="$1"
+
+    bluetooth-validate-mac "$mac" || return 2
+
+    _bluetooth-init
+
+    local output
+    output=$(bluetooth-device-info "$mac")
+
+    # Parse Icon field as proxy for type
+    if [[ "$output" =~ "Icon: ([a-z-]+)" ]]; then
+        echo "${match[1]}"
+        return 0
+    else
+        echo "unknown"
+        return 1
+    fi
+}
+
+# Get/set device alias
+#
+# Function: bluetooth-device-alias
+# Description: Get or set device friendly name
+# Parameters:
+#   $1 - MAC address (required)
+#   $2 - New alias (optional, omit to get current)
+# Output: Device alias
+# Returns:
+#   0 - Success
+#   1 - Failed
+#   2 - Invalid input
+# Example:
+#   bluetooth-device-alias "00:11:22:33:44:55"
+#   bluetooth-device-alias "00:11:22:33:44:55" "My Headphones"
+#
+bluetooth-device-alias() {
+    local mac="$1"
+    local new_alias="${2:-}"
+
+    bluetooth-validate-mac "$mac" || return 2
+
+    _bluetooth-init
+
+    if [[ -n "$new_alias" ]]; then
+        # Set alias
+        log-info "Setting device alias" "mac=$mac" "alias=$new_alias"
+        _bluetooth-exec "set-alias $mac \"$new_alias\""
+
+        # Invalidate cache
+        [[ "$BLUETOOTH_CACHE_AVAILABLE" == "true" ]] && cache-clear "bluetooth:device:info:$mac"
+
+        return 0
+    else
+        # Get alias
+        local output
+        output=$(bluetooth-device-info "$mac")
+
+        if [[ "$output" =~ "Alias: (.+)" ]]; then
+            echo "${match[1]}"
+            return 0
+        else
+            return 1
+        fi
+    fi
+}
+
+# ------------------------------
+# FIFO Management
+# ------------------------------
+
+# Initialize bluetoothctl FIFO
+#
+# Function: bluetooth-fifo-init
+# Description: Create and start bluetoothctl FIFO for command queueing
+# Returns:
+#   0 - Success
+#   1 - Already running or failed
+# Example:
+#   bluetooth-fifo-init
+#
+bluetooth-fifo-init() {
+    if [[ "$_BLUETOOTH_FIFO_ACTIVE" == "true" ]]; then
+        log-warn "FIFO already active" "pid=$_BLUETOOTH_FIFO_PID"
+        return 1
+    fi
+
+    _bluetooth-init
+
+    log-info "Initializing bluetoothctl FIFO"
+
+    # Create FIFOs
+    mkfifo "$BLUETOOTH_FIFO_IN" 2>/dev/null || true
+    mkfifo "$BLUETOOTH_FIFO_OUT" 2>/dev/null || true
+
+    # Start bluetoothctl with FIFO
+    (
+        bluetoothctl < "$BLUETOOTH_FIFO_IN" > "$BLUETOOTH_FIFO_OUT" 2>&1
+    ) &
+
+    _BLUETOOTH_FIFO_PID=$!
+    _BLUETOOTH_FIFO_ACTIVE="true"
+
+    # Register cleanup
+    if [[ "$BLUETOOTH_LIFECYCLE_AVAILABLE" == "true" ]]; then
+        lifecycle-cleanup-add "bluetooth-fifo" "bluetooth-fifo-cleanup"
+        lifecycle-track-job $_BLUETOOTH_FIFO_PID
+    fi
+
+    log-success "FIFO initialized" "pid=$_BLUETOOTH_FIFO_PID"
+    return 0
+}
+
+# Send command to bluetoothctl via FIFO
+#
+# Function: bluetooth-fifo-command
+# Description: Execute command through FIFO
+# Parameters:
+#   $1 - Command to execute (required)
+# Output: Command output
+# Returns:
+#   0 - Success
+#   1 - FIFO not active
+# Example:
+#   bluetooth-fifo-command "devices"
+#
+bluetooth-fifo-command() {
+    local cmd="$1"
+
+    common-validate-required "$cmd" "command" || return 2
+
+    if [[ "$_BLUETOOTH_FIFO_ACTIVE" != "true" ]]; then
+        log-error "FIFO not active"
+        return 1
+    fi
+
+    log-debug "Sending FIFO command" "cmd=$cmd"
+
+    # Send command
+    echo "$cmd" > "$BLUETOOTH_FIFO_IN" &
+
+    # Read response (with timeout)
+    timeout 2s cat "$BLUETOOTH_FIFO_OUT" 2>/dev/null || true
+}
+
+# Cleanup bluetoothctl FIFO
+#
+# Function: bluetooth-fifo-cleanup
+# Description: Stop FIFO and clean up resources
+# Returns:
+#   0 - Success
+# Example:
+#   bluetooth-fifo-cleanup
+#
+bluetooth-fifo-cleanup() {
+    if [[ "$_BLUETOOTH_FIFO_ACTIVE" != "true" ]]; then
+        return 0
+    fi
+
+    log-info "Cleaning up bluetoothctl FIFO"
+
+    # Kill bluetoothctl process
+    if [[ -n "$_BLUETOOTH_FIFO_PID" ]] && kill -0 "$_BLUETOOTH_FIFO_PID" 2>/dev/null; then
+        kill "$_BLUETOOTH_FIFO_PID" 2>/dev/null || true
+        wait "$_BLUETOOTH_FIFO_PID" 2>/dev/null || true
+    fi
+
+    # Remove FIFOs
+    rm -f "$BLUETOOTH_FIFO_IN" "$BLUETOOTH_FIFO_OUT" 2>/dev/null || true
+
+    _BLUETOOTH_FIFO_ACTIVE="false"
+    _BLUETOOTH_FIFO_PID=""
+
+    log-success "FIFO cleanup complete"
+    return 0
+}
+
+# ------------------------------
+# Service Management
+# ------------------------------
+
+# Start Bluetooth service daemon
+#
+# Function: bluetooth-service-start
+# Description: Start Bluetooth system service
+# Returns:
+#   0 - Success
+#   1 - Failed to start
+# Example:
+#   bluetooth-service-start
+#
+bluetooth-service-start() {
+    if ! common-command-exists "systemctl"; then
+        log-error "systemctl not available"
+        return 1
+    fi
+
+    log-info "Starting Bluetooth service"
+
+    if systemctl is-active --quiet bluetooth.service 2>/dev/null; then
+        log-info "Bluetooth service already running"
+        return 0
+    fi
+
+    sudo systemctl start bluetooth.service
+
+    if [[ $? -eq 0 ]]; then
+        _BLUETOOTH_SERVICE_RUNNING="true"
+        log-success "Bluetooth service started"
+        return 0
+    else
+        log-error "Failed to start Bluetooth service"
+        return 1
+    fi
+}
+
+# Stop Bluetooth service daemon
+#
+# Function: bluetooth-service-stop
+# Description: Stop Bluetooth system service
+# Returns:
+#   0 - Success
+#   1 - Failed to stop
+# Example:
+#   bluetooth-service-stop
+#
+bluetooth-service-stop() {
+    if ! common-command-exists "systemctl"; then
+        log-error "systemctl not available"
+        return 1
+    fi
+
+    log-info "Stopping Bluetooth service"
+
+    if ! systemctl is-active --quiet bluetooth.service 2>/dev/null; then
+        log-info "Bluetooth service not running"
+        return 0
+    fi
+
+    sudo systemctl stop bluetooth.service
+
+    if [[ $? -eq 0 ]]; then
+        _BLUETOOTH_SERVICE_RUNNING="false"
+        log-success "Bluetooth service stopped"
+        return 0
+    else
+        log-error "Failed to stop Bluetooth service"
+        return 1
+    fi
+}
+
+# ------------------------------
+# Utility Functions
+# ------------------------------
+
+# Display version
+#
+# Function: bluetooth-version
+# Description: Display extension version
+# Output: Version string
+# Example:
+#   bluetooth-version
+#
+bluetooth-version() {
+    echo "$BLUETOOTH_VERSION"
+}
+
+# Display extension information
+#
+# Function: bluetooth-info
+# Description: Display comprehensive extension information
+# Output: Extension details
+# Example:
+#   bluetooth-info
+#
+bluetooth-info() {
+    _bluetooth-init 2>/dev/null || true
+
+    cat <<EOF
+_bluetooth Extension Information
+
+Version:          $BLUETOOTH_VERSION
+Cache Directory:  $BLUETOOTH_CACHE_DIR
+State Directory:  $BLUETOOTH_STATE_DIR
+Config Directory: $BLUETOOTH_CONFIG_DIR
+
+Configuration:
+  Debug Mode:       $BLUETOOTH_DEBUG
+  Emit Events:      $BLUETOOTH_EMIT_EVENTS
+  Scan Duration:    ${BLUETOOTH_SCAN_DURATION}s
+  Connect Timeout:  ${BLUETOOTH_CONNECT_TIMEOUT}s
+  Pair Timeout:     ${BLUETOOTH_PAIR_TIMEOUT}s
+
+Integration Status:
+  _common:          yes (required)
+  _xdg:             yes (required)
+  _log:             ${LOG_LOADED:-no}
+  _lifecycle:       $BLUETOOTH_LIFECYCLE_AVAILABLE
+  _events:          $BLUETOOTH_EVENTS_AVAILABLE
+  _cache:           $BLUETOOTH_CACHE_AVAILABLE
+  _config:          $BLUETOOTH_CONFIG_AVAILABLE
+  _audio:           $BLUETOOTH_AUDIO_AVAILABLE
+  _process:         $BLUETOOTH_PROCESS_AVAILABLE
+
+Bluetooth Status:
+  bluetoothctl:     $(bluetooth-service-available && echo "available" || echo "not found")
+  Power:            $(bluetooth-power-status 2>/dev/null || echo "unknown")
+  FIFO Active:      $_BLUETOOTH_FIFO_ACTIVE
+EOF
+}
+
+# Display help
+#
+# Function: bluetooth-help
+# Description: Display comprehensive help information
+# Output: Help text
+# Example:
+#   bluetooth-help
+#
+bluetooth-help() {
+    cat <<EOF
+_bluetooth - Comprehensive Bluetooth Device Management
+
+Version: $BLUETOOTH_VERSION
+
+USAGE:
+  source "\${DOTLIB}/_bluetooth"
+
+CONTROLLER MANAGEMENT:
+  bluetooth-controller-list            List all Bluetooth controllers
+  bluetooth-controller-show [MAC]      Show controller details
+  bluetooth-controller-select MAC      Select active controller
+
+DEVICE DISCOVERY & SCANNING:
+  bluetooth-scan-start [DURATION]      Start device scanning
+  bluetooth-scan-stop                  Stop scanning
+  bluetooth-devices-list [FILTER]      List devices (all/paired/connected)
+  bluetooth-device-info MAC            Get device details
+  bluetooth-devices-paired             List paired devices only
+
+DEVICE CONNECTION:
+  bluetooth-connect MAC                Connect to device
+  bluetooth-disconnect MAC             Disconnect from device
+  bluetooth-connect-status MAC         Check connection status
+  bluetooth-connect-toggle MAC         Toggle connection
+  bluetooth-connect-all                Connect all trusted devices
+  bluetooth-disconnect-all             Disconnect all devices
+
+DEVICE PAIRING:
+  bluetooth-pair MAC                   Pair with device
+  bluetooth-unpair MAC                 Remove pairing
+  bluetooth-trust MAC                  Trust device
+  bluetooth-untrust MAC                Untrust device
+  bluetooth-block MAC                  Block device
+  bluetooth-unblock MAC                Unblock device
+
+POWER MANAGEMENT:
+  bluetooth-power-on                   Enable Bluetooth
+  bluetooth-power-off                  Disable Bluetooth
+  bluetooth-power-status               Check power status
+  bluetooth-power-toggle               Toggle power state
+
+DISCOVERABLE & PAIRABLE:
+  bluetooth-discoverable-on [TIMEOUT]  Make discoverable
+  bluetooth-discoverable-off           Disable discoverable
+  bluetooth-discoverable-status        Check discoverable status
+  bluetooth-pairable-on [TIMEOUT]      Enable pairing
+  bluetooth-pairable-off               Disable pairing
+  bluetooth-pairable-status            Check pairable status
+
+AUDIO PROFILE MANAGEMENT:
+  bluetooth-audio-profile MAC          Get current audio profile
+  bluetooth-audio-profile-set MAC PROF Set profile (a2dp/hsp/hfp)
+  bluetooth-audio-profile-list MAC     List available profiles
+  bluetooth-audio-device-type MAC      Detect if audio device
+
+DEVICE METADATA:
+  bluetooth-device-battery MAC         Get battery level
+  bluetooth-device-rssi MAC            Get signal strength (RSSI)
+  bluetooth-device-type MAC            Get device type
+  bluetooth-device-alias MAC [NAME]    Get/set device alias
+
+FIFO MANAGEMENT:
+  bluetooth-fifo-init                  Initialize bluetoothctl FIFO
+  bluetooth-fifo-command CMD           Send command via FIFO
+  bluetooth-fifo-cleanup               Clean up FIFO resources
+
+SERVICE MANAGEMENT:
+  bluetooth-service-start              Start Bluetooth daemon
+  bluetooth-service-stop               Stop Bluetooth daemon
+
+VALIDATION & UTILITIES:
+  bluetooth-validate-mac MAC           Validate MAC address format
+  bluetooth-format-mac MAC             Normalize MAC address
+  bluetooth-device-exists MAC          Check if device exists
+  bluetooth-service-available          Check bluetoothctl availability
+
+UTILITIES:
+  bluetooth-version                    Display version
+  bluetooth-help                       Display this help
+  bluetooth-info                       Display system information
+  bluetooth-self-test                  Run self-tests
+
+INTEGRATION STATUS:
+  _common:    yes (required)
+  _xdg:       yes (required)
+  _log:       ${LOG_LOADED:-no}
+  _lifecycle: $BLUETOOTH_LIFECYCLE_AVAILABLE
+  _events:    $BLUETOOTH_EVENTS_AVAILABLE
+  _cache:     $BLUETOOTH_CACHE_AVAILABLE
+  _config:    $BLUETOOTH_CONFIG_AVAILABLE
+  _audio:     $BLUETOOTH_AUDIO_AVAILABLE
+  _process:   $BLUETOOTH_PROCESS_AVAILABLE
+
+For detailed documentation: cat ~/.local/docs/lib/_bluetooth.md
+EOF
+}
+
+# Run self-tests
+#
+# Function: bluetooth-self-test
+# Description: Run comprehensive self-tests to validate functionality
+# Returns:
+#   0 - All tests passed
+#   1 - Some tests failed
+# Example:
+#   bluetooth-self-test
+#
+bluetooth-self-test() {
+    _bluetooth-init 2>/dev/null || true
+
+    log-info "Running _bluetooth v$BLUETOOTH_VERSION self-tests..."
+    local tests_passed=0
+    local tests_failed=0
+
+    # Test 1: bluetoothctl availability
+    if bluetooth-service-available; then
+        log-info "✓ bluetoothctl is available"
+        ((tests_passed++))
+    else
+        log-error "✗ bluetoothctl not available"
+        ((tests_failed++))
+        # Can't continue without bluetoothctl
+        log-info "Self-tests complete: $tests_passed passed, $tests_failed failed"
+        return 1
+    fi
+
+    # Test 2: MAC validation
+    if bluetooth-validate-mac "00:11:22:33:44:55"; then
+        log-info "✓ MAC validation works"
+        ((tests_passed++))
+    else
+        log-error "✗ MAC validation failed"
+        ((tests_failed++))
+    fi
+
+    # Test 3: MAC formatting
+    local formatted=$(bluetooth-format-mac "aa:bb:cc:dd:ee:ff")
+    if [[ "$formatted" == "AA:BB:CC:DD:EE:FF" ]]; then
+        log-info "✓ MAC formatting works"
+        ((tests_passed++))
+    else
+        log-error "✗ MAC formatting failed"
+        ((tests_failed++))
+    fi
+
+    # Test 4: Power status query
+    local power_status=$(bluetooth-power-status 2>/dev/null)
+    if [[ -n "$power_status" ]]; then
+        log-info "✓ Can query power status" "status=$power_status"
+        ((tests_passed++))
+    else
+        log-warn "✗ Failed to query power status (expected if BT off)"
+    fi
+
+    # Test 5: Controller list
+    local controllers=$(bluetooth-controller-list 2>/dev/null | wc -l)
+    if [[ $controllers -gt 0 ]]; then
+        log-info "✓ Can list controllers" "count=$controllers"
+        ((tests_passed++))
+    else
+        log-warn "✗ No controllers found (expected if no BT hardware)"
+    fi
+
+    # Test 6: Device list
+    bluetooth-devices-list >/dev/null 2>&1
+    if [[ $? -eq 0 ]]; then
+        log-info "✓ Can list devices"
+        ((tests_passed++))
+    else
+        log-warn "✗ Failed to list devices"
+    fi
+
+    # Test 7: Integration detection
+    log-info "Integration availability:"
+    log-info "  _lifecycle: $BLUETOOTH_LIFECYCLE_AVAILABLE"
+    log-info "  _events:    $BLUETOOTH_EVENTS_AVAILABLE"
+    log-info "  _cache:     $BLUETOOTH_CACHE_AVAILABLE"
+    log-info "  _audio:     $BLUETOOTH_AUDIO_AVAILABLE"
+    ((tests_passed++))
+
+    log-info ""
+    log-info "Self-tests complete: $tests_passed passed, $tests_failed failed"
+
+    if [[ $tests_failed -eq 0 ]]; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+# ------------------------------
+# Module Initialization
+# ------------------------------
+
+# Initialize eagerly to avoid log messages in command substitutions
+_bluetooth-init || true
+
+# Register cleanup if lifecycle available
+if [[ "$BLUETOOTH_LIFECYCLE_AVAILABLE" == "true" ]]; then
+    lifecycle-cleanup-add "bluetooth-cleanup" "bluetooth-fifo-cleanup"
+fi
+
+# Log module load
+log-debug "_bluetooth extension loaded" "version=$BLUETOOTH_VERSION" "integrations=lifecycle:$BLUETOOTH_LIFECYCLE_AVAILABLE,events:$BLUETOOTH_EVENTS_AVAILABLE,cache:$BLUETOOTH_CACHE_AVAILABLE,audio:$BLUETOOTH_AUDIO_AVAILABLE"

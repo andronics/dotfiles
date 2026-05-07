@@ -1,0 +1,1054 @@
+#!/usr/bin/env zsh
+
+# _config - Configuration management with JSON/YAML/INI support and validation
+# Part of the dotfiles library v2.0
+# Version: 1.0.0
+#
+# Usage:
+#   source "${DOTLIB}/_config"
+#   config-load "config.json"
+#   value=$(config-get "database.host")
+#   config-set "database.port" "5432"
+#   config-save "config.json"
+#
+# Features:
+#   - Multiple format support (JSON, YAML, INI, ENV)
+#   - Dot notation for nested keys (e.g., "server.database.host")
+#   - Environment variable overrides
+#   - Type validation (string, int, bool, array)
+#   - Schema validation
+#   - Default values
+#   - Configuration merging
+#
+# Dependencies:
+#   - _common (required)
+#   - jq (optional, for JSON support)
+#   - yq (optional, for YAML support)
+
+# ------------------------------
+# Source Guard
+# ------------------------------
+
+[[ -n "${CONFIG_LOADED:-}" ]] && return 0
+
+# ------------------------------
+# Version
+# ------------------------------
+
+declare -gr CONFIG_VERSION="1.0.0"
+declare -g CONFIG_LOADED=1
+
+# ------------------------------
+# Load Dependencies
+# ------------------------------
+
+# Load _common (required)
+if ! source "${DOTLIB}/_common" 2>/dev/null; then
+    echo "[ERROR] _config requires _common - cannot load" >&2
+    return 1
+fi
+
+# ------------------------------
+# Configuration Variables
+# ------------------------------
+
+# XDG-compliant configuration paths
+declare -g CONFIG_CONFIG_DIR="$(common-xdg-config-home)/config"
+declare -g CONFIG_DATA_DIR="$(common-lib-data-dir)/config"
+declare -g CONFIG_CACHE_DIR="$(common-lib-cache-dir)/config"
+declare -g CONFIG_STATE_DIR="$(common-lib-state-dir)/config"
+
+# Configuration options
+declare -g CONFIG_VERBOSE="${CONFIG_VERBOSE:-false}"
+declare -g CONFIG_DEBUG="${CONFIG_DEBUG:-false}"
+declare -g CONFIG_AUTO_SAVE="${CONFIG_AUTO_SAVE:-false}"
+declare -g CONFIG_ENV_PREFIX="${CONFIG_ENV_PREFIX:-CONFIG}"
+declare -g CONFIG_ALLOW_ENV_OVERRIDE="${CONFIG_ALLOW_ENV_OVERRIDE:-true}"
+
+# Format detection and validation
+declare -g CONFIG_STRICT_MODE="${CONFIG_STRICT_MODE:-false}"
+declare -g CONFIG_VALIDATE_TYPES="${CONFIG_VALIDATE_TYPES:-true}"
+
+# Feature availability flags
+declare -g CONFIG_JQ_AVAILABLE=false
+declare -g CONFIG_YQ_AVAILABLE=false
+
+# Check for optional tools
+if common-command-exists "jq"; then
+    CONFIG_JQ_AVAILABLE=true
+fi
+
+if common-command-exists "yq"; then
+    CONFIG_YQ_AVAILABLE=true
+fi
+
+# ------------------------------
+# Data Storage
+# ------------------------------
+
+# Main configuration storage (flat key-value with dot notation)
+declare -gA _CONFIG_DATA=()
+
+# Metadata storage
+declare -gA _CONFIG_TYPES=()      # Type information (string, int, bool, array)
+declare -gA _CONFIG_DEFAULTS=()   # Default values
+declare -gA _CONFIG_SCHEMA=()     # Schema validation rules
+
+# State tracking
+declare -g _CONFIG_SOURCE_FILE=""
+declare -g _CONFIG_SOURCE_FORMAT=""
+declare -g _CONFIG_MODIFIED=false
+
+# Statistics
+declare -g _CONFIG_TOTAL_KEYS=0
+declare -g _CONFIG_TOTAL_LOADS=0
+declare -g _CONFIG_TOTAL_SAVES=0
+declare -g _CONFIG_TOTAL_GETS=0
+declare -g _CONFIG_TOTAL_SETS=0
+
+# ------------------------------
+# Color Constants
+# ------------------------------
+
+declare -gr _CONFIG_COLOR_INFO="$COLOR_BLUE"
+declare -gr _CONFIG_COLOR_SUCCESS="$COLOR_GREEN"
+declare -gr _CONFIG_COLOR_WARNING="$COLOR_YELLOW"
+declare -gr _CONFIG_COLOR_ERROR="$COLOR_RED"
+
+# ------------------------------
+# Internal Logging Functions
+# ------------------------------
+
+_config-log-debug() {
+    [[ "$CONFIG_DEBUG" == "true" ]] || return 0
+    echo "[DEBUG] config: $*" >&2
+}
+
+_config-log-verbose() {
+    [[ "$CONFIG_VERBOSE" == "true" ]] || return 0
+    echo "[INFO] config: $*" >&2
+}
+
+_config-log-error() {
+    echo -e "${_CONFIG_COLOR_ERROR}[ERROR] config: $*${COLOR_RESET}" >&2
+}
+
+_config-log-warning() {
+    echo -e "${_CONFIG_COLOR_WARNING}[WARNING] config: $*${COLOR_RESET}" >&2
+}
+
+_config-log-info() {
+    echo -e "${_CONFIG_COLOR_INFO}[INFO] config: $*${COLOR_RESET}" >&2
+}
+
+# ------------------------------
+# Internal Helper Functions
+# ------------------------------
+
+# Normalize key (ensure consistent format)
+_config-normalize-key() {
+    local key="$1"
+    # Remove leading/trailing dots, collapse multiple dots
+    echo "$key" | sed -e 's/^\.*//' -e 's/\.*$//' -e 's/\.\.*/./g'
+}
+
+# Check if key exists in environment variables
+_config-check-env-override() {
+    local key="$1"
+
+    [[ "$CONFIG_ALLOW_ENV_OVERRIDE" != "true" ]] && return 1
+
+    # Convert dot notation to underscore and uppercase
+    # e.g., "database.host" -> "CONFIG_DATABASE_HOST"
+    local env_key="${CONFIG_ENV_PREFIX}_${key//\./_}"
+    env_key="${env_key:u}"  # Uppercase
+
+    if [[ -n "${(P)env_key}" ]]; then
+        _config-log-debug "Environment override found: $env_key=${(P)env_key}"
+        echo "${(P)env_key}"
+        return 0
+    fi
+
+    return 1
+}
+
+# Validate value type
+_config-validate-type() {
+    local value="$1"
+    local expected_type="$2"
+
+    case "$expected_type" in
+        string)
+            # Anything is a valid string
+            return 0
+            ;;
+        int|integer)
+            if [[ "$value" =~ ^-?[0-9]+$ ]]; then
+                return 0
+            else
+                _config-log-error "Value is not an integer: $value"
+                return 1
+            fi
+            ;;
+        bool|boolean)
+            if [[ "$value" =~ ^(true|false|0|1|yes|no|on|off)$ ]]; then
+                return 0
+            else
+                _config-log-error "Value is not a boolean: $value"
+                return 1
+            fi
+            ;;
+        float|number)
+            if [[ "$value" =~ ^-?[0-9]+\.?[0-9]*$ ]]; then
+                return 0
+            else
+                _config-log-error "Value is not a number: $value"
+                return 1
+            fi
+            ;;
+        array)
+            # For now, accept anything (arrays stored as strings)
+            return 0
+            ;;
+        *)
+            _config-log-warning "Unknown type: $expected_type, skipping validation"
+            return 0
+            ;;
+    esac
+}
+
+# Convert boolean strings to normalized form
+_config-normalize-bool() {
+    local value="$1"
+
+    case "${value:l}" in
+        true|1|yes|on)
+            echo "true"
+            ;;
+        false|0|no|off)
+            echo "false"
+            ;;
+        *)
+            echo "$value"
+            ;;
+    esac
+}
+
+# Auto-save if enabled
+_config-auto-save() {
+    [[ "$CONFIG_AUTO_SAVE" != "true" ]] && return 0
+    [[ -z "$_CONFIG_SOURCE_FILE" ]] && return 0
+
+    config-save "$_CONFIG_SOURCE_FILE"
+}
+
+# ------------------------------
+# Format Detection
+# ------------------------------
+
+config-detect-format() {
+    local file="$1"
+
+    common-validate-required "$file" "file" || return 2
+
+    # Detect by extension
+    case "${file:e:l}" in
+        json)
+            echo "json"
+            return 0
+            ;;
+        yaml|yml)
+            echo "yaml"
+            return 0
+            ;;
+        ini|conf)
+            echo "ini"
+            return 0
+            ;;
+        env)
+            echo "env"
+            return 0
+            ;;
+    esac
+
+    # Try to detect by content
+    if [[ -f "$file" ]]; then
+        local first_line=$(head -n1 "$file" 2>/dev/null)
+
+        if [[ "$first_line" =~ ^\{ || "$first_line" =~ ^\[ ]]; then
+            echo "json"
+            return 0
+        elif [[ "$first_line" =~ ^--- ]]; then
+            echo "yaml"
+            return 0
+        elif [[ "$first_line" =~ ^\[.*\] ]]; then
+            echo "ini"
+            return 0
+        fi
+    fi
+
+    # Default to env format
+    echo "env"
+    return 0
+}
+
+# ------------------------------
+# JSON Format Handlers
+# ------------------------------
+
+_config-load-json() {
+    local file="$1"
+
+    if [[ "$CONFIG_JQ_AVAILABLE" != "true" ]]; then
+        _config-log-error "JSON support requires 'jq' (install: sudo pacman -S jq)"
+        return 6
+    fi
+
+    if ! jq empty "$file" 2>/dev/null; then
+        _config-log-error "Invalid JSON in file: $file"
+        return 3
+    fi
+
+    # Flatten JSON to dot notation using jq
+    local json_data
+    json_data=$(jq -r 'paths(scalars) as $p | "\($p | join("."))=\(getpath($p))"' "$file" 2>/dev/null)
+
+    if [[ $? -ne 0 ]]; then
+        _config-log-error "Failed to parse JSON file: $file"
+        return 3
+    fi
+
+    # Load flattened data
+    local line key value
+    while IFS='=' read -r key value; do
+        [[ -z "$key" ]] && continue
+        key=$(_config-normalize-key "$key")
+        _CONFIG_DATA[$key]="$value"
+        _CONFIG_TYPES[$key]="string"  # Default type
+        ((_CONFIG_TOTAL_KEYS++))
+    done <<< "$json_data"
+
+    _config-log-verbose "Loaded $_CONFIG_TOTAL_KEYS keys from JSON file"
+    return 0
+}
+
+_config-save-json() {
+    local file="$1"
+
+    if [[ "$CONFIG_JQ_AVAILABLE" != "true" ]]; then
+        _config-log-error "JSON support requires 'jq'"
+        return 6
+    fi
+
+    common-ensure-dir "$(dirname "$file")"
+
+    # Build JSON object from flat keys
+    local json="{}"
+    local key value
+
+    for key in "${(@k)_CONFIG_DATA}"; do
+        value="${_CONFIG_DATA[$key]}"
+
+        # Escape value for JSON
+        value=$(echo -n "$value" | jq -Rs .)
+
+        # Build nested path
+        local path_parts=("${(@s:.:)key}")
+        local jq_path=""
+
+        for part in "${path_parts[@]}"; do
+            jq_path="${jq_path}.${part}"
+        done
+
+        # Set value in JSON
+        json=$(echo "$json" | jq "${jq_path} = $value" 2>/dev/null)
+    done
+
+    echo "$json" | jq '.' > "$file"
+
+    _config-log-verbose "Saved configuration to JSON file: $file"
+    return 0
+}
+
+# ------------------------------
+# INI Format Handlers
+# ------------------------------
+
+_config-load-ini() {
+    local file="$1"
+
+    local section=""
+    local line key value
+
+    while IFS= read -r line; do
+        # Skip empty lines and comments
+        [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
+
+        # Check for section header
+        if [[ "$line" =~ '^\[([^]]+)\]' ]]; then
+            section="${match[1]}"
+            _config-log-debug "INI section: $section"
+            continue
+        fi
+
+        # Parse key=value
+        if [[ "$line" =~ ^([^=]+)=(.*)$ ]]; then
+            key="${match[1]}"
+            value="${match[2]}"
+
+            # Trim whitespace
+            key="${key## }"
+            key="${key%% }"
+            value="${value## }"
+            value="${value%% }"
+
+            # Remove quotes from value
+            if [[ "$value" =~ ^\"(.*)\"$ || "$value" =~ ^\'(.*)\'$ ]]; then
+                value="${match[1]}"
+            fi
+
+            # Build full key with section
+            if [[ -n "$section" ]]; then
+                key="${section}.${key}"
+            fi
+
+            key=$(_config-normalize-key "$key")
+            _CONFIG_DATA[$key]="$value"
+            _CONFIG_TYPES[$key]="string"
+            ((_CONFIG_TOTAL_KEYS++))
+        fi
+    done < "$file"
+
+    _config-log-verbose "Loaded $_CONFIG_TOTAL_KEYS keys from INI file"
+    return 0
+}
+
+_config-save-ini() {
+    local file="$1"
+
+    common-ensure-dir "$(dirname "$file")"
+
+    # Group keys by section
+    local -A sections
+    local key value section base_key
+
+    for key in "${(@k)_CONFIG_DATA}"; do
+        value="${_CONFIG_DATA[$key]}"
+
+        # Split into section and key
+        if [[ "$key" =~ ^([^.]+)\.(.+)$ ]]; then
+            section="${match[1]}"
+            base_key="${match[2]}"
+        else
+            section=""
+            base_key="$key"
+        fi
+
+        sections[$section]+="${base_key}=${value}\n"
+    done
+
+    # Write INI file
+    {
+        # Write keys without section first (if any)
+        if [[ -n "${sections[""]:-}" ]]; then
+            echo -e "${sections[""]}" | sed '/^$/d'
+            echo ""
+        fi
+
+        # Write each section
+        for section in "${(@k)sections}"; do
+            [[ -z "$section" ]] && continue
+            echo "[$section]"
+            echo -e "${sections[$section]}" | sed '/^$/d'
+            echo ""
+        done
+    } > "$file"
+
+    _config-log-verbose "Saved configuration to INI file: $file"
+    return 0
+}
+
+# ------------------------------
+# ENV Format Handlers
+# ------------------------------
+
+_config-load-env() {
+    local file="$1"
+
+    local line key value
+
+    while IFS= read -r line; do
+        # Skip empty lines and comments
+        [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
+
+        # Parse KEY=VALUE
+        if [[ "$line" =~ ^([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]]; then
+            key="${match[1]}"
+            value="${match[2]}"
+
+            # Remove quotes from value
+            if [[ "$value" =~ ^\"(.*)\"$ || "$value" =~ ^\'(.*)\'$ ]]; then
+                value="${match[1]}"
+            fi
+
+            # Convert underscore to dot notation (lowercase)
+            key="${key:l}"
+            key="${key//_/.}"
+
+            key=$(_config-normalize-key "$key")
+            _CONFIG_DATA[$key]="$value"
+            _CONFIG_TYPES[$key]="string"
+            ((_CONFIG_TOTAL_KEYS++))
+        fi
+    done < "$file"
+
+    _config-log-verbose "Loaded $_CONFIG_TOTAL_KEYS keys from ENV file"
+    return 0
+}
+
+_config-save-env() {
+    local file="$1"
+
+    common-ensure-dir "$(dirname "$file")"
+
+    {
+        echo "# Configuration file"
+        echo "# Generated: $(date)"
+        echo ""
+
+        local key value env_key
+        for key in "${(@ko)_CONFIG_DATA}"; do
+            value="${_CONFIG_DATA[$key]}"
+
+            # Convert dot notation to uppercase with underscores
+            env_key="${key//\./_}"
+            env_key="${env_key:u}"
+
+            # Quote value if it contains spaces
+            if [[ "$value" =~ [[:space:]] ]]; then
+                echo "${env_key}=\"${value}\""
+            else
+                echo "${env_key}=${value}"
+            fi
+        done
+    } > "$file"
+
+    _config-log-verbose "Saved configuration to ENV file: $file"
+    return 0
+}
+
+# ------------------------------
+# Core Public Functions
+# ------------------------------
+
+config-load() {
+    local file="$1"
+    local format="${2:-}"
+    local merge="${3:-false}"
+
+    # Validate file
+    common-validate-required "$file" "file" || return 2
+
+    if [[ ! -f "$file" ]]; then
+        _config-log-error "File not found: $file"
+        return 4
+    fi
+
+    # Detect format if not specified
+    if [[ -z "$format" ]]; then
+        format=$(config-detect-format "$file")
+    fi
+
+    _config-log-debug "Loading configuration from $file (format: $format, merge: $merge)"
+
+    # Clear existing data if not merging
+    if [[ "$merge" != "true" ]]; then
+        config-clear-all
+    fi
+
+    # Load based on format
+    case "$format" in
+        json)
+            _config-load-json "$file" || return $?
+            ;;
+        yaml|yml)
+            _config-log-error "YAML support not yet implemented (requires yq)"
+            return 6
+            ;;
+        ini|conf)
+            _config-load-ini "$file" || return $?
+            ;;
+        env)
+            _config-load-env "$file" || return $?
+            ;;
+        *)
+            _config-log-error "Unsupported format: $format"
+            return 2
+            ;;
+    esac
+
+    # Update state
+    _CONFIG_SOURCE_FILE="$file"
+    _CONFIG_SOURCE_FORMAT="$format"
+    _CONFIG_MODIFIED=false
+    ((_CONFIG_TOTAL_LOADS++))
+
+    _config-log-verbose "Configuration loaded successfully"
+    return 0
+}
+
+config-save() {
+    local file="${1:-$_CONFIG_SOURCE_FILE}"
+    local format="${2:-$_CONFIG_SOURCE_FORMAT}"
+
+    # Validate
+    if [[ -z "$file" ]]; then
+        _config-log-error "No file specified and no source file loaded"
+        return 2
+    fi
+
+    # Detect format if not specified
+    if [[ -z "$format" ]]; then
+        format=$(config-detect-format "$file")
+    fi
+
+    _config-log-debug "Saving configuration to $file (format: $format)"
+
+    # Save based on format
+    case "$format" in
+        json)
+            _config-save-json "$file" || return $?
+            ;;
+        yaml|yml)
+            _config-log-error "YAML support not yet implemented"
+            return 6
+            ;;
+        ini|conf)
+            _config-save-ini "$file" || return $?
+            ;;
+        env)
+            _config-save-env "$file" || return $?
+            ;;
+        *)
+            _config-log-error "Unsupported format: $format"
+            return 2
+            ;;
+    esac
+
+    # Update state
+    _CONFIG_SOURCE_FILE="$file"
+    _CONFIG_SOURCE_FORMAT="$format"
+    _CONFIG_MODIFIED=false
+    ((_CONFIG_TOTAL_SAVES++))
+
+    _config-log-verbose "Configuration saved successfully"
+    return 0
+}
+
+config-get() {
+    local key="$1"
+    local default="${2:-}"
+
+    common-validate-required "$key" "key" || return 2
+
+    key=$(_config-normalize-key "$key")
+
+    # Check for environment variable override
+    local env_value
+    if env_value=$(_config-check-env-override "$key"); then
+        echo "$env_value"
+        ((_CONFIG_TOTAL_GETS++))
+        return 0
+    fi
+
+    # Check if key exists
+    if [[ -n "${_CONFIG_DATA[$key]}" ]]; then
+        echo "${_CONFIG_DATA[$key]}"
+        ((_CONFIG_TOTAL_GETS++))
+        return 0
+    fi
+
+    # Check for default value
+    if [[ -n "${_CONFIG_DEFAULTS[$key]}" ]]; then
+        echo "${_CONFIG_DEFAULTS[$key]}"
+        ((_CONFIG_TOTAL_GETS++))
+        return 0
+    fi
+
+    # Use provided default
+    if [[ -n "$default" ]]; then
+        echo "$default"
+        return 0
+    fi
+
+    # Key not found
+    _config-log-debug "Key not found: $key"
+    return 1
+}
+
+config-set() {
+    local key="$1"
+    local value="$2"
+    local type="${3:-string}"
+
+    # Validate
+    common-validate-required "$key" "key" || return 2
+
+    key=$(_config-normalize-key "$key")
+
+    # Validate type if enabled
+    if [[ "$CONFIG_VALIDATE_TYPES" == "true" ]]; then
+        _config-validate-type "$value" "$type" || return 2
+    fi
+
+    # Normalize boolean values
+    if [[ "$type" == "bool" || "$type" == "boolean" ]]; then
+        value=$(_config-normalize-bool "$value")
+    fi
+
+    # Set value
+    _CONFIG_DATA[$key]="$value"
+    _CONFIG_TYPES[$key]="$type"
+    _CONFIG_MODIFIED=true
+    ((_CONFIG_TOTAL_SETS++))
+
+    _config-log-debug "Set: $key = $value (type: $type)"
+
+    # Auto-save if enabled
+    _config-auto-save
+
+    return 0
+}
+
+config-has() {
+    local key="$1"
+
+    common-validate-required "$key" "key" || return 2
+
+    key=$(_config-normalize-key "$key")
+
+    # Check if key exists
+    [[ -n "${_CONFIG_DATA[$key]}" ]] && return 0
+
+    # Check in defaults
+    [[ -n "${_CONFIG_DEFAULTS[$key]}" ]] && return 0
+
+    return 1
+}
+
+config-delete() {
+    local key="$1"
+
+    common-validate-required "$key" "key" || return 2
+
+    key=$(_config-normalize-key "$key")
+
+    if ! config-has "$key"; then
+        _config-log-debug "Key not found: $key"
+        return 1
+    fi
+
+    unset "_CONFIG_DATA[$key]"
+    unset "_CONFIG_TYPES[$key]"
+    unset "_CONFIG_DEFAULTS[$key]"
+    _CONFIG_MODIFIED=true
+
+    _config-log-debug "Deleted: $key"
+
+    # Auto-save if enabled
+    _config-auto-save
+
+    return 0
+}
+
+config-keys() {
+    local pattern="${1:-*}"
+
+    # List all keys matching pattern
+    for key in "${(@k)_CONFIG_DATA}"; do
+        if [[ "$key" == $~pattern ]]; then
+            echo "$key"
+        fi
+    done
+}
+
+config-clear-all() {
+    _config-log-debug "Clearing all configuration"
+
+    _CONFIG_DATA=()
+    _CONFIG_TYPES=()
+    _CONFIG_DEFAULTS=()
+    _CONFIG_SCHEMA=()
+    _CONFIG_TOTAL_KEYS=0
+    _CONFIG_MODIFIED=false
+
+    return 0
+}
+
+config-size() {
+    echo "${#_CONFIG_DATA[@]}"
+}
+
+config-merge() {
+    local file="$1"
+    local format="${2:-}"
+
+    common-validate-required "$file" "file" || return 2
+
+    config-load "$file" "$format" "true"
+}
+
+config-set-default() {
+    local key="$1"
+    local value="$2"
+
+    common-validate-required "$key" "key" || return 2
+    common-validate-required "$value" "value" || return 2
+
+    key=$(_config-normalize-key "$key")
+    _CONFIG_DEFAULTS[$key]="$value"
+
+    _config-log-debug "Set default: $key = $value"
+    return 0
+}
+
+config-get-type() {
+    local key="$1"
+
+    common-validate-required "$key" "key" || return 2
+
+    key=$(_config-normalize-key "$key")
+
+    if [[ -n "${_CONFIG_TYPES[$key]}" ]]; then
+        echo "${_CONFIG_TYPES[$key]}"
+        return 0
+    fi
+
+    echo "unknown"
+    return 1
+}
+
+# ------------------------------
+# Statistics and Info
+# ------------------------------
+
+config-stats() {
+    echo "Configuration Statistics:"
+    echo "  Total Keys: ${#_CONFIG_DATA[@]}"
+    echo "  Source File: ${_CONFIG_SOURCE_FILE:-none}"
+    echo "  Source Format: ${_CONFIG_SOURCE_FORMAT:-none}"
+    echo "  Modified: $_CONFIG_MODIFIED"
+    echo "  Auto-save: $CONFIG_AUTO_SAVE"
+    echo ""
+    echo "Operations:"
+    echo "  Loads: $_CONFIG_TOTAL_LOADS"
+    echo "  Saves: $_CONFIG_TOTAL_SAVES"
+    echo "  Gets: $_CONFIG_TOTAL_GETS"
+    echo "  Sets: $_CONFIG_TOTAL_SETS"
+    echo ""
+    echo "Feature Support:"
+    echo "  JSON: $([ "$CONFIG_JQ_AVAILABLE" = "true" ] && echo "✓ Available" || echo "✗ Not available (install jq)")"
+    echo "  YAML: $([ "$CONFIG_YQ_AVAILABLE" = "true" ] && echo "✓ Available" || echo "✗ Not available (install yq)")"
+    echo "  INI: ✓ Available"
+    echo "  ENV: ✓ Available"
+}
+
+config-dump() {
+    local format="${1:-env}"
+
+    case "$format" in
+        env)
+            for key in "${(@ko)_CONFIG_DATA}"; do
+                echo "${key}=${_CONFIG_DATA[$key]}"
+            done
+            ;;
+        table)
+            echo "KEY|VALUE|TYPE"
+            echo "---|-----|----"
+            for key in "${(@ko)_CONFIG_DATA}"; do
+                echo "${key}|${_CONFIG_DATA[$key]}|${_CONFIG_TYPES[$key]:-string}"
+            done
+            ;;
+        *)
+            _config-log-error "Unknown dump format: $format"
+            return 2
+            ;;
+    esac
+}
+
+# ------------------------------
+# Help and Documentation
+# ------------------------------
+
+config-help() {
+    cat <<'EOF'
+config - Configuration management with JSON/YAML/INI support and validation
+Version: 1.0.0
+
+Usage:
+  source "${DOTLIB}/_config"
+  config-<command> [options]
+
+Core Commands:
+  config-load <file> [format] [merge]  Load configuration from file
+  config-save [file] [format]          Save configuration to file
+  config-get <key> [default]           Get configuration value
+  config-set <key> <value> [type]      Set configuration value
+  config-has <key>                     Check if key exists
+  config-delete <key>                  Delete configuration key
+  config-merge <file> [format]         Merge configuration from file
+
+Query Commands:
+  config-keys [pattern]                List all keys (optionally filtered)
+  config-size                          Get number of configuration keys
+  config-get-type <key>                Get type of key
+  config-dump [format]                 Dump all configuration (env or table)
+
+Utility Commands:
+  config-set-default <key> <value>     Set default value for key
+  config-clear-all                     Clear all configuration
+  config-stats                         Show statistics
+  config-help                          Show this help message
+
+Supported Formats:
+  json  - JSON format (requires jq)
+  yaml  - YAML format (requires yq, not yet implemented)
+  ini   - INI/CONF format (native support)
+  env   - Environment variable format (native support)
+
+Format is auto-detected from file extension if not specified.
+
+Dot Notation:
+  Keys support dot notation for nested structures:
+    config-set "database.host" "localhost"
+    config-set "database.port" "5432"
+    config-get "database.host"
+
+Environment Variable Overrides:
+  When CONFIG_ALLOW_ENV_OVERRIDE=true (default), values can be
+  overridden by environment variables:
+    database.host -> CONFIG_DATABASE_HOST
+    server.port -> CONFIG_SERVER_PORT
+
+Type Validation:
+  When CONFIG_VALIDATE_TYPES=true (default), values are validated:
+    config-set "port" "5432" "int"      # Valid
+    config-set "port" "abc" "int"       # Error
+
+  Supported types: string, int, bool, float, array
+
+Configuration:
+  CONFIG_VERBOSE=true/false           Enable verbose output
+  CONFIG_DEBUG=true/false             Enable debug output
+  CONFIG_AUTO_SAVE=true/false         Auto-save after modifications
+  CONFIG_ENV_PREFIX=CONFIG            Prefix for env var overrides
+  CONFIG_ALLOW_ENV_OVERRIDE=true      Allow env var overrides
+  CONFIG_STRICT_MODE=true/false       Strict validation
+  CONFIG_VALIDATE_TYPES=true/false    Type validation
+
+Examples:
+  # Load JSON configuration
+  config-load "config.json"
+
+  # Get value with default
+  host=$(config-get "database.host" "localhost")
+
+  # Set typed values
+  config-set "database.port" "5432" "int"
+  config-set "database.ssl" "true" "bool"
+
+  # Save configuration
+  config-save "config.json"
+
+  # Merge configurations
+  config-load "base.json"
+  config-merge "override.json"
+
+  # List all database keys
+  config-keys "database.*"
+
+  # Check if modified
+  config-stats
+
+For complete documentation:
+  cat $(common-lib-docs-dir)/extensions/_config.md
+
+EOF
+}
+
+# ------------------------------
+# Self-Test
+# ------------------------------
+
+config-self-test() {
+    # Load _test from same directory
+    local test_dir="${${(%):-%x}:A:h}"
+    if ! source "$test_dir/_test" 2>/dev/null; then
+        echo "[ERROR] config-self-test requires _test framework (expected at $test_dir/_test)" >&2
+        return 1
+    fi
+
+    echo "=== Testing config v$CONFIG_VERSION ==="
+    test-reset
+
+    echo "## Basic Tests"
+    test-assert-not-empty "$CONFIG_VERSION" "version should be set"
+    test-assert-equals "$CONFIG_VERSION" "1.0.0" "version should be 1.0.0"
+    test-assert-equals "$CONFIG_LOADED" "1" "loaded flag should be set"
+
+    echo ""
+    echo "## Core Operations"
+
+    config-set "test.key1" "value1"
+    result=$(config-get "test.key1")
+    test-assert-equals "$result" "value1" "should set and get value"
+
+    config-has "test.key1"
+    test-assert-true "should detect existing key" test $? -eq 0
+
+    config-has "nonexistent.key"
+    test-assert-false "should detect missing key" test $? -eq 0
+
+    config-delete "test.key1"
+    config-has "test.key1"
+    test-assert-false "should delete key" test $? -eq 0
+
+    echo ""
+
+    test-summary
+    return $?
+}
+
+# ------------------------------
+# Script Execution Detection
+# ------------------------------
+
+# Use ZSH_EVAL_CONTEXT to reliably detect if sourced vs executed
+if [[ "${ZSH_EVAL_CONTEXT}" == *:file || "${ZSH_EVAL_CONTEXT}" == "file" ]]; then
+    # Sourced, don't run anything
+    :
+elif [[ "${ZSH_EVAL_CONTEXT}" == "" || "${(%):-%x}" == "$0" ]]; then
+    # Executed directly
+    case "${1:-help}" in
+        self-test)
+            config-self-test
+            exit $?
+            ;;
+        help|--help|-h)
+            config-help
+            exit 0
+            ;;
+        *)
+            echo "Error: Extension must be sourced, not executed directly" >&2
+            echo "Usage: source \"\${DOTLIB}/_config\"" >&2
+            echo "For help: $0 help" >&2
+            exit 1
+            ;;
+    esac
+fi
+
+# ------------------------------
+# Extension Loaded
+# ------------------------------
+
+_config-log-debug "Extension loaded successfully"

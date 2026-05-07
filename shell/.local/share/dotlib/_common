@@ -1,0 +1,924 @@
+#!/usr/bin/env zsh
+
+# _common - Core utilities and constants for the extensions library
+# Part of the dotfiles library v2.0
+# Version: 1.0.0
+#
+# Usage:
+#   source "${DOTLIB}/_common"
+#
+# Provides:
+#   - XDG Base Directory compliance
+#   - Standard color constants
+#   - Path helpers (XDG-aware)
+#   - Command existence checks (cached)
+#   - Security utilities (sanitization)
+#   - Validation helpers
+#   - Retry/timeout wrappers
+#   - Platform detection
+#   - String/array utilities
+#   - Error handling patterns
+
+# ------------------------------
+# Source Guard
+# ------------------------------
+
+[[ -n "${COMMON_LOADED:-}" ]] && return 0
+
+# ------------------------------
+# Version
+# ------------------------------
+
+declare -gr COMMON_VERSION="1.0.0"
+declare -g COMMON_LOADED=1
+
+# ------------------------------
+# XDG Base Directory Specification
+# ------------------------------
+# Implements XDG Base Directory spec for cross-platform consistency
+# https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html
+
+# Get XDG data home directory
+# Default: $HOME/.local/share
+# Usage: data_dir=$(common-xdg-data-home)
+common-xdg-data-home() {
+    echo "${XDG_DATA_HOME:-$HOME/.local/share}"
+}
+
+# Get XDG config home directory
+# Default: $HOME/.config
+# Usage: config_dir=$(common-xdg-config-home)
+common-xdg-config-home() {
+    echo "${XDG_CONFIG_HOME:-$HOME/.config}"
+}
+
+# Get XDG state home directory
+# Default: $HOME/.local/state
+# Usage: state_dir=$(common-xdg-state-home)
+common-xdg-state-home() {
+    echo "${XDG_STATE_HOME:-$HOME/.local/state}"
+}
+
+# Get XDG cache home directory
+# Default: $HOME/.cache
+# Usage: cache_dir=$(common-xdg-cache-home)
+common-xdg-cache-home() {
+    echo "${XDG_CACHE_HOME:-$HOME/.cache}"
+}
+
+# Get XDG runtime directory
+# Default: /run/user/$(id -u)
+# Usage: runtime_dir=$(common-xdg-runtime-dir)
+common-xdg-runtime-dir() {
+    local default_runtime="/run/user/$(id -u)"
+    echo "${XDG_RUNTIME_DIR:-$default_runtime}"
+}
+
+# ------------------------------
+# Library-Specific XDG Paths
+# ------------------------------
+# These functions provide standard paths for library components
+
+# Get library data directory
+# Usage: data_dir=$(common-lib-data-dir)
+common-lib-data-dir() {
+    echo "$(common-xdg-data-home)/lib"
+}
+
+# Get library cache directory
+# Usage: cache_dir=$(common-lib-cache-dir)
+common-lib-cache-dir() {
+    echo "$(common-xdg-cache-home)/lib"
+}
+
+# Get library state directory
+# Usage: state_dir=$(common-lib-state-dir)
+common-lib-state-dir() {
+    echo "$(common-xdg-state-home)/lib"
+}
+
+# Get library config directory
+# Usage: config_dir=$(common-lib-config-dir)
+common-lib-config-dir() {
+    echo "$(common-xdg-config-home)/lib"
+}
+
+# Get library documentation directory
+# Usage: docs_dir=$(common-lib-docs-dir)
+common-lib-docs-dir() {
+    echo "$(common-lib-data-dir)/docs"
+}
+
+# Get library templates directory
+# Usage: templates_dir=$(common-lib-template-dir)
+common-lib-template-dir() {
+    echo "$(common-lib-data-dir)/templates"
+}
+
+# Ensure library directories exist
+# Usage: common-lib-ensure-dirs
+common-lib-ensure-dirs() {
+    local -a dirs=(
+        "$(common-lib-data-dir)"
+        "$(common-lib-cache-dir)"
+        "$(common-lib-state-dir)"
+        "$(common-lib-config-dir)"
+        "$(common-lib-docs-dir)"
+        "$(common-lib-template-dir)"
+    )
+
+    for dir in "${dirs[@]}"; do
+        [[ ! -d "$dir" ]] && mkdir -p "$dir" 2>/dev/null
+    done
+}
+
+# ------------------------------
+# Color Constants
+# ------------------------------
+# ANSI color codes for terminal styling
+
+# Basic colors
+declare -r COLOR_BLACK='\033[0;30m'
+declare -r COLOR_RED='\033[0;31m'
+declare -r COLOR_GREEN='\033[0;32m'
+declare -r COLOR_YELLOW='\033[0;33m'
+declare -r COLOR_BLUE='\033[0;34m'
+declare -r COLOR_MAGENTA='\033[0;35m'
+declare -r COLOR_CYAN='\033[0;36m'
+declare -r COLOR_WHITE='\033[0;37m'
+
+# Bright colors
+declare -r COLOR_BRIGHT_BLACK='\033[0;90m'
+declare -r COLOR_BRIGHT_RED='\033[0;91m'
+declare -r COLOR_BRIGHT_GREEN='\033[0;92m'
+declare -r COLOR_BRIGHT_YELLOW='\033[0;93m'
+declare -r COLOR_BRIGHT_BLUE='\033[0;94m'
+declare -r COLOR_BRIGHT_MAGENTA='\033[0;95m'
+declare -r COLOR_BRIGHT_CYAN='\033[0;96m'
+declare -r COLOR_BRIGHT_WHITE='\033[0;97m'
+
+# Text styling
+declare -r COLOR_BOLD='\033[1m'
+declare -r COLOR_DIM='\033[2m'
+declare -r COLOR_ITALIC='\033[3m'
+declare -r COLOR_UNDERLINE='\033[4m'
+declare -r COLOR_BLINK='\033[5m'
+declare -r COLOR_REVERSE='\033[7m'
+declare -r COLOR_HIDDEN='\033[8m'
+
+# Reset
+declare -r COLOR_RESET='\033[0m'
+declare -r COLOR_NC='\033[0m'  # No Color
+
+# Legacy compatibility (v1.0 names)
+declare -r GREEN="$COLOR_GREEN"
+declare -r BLUE="$COLOR_BLUE"
+declare -r YELLOW="$COLOR_YELLOW"
+declare -r RED="$COLOR_RED"
+declare -r CYAN="$COLOR_CYAN"
+declare -r MAGENTA="$COLOR_MAGENTA"
+declare -r BOLD="$COLOR_BOLD"
+declare -r NC="$COLOR_NC"
+
+# ------------------------------
+# Command Existence Checks (Cached)
+# ------------------------------
+# Cache command checks in XDG_CACHE_HOME for performance
+
+# Internal: cache file path
+_COMMON_CMD_CACHE_FILE="$(common-lib-cache-dir)/commands/cache"
+
+# Internal: initialize command cache
+_common-init-cmd-cache() {
+    local cache_dir="${_COMMON_CMD_CACHE_FILE:h}"  # Use zsh :h for dirname
+    [[ ! -d "$cache_dir" ]] && /bin/mkdir -p "$cache_dir" 2>/dev/null
+    [[ ! -f "$_COMMON_CMD_CACHE_FILE" ]] && touch "$_COMMON_CMD_CACHE_FILE" 2>/dev/null
+}
+
+# Check if a command exists (with caching)
+# Usage: common-command-exists "ls" && echo "found"
+# Returns: 0 if command exists, 1 otherwise
+common-command-exists() {
+    local cmd="$1"
+
+    [[ -z "$cmd" ]] && return 1
+
+    # Check cache first
+    if [[ -f "$_COMMON_CMD_CACHE_FILE" ]]; then
+        if /usr/bin/grep -q "^${cmd}:1$" "$_COMMON_CMD_CACHE_FILE" 2>/dev/null; then
+            return 0
+        elif /usr/bin/grep -q "^${cmd}:0$" "$_COMMON_CMD_CACHE_FILE" 2>/dev/null; then
+            return 1
+        fi
+    fi
+
+    # Not in cache, check for real
+    if command -v "$cmd" &>/dev/null; then
+        _common-cache-command "$cmd" 1
+        return 0
+    else
+        _common-cache-command "$cmd" 0
+        return 1
+    fi
+}
+
+# Internal: cache command result
+_common-cache-command() {
+    local cmd="$1"
+    local exists="$2"
+
+    _common-init-cmd-cache
+
+    # Remove old entry if exists
+    if [[ -f "$_COMMON_CMD_CACHE_FILE" ]]; then
+        /usr/bin/sed -i "/^${cmd}:/d" "$_COMMON_CMD_CACHE_FILE" 2>/dev/null
+    fi
+
+    # Add new entry
+    echo "${cmd}:${exists}" >> "$_COMMON_CMD_CACHE_FILE" 2>/dev/null
+}
+
+# Clear command cache
+# Usage: common-command-cache-clear
+common-command-cache-clear() {
+    [[ -f "$_COMMON_CMD_CACHE_FILE" ]] && rm -f "$_COMMON_CMD_CACHE_FILE"
+}
+
+# Require a command to exist (returns error if not found)
+# Usage: common-require-command "jq" "Install jq first" || return $?
+# Returns: 0 if found, 6 if missing
+common-require-command() {
+    local cmd="$1"
+    local msg="${2:-Install $cmd to continue}"
+
+    if ! common-command-exists "$cmd"; then
+        echo "Error: Required command not found: $cmd" >&2
+        echo "$msg" >&2
+        return 6  # Dependency missing
+    fi
+}
+
+# Require multiple commands to exist
+# Usage: common-require-commands "jq" "curl" "git" || return $?
+# Returns: 0 if all found, 6 if any missing
+common-require-commands() {
+    local missing=()
+
+    for cmd in "$@"; do
+        if ! common-command-exists "$cmd"; then
+            missing+=("$cmd")
+        fi
+    done
+
+    if [[ ${#missing[@]} -gt 0 ]]; then
+        echo "Error: Required commands not found: ${missing[*]}" >&2
+        return 6
+    fi
+}
+
+# ------------------------------
+# Security: Path Sanitization
+# ------------------------------
+
+# Sanitize a path to prevent traversal attacks
+# Usage: safe_path=$(common-path-sanitize "$user_input") || return $?
+# Returns: sanitized absolute path or empty string on error
+common-path-sanitize() {
+    local path="$1"
+
+    [[ -z "$path" ]] && return 1
+
+    # Remove null bytes
+    path="${path//\x00/}"
+
+    # Resolve to absolute path (handles .., ., symlinks)
+    # Use ZSH's :a modifier for path resolution (more portable than realpath)
+    local resolved
+    if resolved="${path:a}" 2>/dev/null && [[ -n "$resolved" ]]; then
+        echo "$resolved"
+        return 0
+    else
+        # Fallback: use realpath if available
+        if resolved=$(/usr/bin/realpath -m "$path" 2>/dev/null) && [[ -n "$resolved" ]]; then
+            echo "$resolved"
+            return 0
+        fi
+        return 1
+    fi
+}
+
+# ------------------------------
+# Security: String Sanitization
+# ------------------------------
+
+# Sanitize a string based on mode
+# Modes: default, alphanum, filename, command
+# Usage: safe_str=$(common-string-sanitize "$input" "alphanum")
+common-string-sanitize() {
+    local string="$1"
+    local mode="${2:-default}"
+
+    case "$mode" in
+        alphanum)
+            # Only alphanumeric, dash, underscore
+            echo "${string//[^a-zA-Z0-9_-]/}"
+            ;;
+        filename)
+            # Safe filename characters
+            echo "${string//[^a-zA-Z0-9._-]/}"
+            ;;
+        command)
+            # Remove dangerous characters for command execution
+            local safe="$string"
+            safe="${safe//\$/}"   # No variable expansion
+            safe="${safe//\`/}"   # No command substitution
+            safe="${safe//\(/}"   # No subshell
+            safe="${safe//\)/}"
+            safe="${safe//\;/}"   # No command chaining
+            safe="${safe//\|/}"   # No piping
+            safe="${safe//\&/}"   # No backgrounding
+            echo "$safe"
+            ;;
+        default)
+            # Remove common dangerous characters
+            local safe="$string"
+            safe="${safe//\$/}"
+            safe="${safe//\`/}"
+            safe="${safe//\(/}"
+            safe="${safe//\)/}"
+            echo "$safe"
+            ;;
+        *)
+            echo "$string"
+            ;;
+    esac
+}
+
+# ------------------------------
+# Validation Helpers
+# ------------------------------
+
+# Validate required parameter
+# Usage: common-validate-required "$param" "param_name" || return 2
+common-validate-required() {
+    local param="$1"
+    local param_name="${2:-parameter}"
+
+    if [[ -z "$param" ]]; then
+        echo "Error: Required $param_name is missing" >&2
+        return 2  # Invalid argument
+    fi
+}
+
+# Validate file exists
+# Usage: common-validate-file "$file" || return $?
+common-validate-file() {
+    local file="$1"
+
+    if [[ -z "$file" ]]; then
+        echo "Error: File path is empty" >&2
+        return 2
+    fi
+
+    if [[ ! -f "$file" ]]; then
+        echo "Error: File not found: $file" >&2
+        return 3  # Resource not found
+    fi
+
+    if [[ ! -r "$file" ]]; then
+        echo "Error: File not readable: $file" >&2
+        return 4  # Permission denied
+    fi
+}
+
+# Validate directory exists
+# Usage: common-validate-directory "$dir" || return $?
+common-validate-directory() {
+    local dir="$1"
+
+    if [[ -z "$dir" ]]; then
+        echo "Error: Directory path is empty" >&2
+        return 2
+    fi
+
+    if [[ ! -d "$dir" ]]; then
+        echo "Error: Directory not found: $dir" >&2
+        return 3
+    fi
+
+    if [[ ! -r "$dir" ]]; then
+        echo "Error: Directory not readable: $dir" >&2
+        return 4
+    fi
+}
+
+# Validate numeric value
+# Usage: common-validate-numeric "$value" || return 2
+common-validate-numeric() {
+    local value="$1"
+
+    if [[ ! "$value" =~ ^-?[0-9]+$ ]]; then
+        echo "Error: Value must be numeric: $value" >&2
+        return 2
+    fi
+}
+
+# Validate enum value
+# Usage: common-validate-enum "$value" "opt1 opt2 opt3" || return 2
+common-validate-enum() {
+    local value="$1"
+    local options="$2"
+
+    if [[ ! " $options " =~ " $value " ]]; then
+        echo "Error: Invalid value: $value (valid: $options)" >&2
+        return 2
+    fi
+}
+
+# ------------------------------
+# Error Message Formatting
+# ------------------------------
+
+# Format a standard error message
+# Usage: common-error-message "context" "error" "suggestion"
+common-error-message() {
+    local context="$1"
+    local error="$2"
+    local suggestion="${3:-}"
+
+    local msg="[ERROR] ${context}: ${error}"
+    [[ -n "$suggestion" ]] && msg="${msg} - ${suggestion}"
+
+    echo "$msg" >&2
+}
+
+# ------------------------------
+# Privilege Checks
+# ------------------------------
+
+# Check if running as root
+# Usage: common-is-root && echo "root user"
+common-is-root() {
+    [[ $EUID -eq 0 ]]
+}
+
+# Require root privileges
+# Usage: common-require-root "operation name" || return 4
+common-require-root() {
+    local operation="${1:-this operation}"
+
+    if ! common-is-root; then
+        echo "Error: $operation requires root privileges" >&2
+        echo "Run with sudo or as root user" >&2
+        return 4  # Permission denied
+    fi
+}
+
+# Require non-root
+# Usage: common-require-not-root || return 4
+common-require-not-root() {
+    if common-is-root; then
+        echo "Error: This command should not be run as root" >&2
+        return 4
+    fi
+}
+
+# Get current user
+# Usage: user=$(common-get-user)
+common-get-user() {
+    echo "${USER:-$(whoami)}"
+}
+
+# Get current user ID
+# Usage: uid=$(common-get-uid)
+common-get-uid() {
+    id -u
+}
+
+# Get current group ID
+# Usage: gid=$(common-get-gid)
+common-get-gid() {
+    id -g
+}
+
+# ------------------------------
+# Retry with Exponential Backoff
+# ------------------------------
+
+# Retry a command with exponential backoff
+# Usage: common-retry 5 2 command arg1 arg2
+# Args: max_attempts, base_delay, command...
+common-retry() {
+    local max_attempts="$1"
+    local base_delay="$2"
+    shift 2
+    local command=("$@")
+
+    local attempt=1
+    local delay="$base_delay"
+
+    while [[ $attempt -le $max_attempts ]]; do
+        if "${command[@]}"; then
+            return 0
+        fi
+
+        if [[ $attempt -lt $max_attempts ]]; then
+            sleep "$delay"
+            delay=$((delay * 2))
+        fi
+
+        ((attempt++))
+    done
+
+    return 1
+}
+
+# ------------------------------
+# Timeout Wrapper
+# ------------------------------
+
+# Run command with timeout
+# Usage: common-timeout 30 command arg1 arg2
+# Args: timeout_seconds, command...
+common-timeout() {
+    local timeout="$1"
+    shift
+    local command=("$@")
+
+    # Use timeout command if available
+    if common-command-exists "timeout"; then
+        timeout "$timeout" "${command[@]}"
+        return $?
+    fi
+
+    # Fallback: manual timeout
+    "${command[@]}" &
+    local pid=$!
+
+    local count=0
+    while kill -0 $pid 2>/dev/null && [[ $count -lt $timeout ]]; do
+        sleep 1
+        ((count++))
+    done
+
+    if kill -0 $pid 2>/dev/null; then
+        kill -TERM $pid 2>/dev/null
+        sleep 1
+        kill -KILL $pid 2>/dev/null
+        return 5  # Timeout
+    fi
+
+    wait $pid
+    return $?
+}
+
+# ------------------------------
+# Temporary File/Directory Creation
+# ------------------------------
+
+# Create a temporary file (XDG-aware)
+# Usage: tmpfile=$(common-temp-file) || return $?
+common-temp-file() {
+    local template="${1:-tmp.XXXXXXXXXX}"
+    local tmpdir="${TMPDIR:-/tmp}"
+
+    mktemp "${tmpdir}/${template}" 2>/dev/null
+}
+
+# Create a temporary directory (XDG-aware)
+# Usage: tmpdir=$(common-temp-dir) || return $?
+common-temp-dir() {
+    local template="${1:-tmp.XXXXXXXXXX}"
+    local tmpdir="${TMPDIR:-/tmp}"
+
+    mktemp -d "${tmpdir}/${template}" 2>/dev/null
+}
+
+# ------------------------------
+# Path Helpers (v1.0 compatibility)
+# ------------------------------
+
+# Get the bin directory from a script path
+# Usage: bin_dir=$(common-get-bin-dir "$0")
+common-get-bin-dir() {
+    local script_path="${1:-${BASH_SOURCE[0]:-$0}}"
+    dirname "$(readlink -f "$script_path")"
+}
+
+# Get the libexec directory from a bin directory
+# Usage: libexec_dir=$(common-get-libexec-dir "$bin_dir")
+common-get-libexec-dir() {
+    local bin_dir="$1"
+    echo "${bin_dir}/../libexec"
+}
+
+# Get the module/package root directory from a bin directory
+# Usage: module_dir=$(common-get-module-dir "$bin_dir")
+common-get-module-dir() {
+    local bin_dir="$1"
+    echo "${bin_dir}/../.."
+}
+
+# Get the parent directory
+# Usage: parent=$(common-get-parent-dir "/path/to/dir")
+common-get-parent-dir() {
+    local dir="$1"
+    dirname "$dir"
+}
+
+# ------------------------------
+# File/Directory Helpers
+# ------------------------------
+
+# Check if file exists
+# Usage: common-file-exists "/path/to/file" && echo "found"
+common-file-exists() {
+    [[ -f "$1" ]]
+}
+
+# Check if directory exists
+# Usage: common-dir-exists "/path/to/dir" && echo "found"
+common-dir-exists() {
+    [[ -d "$1" ]]
+}
+
+# Ensure directory exists (create if needed)
+# Usage: common-ensure-dir "/path/to/dir"
+common-ensure-dir() {
+    local dir="$1"
+    [[ ! -d "$dir" ]] && mkdir -p "$dir" 2>/dev/null
+}
+
+# Get file size in human-readable format
+# Usage: size=$(common-get-file-size "/path/to/file")
+common-get-file-size() {
+    local file="$1"
+    du -h "$file" 2>/dev/null | cut -f1
+}
+
+# ------------------------------
+# Version Helpers
+# ------------------------------
+
+# Format version string
+# Usage: common-version "myapp" "1.0.0"
+common-version() {
+    local name="$1"
+    local version="$2"
+    echo "${name} version ${version}"
+}
+
+# Parse version string into components
+# Usage: common-parse-version "1.2.3"
+# Sets: VERSION_MAJOR, VERSION_MINOR, VERSION_PATCH
+common-parse-version() {
+    local version="$1"
+    IFS='.' read -r VERSION_MAJOR VERSION_MINOR VERSION_PATCH <<< "$version"
+    export VERSION_MAJOR VERSION_MINOR VERSION_PATCH
+}
+
+# Compare versions (returns 0 if v1 >= v2)
+# Usage: common-version-gte "1.2.3" "1.2.0" && echo "newer"
+common-version-gte() {
+    local v1="$1"
+    local v2="$2"
+    [[ "$(printf '%s\n' "$v1" "$v2" | sort -V | head -n1)" == "$v2" ]]
+}
+
+# ------------------------------
+# String Helpers
+# ------------------------------
+
+# Check if string is empty
+# Usage: common-is-empty "$var" && echo "empty"
+common-is-empty() {
+    [[ -z "$1" ]]
+}
+
+# Check if string is not empty
+# Usage: common-is-not-empty "$var" && echo "has value"
+common-is-not-empty() {
+    [[ -n "$1" ]]
+}
+
+# Trim whitespace from string
+# Usage: trimmed=$(common-trim "  hello  ")
+common-trim() {
+    local str="$1"
+    echo "$str" | xargs
+}
+
+# Convert to lowercase
+# Usage: lower=$(common-to-lower "HELLO")
+common-to-lower() {
+    echo "$1" | tr '[:upper:]' '[:lower:]'
+}
+
+# Convert to uppercase
+# Usage: upper=$(common-to-upper "hello")
+common-to-upper() {
+    echo "$1" | tr '[:lower:]' '[:upper:]'
+}
+
+# ------------------------------
+# Array Helpers
+# ------------------------------
+
+# Check if array contains element
+# Usage: common-array-contains "element" "${array[@]}" && echo "found"
+common-array-contains() {
+    local element="$1"
+    shift
+    local array=("$@")
+
+    for item in "${array[@]}"; do
+        [[ "$item" == "$element" ]] && return 0
+    done
+
+    return 1
+}
+
+# Get array length
+# Usage: len=$(common-array-length "${array[@]}")
+common-array-length() {
+    echo "$#"
+}
+
+# Join array with delimiter
+# Usage: joined=$(common-array-join "," "${array[@]}")
+common-array-join() {
+    local delimiter="$1"
+    shift
+    local array=("$@")
+
+    local result=""
+    for item in "${array[@]}"; do
+        if [[ -z "$result" ]]; then
+            result="$item"
+        else
+            result="${result}${delimiter}${item}"
+        fi
+    done
+
+    echo "$result"
+}
+
+# ------------------------------
+# Platform Detection
+# ------------------------------
+
+# Detect operating system
+# Usage: os=$(common-get-os)
+common-get-os() {
+    echo "${OSTYPE%%[0-9.]*}"
+}
+
+# Check if running on Linux
+# Usage: common-is-linux && echo "Linux"
+common-is-linux() {
+    [[ "$(common-get-os)" == "linux-gnu" ]] || [[ "$(common-get-os)" == "linux" ]]
+}
+
+# Check if running on macOS
+# Usage: common-is-macos && echo "macOS"
+common-is-macos() {
+    [[ "$(common-get-os)" == "darwin" ]]
+}
+
+# ------------------------------
+# Timestamp Helpers
+# ------------------------------
+
+# Get current Unix timestamp
+# Usage: ts=$(common-timestamp)
+common-timestamp() {
+    # Use ZSH's EPOCHSECONDS if available, otherwise use date
+    if [[ -n "${EPOCHSECONDS:-}" ]]; then
+        echo "$EPOCHSECONDS"
+    else
+        date +%s
+    fi
+}
+
+# Get current ISO 8601 timestamp
+# Usage: iso=$(common-timestamp-iso)
+common-timestamp-iso() {
+    date -Iseconds 2>/dev/null || date +%Y-%m-%dT%H:%M:%S%z
+}
+
+# Format timestamp
+# Usage: formatted=$(common-timestamp-format "%Y-%m-%d %H:%M:%S")
+common-timestamp-format() {
+    local format="${1:-%Y-%m-%d %H:%M:%S}"
+    date +"$format"
+}
+
+# ------------------------------
+# Miscellaneous Helpers
+# ------------------------------
+
+# Mark a function as unimplemented
+# Usage: common-unimplemented
+common-unimplemented() {
+    local caller_func="${funcstack[2]:-unknown}"
+    echo "Error: function '${caller_func}' has not been implemented" >&2
+    return 1
+}
+
+# Show module version
+# Usage: common-version-info
+common-version-info() {
+    echo "lib/_common version $COMMON_VERSION"
+}
+
+# ------------------------------
+# Self-Test
+# ------------------------------
+
+common-self-test() {
+    echo "=== Testing lib/_common v$COMMON_VERSION ==="
+    echo ""
+
+    local failed=0
+
+    # Test XDG paths
+    echo "✓ XDG Base Directories:"
+    echo "  DATA:    $(common-xdg-data-home)"
+    echo "  CONFIG:  $(common-xdg-config-home)"
+    echo "  CACHE:   $(common-xdg-cache-home)"
+    echo "  STATE:   $(common-xdg-state-home)"
+    echo "  RUNTIME: $(common-xdg-runtime-dir)"
+    echo ""
+
+    # Test library paths
+    echo "✓ Library Directories:"
+    echo "  Data:      $(common-lib-data-dir)"
+    echo "  Cache:     $(common-lib-cache-dir)"
+    echo "  Docs:      $(common-lib-docs-dir)"
+    echo "  Templates: $(common-lib-template-dir)"
+    echo ""
+
+    # Test colors
+    echo "✓ Color Constants:"
+    echo -e "  ${COLOR_GREEN}GREEN${COLOR_RESET} ${COLOR_RED}RED${COLOR_RESET} ${COLOR_BLUE}BLUE${COLOR_RESET} ${COLOR_YELLOW}YELLOW${COLOR_RESET}"
+    echo ""
+
+    # Test command checking
+    echo "✓ Command Checks:"
+    common-command-exists "ls" && echo "  ls: found" || { echo "  ls: FAILED"; failed=1; }
+    common-command-exists "nonexistent-cmd-12345" && { echo "  nonexistent: FAILED"; failed=1; } || echo "  nonexistent: correctly not found"
+    echo ""
+
+    # Test path sanitization
+    echo "✓ Path Sanitization:"
+    local test_path
+    test_path=$(common-path-sanitize "/tmp/../etc/passwd") && echo "  Resolved: $test_path" || { echo "  FAILED"; failed=1; }
+    echo ""
+
+    # Test string sanitization
+    echo "✓ String Sanitization:"
+    local safe_str=$(common-string-sanitize "hello\$world" "default")
+    echo "  Sanitized: '$safe_str'"
+    echo ""
+
+    # Test validation
+    echo "✓ Validation:"
+    common-validate-required "test" "param" &>/dev/null && echo "  Required: pass" || { echo "  Required: FAILED"; failed=1; }
+    common-validate-required "" "param" &>/dev/null && { echo "  Empty: FAILED"; failed=1; } || echo "  Empty: correctly rejected"
+    common-validate-numeric "123" &>/dev/null && echo "  Numeric: pass" || { echo "  Numeric: FAILED"; failed=1; }
+    common-validate-numeric "abc" &>/dev/null && { echo "  Non-numeric: FAILED"; failed=1; } || echo "  Non-numeric: correctly rejected"
+    echo ""
+
+    # Test platform
+    echo "✓ Platform Detection:"
+    echo "  OS: $(common-get-os)"
+    echo "  Linux: $(common-is-linux && echo "yes" || echo "no")"
+    echo "  macOS: $(common-is-macos && echo "yes" || echo "no")"
+    echo ""
+
+    # Test string helpers
+    echo "✓ String Helpers:"
+    echo "  lowercase: $(common-to-lower "HELLO")"
+    echo "  uppercase: $(common-to-upper "hello")"
+    echo "  trim: '$(common-trim "  spaces  ")'"
+    echo ""
+
+    # Test timestamp
+    echo "✓ Timestamps:"
+    echo "  Unix: $(common-timestamp)"
+    echo "  ISO: $(common-timestamp-iso)"
+    echo ""
+
+    if [[ $failed -eq 0 ]]; then
+        echo "=== All tests passed ==="
+        return 0
+    else
+        echo "=== Some tests failed ==="
+        return 1
+    fi
+}
+
+# Run self-test if executed directly
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]] || [[ "$1" == "self-test" ]]; then
+    common-self-test
+fi

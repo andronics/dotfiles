@@ -12,12 +12,11 @@ readonly SCRIPT_NAME="$(basename "$0")"
 # Dependencies
 # ------------------------------------------------------------------------------
 
-# Load audio library
-if ! source "$(command -v _audio)" 2>/dev/null; then
-    echo "ERROR: _audio extension library not found" >&2
-    echo "Please ensure ${HOME}/.local/bin/lib is in PATH" >&2
+if ! source "${DOTLIB}/_audio" 2>/dev/null; then
+    echo "ERROR: ${DOTLIB}/_audio extension library not found" >&2
     exit 1
 fi
+
 
 # _audio already loads: _common, _jq, _xdg, _log (and optionally _cava, _events, etc.)
 

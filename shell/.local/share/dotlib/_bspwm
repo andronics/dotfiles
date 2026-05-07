@@ -1,0 +1,1450 @@
+#!/usr/bin/env zsh
+
+# _bspwm - Binary Space Partition Window Manager Integration
+# Part of the dotfiles library v2.0
+# Version: 1.0.0
+#
+# Usage:
+#   source "${DOTLIB}/_bspwm"
+#
+# Provides:
+#   - BSPWM state management and queries
+#   - Desktop and monitor operations
+#   - Node (window) manipulation
+#   - Rule management
+#   - Configuration management
+#   - Event monitoring and subscription
+#   - Layout presets and saving
+#   - Focus and selection history
+#
+# Dependencies:
+#   Required:
+#     - _common v2.0: Core utilities
+#     - bspwm: Window manager
+#     - bspc: BSPWM client
+#   Optional (gracefully degraded):
+#     - _log v2.0: Structured logging
+#     - _events v2.0: Event system integration
+#     - _cache v2.0: Query result caching
+#     - _config v2.0: Configuration persistence
+#     - _lifecycle v2.0: Process management
+#     - jq: JSON parsing for complex queries
+
+# ------------------------------
+# Source Guard
+# ------------------------------
+
+[[ -n "${BSPWM_LOADED:-}" ]] && return 0
+declare -g BSPWM_LOADED=1
+
+# ------------------------------
+# Version
+# ------------------------------
+
+declare -r BSPWM_VERSION="1.0.0"
+
+# ------------------------------
+# Dependency Loading
+# ------------------------------
+
+# Load foundation (required)
+if ! source "${DOTLIB}/_common" 2>/dev/null; then
+    echo "[ERROR] _bspwm requires _common - cannot load" >&2
+    return 1
+fi
+
+# Check for required commands
+if ! common-command-exists bspc; then
+    echo "[ERROR] _bspwm requires bspc command - is BSPWM installed?" >&2
+    return 1
+fi
+
+# Load infrastructure (optional with fallbacks)
+if ! source "${DOTLIB}/_log" 2>/dev/null; then
+    log-info() { echo "[INFO] $*"; }
+    log-error() { echo "[ERROR] $*" >&2; }
+    log-warn() { echo "[WARN] $*" >&2; }
+    log-warning() { echo "[WARN] $*" >&2; }
+    log-debug() { [[ "${BSPWM_DEBUG:-false}" == "true" ]] && echo "[DEBUG] $*" >&2 || true; }
+    log-trace() { [[ "${BSPWM_TRACE:-false}" == "true" ]] && echo "[TRACE] $*" >&2 || true; }
+    log-success() { echo "[SUCCESS] $*"; }
+fi
+
+# Check for optional extensions
+if source "${DOTLIB}/_events" 2>/dev/null; then
+    declare -g BSPWM_EVENTS_AVAILABLE=true
+else
+    declare -g BSPWM_EVENTS_AVAILABLE=false
+fi
+
+if source "${DOTLIB}/_cache" 2>/dev/null; then
+    declare -g BSPWM_CACHE_AVAILABLE=true
+else
+    declare -g BSPWM_CACHE_AVAILABLE=false
+fi
+
+if source "${DOTLIB}/_config" 2>/dev/null; then
+    declare -g BSPWM_CONFIG_AVAILABLE=true
+else
+    declare -g BSPWM_CONFIG_AVAILABLE=false
+fi
+
+if source "${DOTLIB}/_lifecycle" 2>/dev/null; then
+    declare -g BSPWM_LIFECYCLE_AVAILABLE=true
+else
+    declare -g BSPWM_LIFECYCLE_AVAILABLE=false
+fi
+
+# ------------------------------
+# Configuration
+# ------------------------------
+
+# XDG paths
+declare -g BSPWM_CONFIG_DIR="$(common-lib-config-dir)/bspwm"
+declare -g BSPWM_CACHE_DIR="$(common-lib-cache-dir)/bspwm"
+declare -g BSPWM_STATE_DIR="$(common-lib-state-dir)/bspwm"
+declare -g BSPWM_DATA_DIR="$(common-lib-data-dir)/bspwm"
+
+# Behavior configuration
+declare -g BSPWM_DEBUG="${BSPWM_DEBUG:-false}"
+declare -g BSPWM_VERBOSE="${BSPWM_VERBOSE:-false}"
+declare -g BSPWM_DRY_RUN="${BSPWM_DRY_RUN:-false}"
+declare -g BSPWM_EMIT_EVENTS="${BSPWM_EMIT_EVENTS:-true}"
+
+# Cache configuration
+declare -g BSPWM_CACHE_TTL="${BSPWM_CACHE_TTL:-5}"  # 5 seconds for dynamic data
+declare -g BSPWM_CACHE_STATIC_TTL="${BSPWM_CACHE_STATIC_TTL:-300}"  # 5 minutes for static data
+
+# BSPWM specific configuration
+declare -g BSPWM_SOCKET="${BSPWM_SOCKET:-/tmp/bspwm_0_0-socket}"
+declare -g BSPWM_DEFAULT_MONITOR="${BSPWM_DEFAULT_MONITOR:-}"
+declare -g BSPWM_DEFAULT_DESKTOP="${BSPWM_DEFAULT_DESKTOP:-}"
+
+# Event names
+declare -r BSPWM_EVENT_NODE_ADD="bspwm.node.add"
+declare -r BSPWM_EVENT_NODE_REMOVE="bspwm.node.remove"
+declare -r BSPWM_EVENT_NODE_FOCUS="bspwm.node.focus"
+declare -r BSPWM_EVENT_NODE_STATE="bspwm.node.state"
+declare -r BSPWM_EVENT_DESKTOP_FOCUS="bspwm.desktop.focus"
+declare -r BSPWM_EVENT_DESKTOP_LAYOUT="bspwm.desktop.layout"
+declare -r BSPWM_EVENT_MONITOR_FOCUS="bspwm.monitor.focus"
+
+# ------------------------------
+# Internal State
+# ------------------------------
+
+# Event monitor state
+declare -g _BSPWM_EVENT_MONITOR_PID=""
+declare -g _BSPWM_EVENT_MONITOR_ACTIVE=false
+
+# Focus history
+declare -g -a _BSPWM_FOCUS_HISTORY=()
+declare -g -i _BSPWM_FOCUS_HISTORY_SIZE=10
+
+# Saved layouts
+declare -g -A _BSPWM_SAVED_LAYOUTS=()
+
+# ------------------------------
+# Internal Helpers
+# ------------------------------
+
+# Initialize directories
+_bspwm-init() {
+    mkdir -p "$BSPWM_CONFIG_DIR" 2>/dev/null || true
+    mkdir -p "$BSPWM_CACHE_DIR" 2>/dev/null || true
+    mkdir -p "$BSPWM_STATE_DIR" 2>/dev/null || true
+    mkdir -p "$BSPWM_DATA_DIR" 2>/dev/null || true
+    mkdir -p "$BSPWM_DATA_DIR/layouts" 2>/dev/null || true
+    mkdir -p "$BSPWM_DATA_DIR/rules" 2>/dev/null || true
+}
+
+# Emit an event (uses _events if available)
+_bspwm-emit() {
+    [[ "$BSPWM_EMIT_EVENTS" != "true" ]] && return 0
+    [[ "$BSPWM_EVENTS_AVAILABLE" != "true" ]] && return 0
+
+    events-emit "$@"
+}
+
+# Execute bspc command with error handling
+_bspwm-exec() {
+    local -a cmd=("$@")
+
+    if [[ "$BSPWM_DRY_RUN" == "true" ]]; then
+        log-info "[DRY RUN] Would execute: bspc ${cmd[*]}"
+        return 0
+    fi
+
+    log-trace "Executing: bspc ${cmd[*]}"
+
+    local output
+    if output=$(bspc "${cmd[@]}" 2>&1); then
+        echo "$output"
+        return 0
+    else
+        log-error "BSPC command failed" "command=${cmd[*]}" "error=$output"
+        return 1
+    fi
+}
+
+# Cache-aware bspc query
+_bspwm-query-cached() {
+    local cache_key="$1"
+    local ttl="${2:-$BSPWM_CACHE_TTL}"
+    shift 2
+    local -a query_args=("$@")
+
+    # Check cache if available
+    if [[ "$BSPWM_CACHE_AVAILABLE" == "true" ]]; then
+        local cached=$(cache-get "bspwm:$cache_key")
+        if [[ -n "$cached" ]]; then
+            log-trace "Cache hit for: $cache_key"
+            echo "$cached"
+            return 0
+        fi
+    fi
+
+    # Execute query
+    local result
+    if result=$(_bspwm-exec "${query_args[@]}"); then
+        # Cache result if available
+        if [[ "$BSPWM_CACHE_AVAILABLE" == "true" && -n "$result" ]]; then
+            cache-set "bspwm:$cache_key" "$result" "$ttl"
+        fi
+        echo "$result"
+        return 0
+    else
+        return 1
+    fi
+}
+
+# ------------------------------
+# Availability and Status
+# ------------------------------
+
+# Check if BSPWM is running
+#
+# Function: bspwm-is-running
+# Description: Verify BSPWM window manager is running and responsive
+# Returns:
+#   0 - BSPWM is running
+#   1 - BSPWM not running or not responsive
+# Example:
+#   bspwm-is-running || echo "BSPWM not available"
+#
+bspwm-is-running() {
+    # Check if bspc can connect to BSPWM
+    bspc wm -g >/dev/null 2>&1
+}
+
+# Get BSPWM version
+#
+# Function: bspwm-version
+# Description: Get the version of the running BSPWM instance
+# Output: Version string
+# Example:
+#   version=$(bspwm-version)
+#
+bspwm-version() {
+    bspc -v 2>/dev/null | grep -oP 'bspwm \K[0-9.]+'
+}
+
+# ------------------------------
+# Query Operations
+# ------------------------------
+
+# Get all desktops
+#
+# Function: bspwm-desktop-list
+# Description: List all desktops across all monitors
+# Parameters:
+#   $1 - Monitor name (optional, filter by monitor)
+# Output: Desktop names, one per line
+# Example:
+#   bspwm-desktop-list
+#   bspwm-desktop-list "HDMI-1"
+#
+bspwm-desktop-list() {
+    local monitor="${1:-}"
+
+    if [[ -n "$monitor" ]]; then
+        _bspwm-query-cached "desktops:$monitor" "$BSPWM_CACHE_TTL" \
+            query -D -m "$monitor" --names
+    else
+        _bspwm-query-cached "desktops:all" "$BSPWM_CACHE_TTL" \
+            query -D --names
+    fi
+}
+
+# Get all monitors
+#
+# Function: bspwm-monitor-list
+# Description: List all connected monitors
+# Output: Monitor names, one per line
+# Example:
+#   monitors=$(bspwm-monitor-list)
+#
+bspwm-monitor-list() {
+    _bspwm-query-cached "monitors" "$BSPWM_CACHE_STATIC_TTL" \
+        query -M --names
+}
+
+# Get focused desktop
+#
+# Function: bspwm-desktop-focused
+# Description: Get the name of the currently focused desktop
+# Output: Desktop name
+# Example:
+#   current=$(bspwm-desktop-focused)
+#
+bspwm-desktop-focused() {
+    _bspwm-exec query -D -d focused --names
+}
+
+# Get focused monitor
+#
+# Function: bspwm-monitor-focused
+# Description: Get the name of the currently focused monitor
+# Output: Monitor name
+# Example:
+#   current=$(bspwm-monitor-focused)
+#
+bspwm-monitor-focused() {
+    _bspwm-exec query -M -m focused --names
+}
+
+# Get focused node (window) ID
+#
+# Function: bspwm-node-focused
+# Description: Get the ID of the currently focused window
+# Output: Node ID (hexadecimal)
+# Returns:
+#   0 - Success
+#   3 - No focused node
+# Example:
+#   node_id=$(bspwm-node-focused)
+#
+bspwm-node-focused() {
+    local node_id
+    node_id=$(_bspwm-exec query -N -n focused) || return 3
+
+    [[ -n "$node_id" ]] || return 3
+    echo "$node_id"
+}
+
+# Get node information
+#
+# Function: bspwm-node-info
+# Description: Get detailed information about a node (window)
+# Parameters:
+#   $1 - Node selector (optional, default: focused)
+# Output: JSON object with node information (requires jq)
+# Example:
+#   info=$(bspwm-node-info)
+#   info=$(bspwm-node-info "0x01234567")
+#
+bspwm-node-info() {
+    local node="${1:-focused}"
+
+    if ! common-command-exists jq; then
+        log-warn "jq not found, returning raw output"
+        _bspwm-exec query -T -n "$node"
+    else
+        _bspwm-exec query -T -n "$node" | jq '.'
+    fi
+}
+
+# ------------------------------
+# Desktop Operations
+# ------------------------------
+
+# Focus a desktop
+#
+# Function: bspwm-desktop-focus
+# Description: Switch focus to a specific desktop
+# Parameters:
+#   $1 - Desktop selector (name, index, or direction)
+# Returns:
+#   0 - Success
+#   1 - Failed to focus
+# Events:
+#   bspwm.desktop.focus - Emitted on successful focus change
+# Example:
+#   bspwm-desktop-focus "web"
+#   bspwm-desktop-focus next
+#   bspwm-desktop-focus ^3
+#
+bspwm-desktop-focus() {
+    local desktop="$1"
+
+    common-validate-required "$desktop" "desktop selector" || return 2
+
+    if _bspwm-exec desktop -f "$desktop"; then
+        _bspwm-emit "$BSPWM_EVENT_DESKTOP_FOCUS" "desktop=$desktop"
+
+        # Invalidate cache
+        [[ "$BSPWM_CACHE_AVAILABLE" == "true" ]] && \
+            cache-clear-namespace "bspwm:desktop"
+
+        log-debug "Focused desktop: $desktop"
+        return 0
+    else
+        return 1
+    fi
+}
+
+# Add a new desktop
+#
+# Function: bspwm-desktop-add
+# Description: Create a new desktop on a monitor
+# Parameters:
+#   $1 - Desktop name (required)
+#   $2 - Monitor name (optional, default: focused)
+# Returns:
+#   0 - Success
+#   4 - Desktop already exists
+# Example:
+#   bspwm-desktop-add "work"
+#   bspwm-desktop-add "games" "HDMI-1"
+#
+bspwm-desktop-add() {
+    local name="$1"
+    local monitor="${2:-focused}"
+
+    common-validate-required "$name" "desktop name" || return 2
+
+    # Check if desktop already exists
+    if bspwm-desktop-list | grep -q "^${name}$"; then
+        log-warn "Desktop already exists: $name"
+        return 4
+    fi
+
+    if _bspwm-exec monitor "$monitor" -a "$name"; then
+        log-info "Created desktop: $name on monitor $monitor"
+
+        # Invalidate cache
+        [[ "$BSPWM_CACHE_AVAILABLE" == "true" ]] && \
+            cache-clear-namespace "bspwm:desktop"
+
+        return 0
+    else
+        return 1
+    fi
+}
+
+# Remove a desktop
+#
+# Function: bspwm-desktop-remove
+# Description: Remove a desktop (must be empty)
+# Parameters:
+#   $1 - Desktop name (required)
+# Returns:
+#   0 - Success
+#   1 - Failed (desktop not empty or doesn't exist)
+# Example:
+#   bspwm-desktop-remove "temp"
+#
+bspwm-desktop-remove() {
+    local name="$1"
+
+    common-validate-required "$name" "desktop name" || return 2
+
+    if _bspwm-exec desktop "$name" -r; then
+        log-info "Removed desktop: $name"
+
+        # Invalidate cache
+        [[ "$BSPWM_CACHE_AVAILABLE" == "true" ]] && \
+            cache-clear-namespace "bspwm:desktop"
+
+        return 0
+    else
+        log-error "Failed to remove desktop: $name (not empty or doesn't exist)"
+        return 1
+    fi
+}
+
+# Rename a desktop
+#
+# Function: bspwm-desktop-rename
+# Description: Rename an existing desktop
+# Parameters:
+#   $1 - Current desktop name (required)
+#   $2 - New desktop name (required)
+# Returns:
+#   0 - Success
+#   3 - Desktop not found
+#   4 - New name already exists
+# Example:
+#   bspwm-desktop-rename "temp" "work"
+#
+bspwm-desktop-rename() {
+    local current="$1"
+    local new="$2"
+
+    common-validate-required "$current" "current name" || return 2
+    common-validate-required "$new" "new name" || return 2
+
+    # Check if current desktop exists
+    if ! bspwm-desktop-list | grep -q "^${current}$"; then
+        log-error "Desktop not found: $current"
+        return 3
+    fi
+
+    # Check if new name already exists
+    if bspwm-desktop-list | grep -q "^${new}$"; then
+        log-error "Desktop name already exists: $new"
+        return 4
+    fi
+
+    if _bspwm-exec desktop "$current" -n "$new"; then
+        log-info "Renamed desktop: $current -> $new"
+
+        # Invalidate cache
+        [[ "$BSPWM_CACHE_AVAILABLE" == "true" ]] && \
+            cache-clear-namespace "bspwm:desktop"
+
+        return 0
+    else
+        return 1
+    fi
+}
+
+# Set desktop layout
+#
+# Function: bspwm-desktop-layout
+# Description: Set the layout mode for a desktop
+# Parameters:
+#   $1 - Layout (tiled|monocle)
+#   $2 - Desktop selector (optional, default: focused)
+# Returns:
+#   0 - Success
+#   2 - Invalid layout
+# Events:
+#   bspwm.desktop.layout - Emitted on layout change
+# Example:
+#   bspwm-desktop-layout monocle
+#   bspwm-desktop-layout tiled "web"
+#
+bspwm-desktop-layout() {
+    local layout="$1"
+    local desktop="${2:-focused}"
+
+    common-validate-required "$layout" "layout mode" || return 2
+
+    # Validate layout
+    if [[ "$layout" != "tiled" && "$layout" != "monocle" ]]; then
+        log-error "Invalid layout: $layout (must be tiled or monocle)"
+        return 2
+    fi
+
+    if _bspwm-exec desktop "$desktop" -l "$layout"; then
+        _bspwm-emit "$BSPWM_EVENT_DESKTOP_LAYOUT" \
+            "desktop=$desktop" \
+            "layout=$layout"
+
+        log-debug "Set layout for desktop $desktop: $layout"
+        return 0
+    else
+        return 1
+    fi
+}
+
+# ------------------------------
+# Node (Window) Operations
+# ------------------------------
+
+# Focus a node
+#
+# Function: bspwm-node-focus
+# Description: Focus a specific node (window)
+# Parameters:
+#   $1 - Node selector (ID or direction: north|south|east|west|next|prev)
+# Returns:
+#   0 - Success
+#   1 - Failed to focus
+# Events:
+#   bspwm.node.focus - Emitted on focus change
+# Example:
+#   bspwm-node-focus next
+#   bspwm-node-focus "0x01234567"
+#
+bspwm-node-focus() {
+    local node="$1"
+
+    common-validate-required "$node" "node selector" || return 2
+
+    # Track focus history
+    local current
+    current=$(bspwm-node-focused 2>/dev/null) && {
+        _BSPWM_FOCUS_HISTORY=("$current" "${_BSPWM_FOCUS_HISTORY[@]:0:$_BSPWM_FOCUS_HISTORY_SIZE-1}")
+    }
+
+    if _bspwm-exec node -f "$node"; then
+        _bspwm-emit "$BSPWM_EVENT_NODE_FOCUS" "node=$node"
+        log-trace "Focused node: $node"
+        return 0
+    else
+        return 1
+    fi
+}
+
+# Close a node
+#
+# Function: bspwm-node-close
+# Description: Close a window gracefully
+# Parameters:
+#   $1 - Node selector (optional, default: focused)
+# Returns:
+#   0 - Success
+#   1 - Failed to close
+# Events:
+#   bspwm.node.remove - Emitted when node is closed
+# Example:
+#   bspwm-node-close
+#   bspwm-node-close "0x01234567"
+#
+bspwm-node-close() {
+    local node="${1:-focused}"
+
+    if _bspwm-exec node "$node" -c; then
+        _bspwm-emit "$BSPWM_EVENT_NODE_REMOVE" "node=$node"
+        log-debug "Closed node: $node"
+        return 0
+    else
+        return 1
+    fi
+}
+
+# Kill a node
+#
+# Function: bspwm-node-kill
+# Description: Forcefully kill a window
+# Parameters:
+#   $1 - Node selector (optional, default: focused)
+# Returns:
+#   0 - Success
+#   1 - Failed to kill
+# Example:
+#   bspwm-node-kill
+#
+bspwm-node-kill() {
+    local node="${1:-focused}"
+
+    if _bspwm-exec node "$node" -k; then
+        _bspwm-emit "$BSPWM_EVENT_NODE_REMOVE" "node=$node" "forced=true"
+        log-debug "Killed node: $node"
+        return 0
+    else
+        return 1
+    fi
+}
+
+# Set node state
+#
+# Function: bspwm-node-state
+# Description: Change the state of a node (tiled, floating, fullscreen, pseudo_tiled)
+# Parameters:
+#   $1 - State (tiled|floating|fullscreen|pseudo_tiled)
+#   $2 - Node selector (optional, default: focused)
+# Returns:
+#   0 - Success
+#   2 - Invalid state
+# Events:
+#   bspwm.node.state - Emitted on state change
+# Example:
+#   bspwm-node-state floating
+#   bspwm-node-state tiled "0x01234567"
+#
+bspwm-node-state() {
+    local state="$1"
+    local node="${2:-focused}"
+
+    common-validate-required "$state" "node state" || return 2
+
+    # Validate state
+    case "$state" in
+        tiled|floating|fullscreen|pseudo_tiled)
+            ;;
+        *)
+            log-error "Invalid state: $state"
+            return 2
+            ;;
+    esac
+
+    if _bspwm-exec node "$node" -t "$state"; then
+        _bspwm-emit "$BSPWM_EVENT_NODE_STATE" \
+            "node=$node" \
+            "state=$state"
+
+        log-debug "Set node $node state: $state"
+        return 0
+    else
+        return 1
+    fi
+}
+
+# Set node flags
+#
+# Function: bspwm-node-flag
+# Description: Toggle node flags (hidden, sticky, private, locked, marked, urgent)
+# Parameters:
+#   $1 - Flag name
+#   $2 - Value (on|off|toggle) (optional, default: toggle)
+#   $3 - Node selector (optional, default: focused)
+# Returns:
+#   0 - Success
+#   2 - Invalid flag or value
+# Example:
+#   bspwm-node-flag sticky on
+#   bspwm-node-flag hidden toggle
+#
+bspwm-node-flag() {
+    local flag="$1"
+    local value="${2:-toggle}"
+    local node="${3:-focused}"
+
+    common-validate-required "$flag" "flag name" || return 2
+
+    # Validate flag
+    case "$flag" in
+        hidden|sticky|private|locked|marked|urgent)
+            ;;
+        *)
+            log-error "Invalid flag: $flag"
+            return 2
+            ;;
+    esac
+
+    # Validate value
+    case "$value" in
+        on|off|toggle)
+            ;;
+        *)
+            log-error "Invalid value: $value (must be on, off, or toggle)"
+            return 2
+            ;;
+    esac
+
+    local flag_arg=""
+    case "$value" in
+        on) flag_arg="=$flag" ;;
+        off) flag_arg="~$flag" ;;
+        toggle) flag_arg="$flag" ;;
+    esac
+
+    if _bspwm-exec node "$node" -g "$flag_arg"; then
+        log-debug "Set node $node flag: $flag=$value"
+        return 0
+    else
+        return 1
+    fi
+}
+
+# Move node to desktop
+#
+# Function: bspwm-node-to-desktop
+# Description: Move a node to a different desktop
+# Parameters:
+#   $1 - Desktop selector (required)
+#   $2 - Node selector (optional, default: focused)
+#   $3 - Follow flag (--follow to switch to desktop) (optional)
+# Returns:
+#   0 - Success
+#   1 - Failed to move
+# Example:
+#   bspwm-node-to-desktop web
+#   bspwm-node-to-desktop ^3 focused --follow
+#
+bspwm-node-to-desktop() {
+    local desktop="$1"
+    local node="${2:-focused}"
+    local follow="${3:-}"
+
+    common-validate-required "$desktop" "desktop selector" || return 2
+
+    local -a cmd=(node "$node" -d "$desktop")
+    [[ "$follow" == "--follow" ]] && cmd+=(-f)
+
+    if _bspwm-exec "${cmd[@]}"; then
+        log-debug "Moved node $node to desktop $desktop"
+        return 0
+    else
+        return 1
+    fi
+}
+
+# ------------------------------
+# Rule Management
+# ------------------------------
+
+# Add a rule
+#
+# Function: bspwm-rule-add
+# Description: Add a window rule for automatic placement and behavior
+# Parameters:
+#   $1 - Class name pattern (required)
+#   $@ - Rule options (state=, desktop=, etc.)
+# Returns:
+#   0 - Success
+#   2 - Invalid arguments
+# Example:
+#   bspwm-rule-add "Firefox" desktop=web state=tiled
+#   bspwm-rule-add "Gimp-*" state=floating
+#
+bspwm-rule-add() {
+    local class="$1"
+    shift
+    local -a options=("$@")
+
+    common-validate-required "$class" "window class" || return 2
+
+    if _bspwm-exec rule -a "$class" "${options[@]}"; then
+        log-info "Added rule for class: $class"
+
+        # Save rule if config available
+        if [[ "$BSPWM_CONFIG_AVAILABLE" == "true" ]]; then
+            config-set "bspwm.rules.$class" "${options[*]}"
+        fi
+
+        return 0
+    else
+        return 1
+    fi
+}
+
+# Remove a rule
+#
+# Function: bspwm-rule-remove
+# Description: Remove a window rule
+# Parameters:
+#   $1 - Class name pattern (required)
+# Returns:
+#   0 - Success
+#   3 - Rule not found
+# Example:
+#   bspwm-rule-remove "Firefox"
+#
+bspwm-rule-remove() {
+    local class="$1"
+
+    common-validate-required "$class" "window class" || return 2
+
+    if _bspwm-exec rule -r "$class"; then
+        log-info "Removed rule for class: $class"
+
+        # Remove from config if available
+        if [[ "$BSPWM_CONFIG_AVAILABLE" == "true" ]]; then
+            config-unset "bspwm.rules.$class"
+        fi
+
+        return 0
+    else
+        log-warn "Rule not found: $class"
+        return 3
+    fi
+}
+
+# List all rules
+#
+# Function: bspwm-rule-list
+# Description: List all configured window rules
+# Output: Rule definitions, one per line
+# Example:
+#   bspwm-rule-list
+#
+bspwm-rule-list() {
+    _bspwm-exec rule -l
+}
+
+# ------------------------------
+# Layout Management
+# ------------------------------
+
+# Save current layout
+#
+# Function: bspwm-layout-save
+# Description: Save the current desktop layout to a file
+# Parameters:
+#   $1 - Layout name (required)
+#   $2 - Desktop selector (optional, default: focused)
+# Returns:
+#   0 - Success
+#   1 - Failed to save
+# Example:
+#   bspwm-layout-save "work-layout"
+#   bspwm-layout-save "web-layout" web
+#
+bspwm-layout-save() {
+    local name="$1"
+    local desktop="${2:-focused}"
+
+    common-validate-required "$name" "layout name" || return 2
+
+    local layout_file="$BSPWM_DATA_DIR/layouts/${name}.json"
+    local layout
+
+    # Get current layout
+    if layout=$(_bspwm-exec query -T -d "$desktop"); then
+        echo "$layout" > "$layout_file"
+        _BSPWM_SAVED_LAYOUTS[$name]="$layout_file"
+
+        log-info "Saved layout: $name"
+        return 0
+    else
+        log-error "Failed to save layout: $name"
+        return 1
+    fi
+}
+
+# Restore saved layout
+#
+# Function: bspwm-layout-restore
+# Description: Restore a previously saved desktop layout
+# Parameters:
+#   $1 - Layout name (required)
+#   $2 - Desktop selector (optional, default: focused)
+# Returns:
+#   0 - Success
+#   3 - Layout not found
+# Example:
+#   bspwm-layout-restore "work-layout"
+#
+bspwm-layout-restore() {
+    local name="$1"
+    local desktop="${2:-focused}"
+
+    common-validate-required "$name" "layout name" || return 2
+
+    local layout_file="$BSPWM_DATA_DIR/layouts/${name}.json"
+
+    if [[ ! -f "$layout_file" ]]; then
+        log-error "Layout not found: $name"
+        return 3
+    fi
+
+    # This would require a more complex implementation to actually restore
+    # the tree structure - simplified for now
+    log-warn "Layout restoration requires external tooling (not yet implemented)"
+    return 1
+}
+
+# List saved layouts
+#
+# Function: bspwm-layout-list
+# Description: List all saved layout names
+# Output: Layout names, one per line
+# Example:
+#   bspwm-layout-list
+#
+bspwm-layout-list() {
+    local layout_dir="$BSPWM_DATA_DIR/layouts"
+
+    if [[ -d "$layout_dir" ]]; then
+        find "$layout_dir" -name "*.json" -type f | \
+            xargs -r basename -s .json | sort
+    fi
+}
+
+# ------------------------------
+# Event Monitoring
+# ------------------------------
+
+# Start event monitor
+#
+# Function: bspwm-event-monitor-start
+# Description: Start monitoring BSPWM events and emit them via event system
+# Returns:
+#   0 - Monitor started
+#   4 - Monitor already running
+# Example:
+#   bspwm-event-monitor-start
+#
+bspwm-event-monitor-start() {
+    if [[ "$_BSPWM_EVENT_MONITOR_ACTIVE" == "true" ]]; then
+        log-warn "Event monitor already running"
+        return 4
+    fi
+
+    if [[ "$BSPWM_EVENTS_AVAILABLE" != "true" ]]; then
+        log-warn "Event system not available, monitoring disabled"
+        return 1
+    fi
+
+    # Start monitor in background
+    (
+        bspc subscribe all | while read -r event; do
+            # Parse event and emit
+            local event_type="${event%% *}"
+            local event_data="${event#* }"
+
+            case "$event_type" in
+                node_add)
+                    events-emit "$BSPWM_EVENT_NODE_ADD" "$event_data"
+                    ;;
+                node_remove)
+                    events-emit "$BSPWM_EVENT_NODE_REMOVE" "$event_data"
+                    ;;
+                node_focus)
+                    events-emit "$BSPWM_EVENT_NODE_FOCUS" "$event_data"
+                    ;;
+                desktop_focus)
+                    events-emit "$BSPWM_EVENT_DESKTOP_FOCUS" "$event_data"
+                    ;;
+                *)
+                    events-emit "bspwm.event.${event_type}" "$event_data"
+                    ;;
+            esac
+        done
+    ) &
+
+    _BSPWM_EVENT_MONITOR_PID=$!
+    _BSPWM_EVENT_MONITOR_ACTIVE=true
+
+    # Track with lifecycle if available
+    if [[ "$BSPWM_LIFECYCLE_AVAILABLE" == "true" ]]; then
+        lifecycle-track-job $_BSPWM_EVENT_MONITOR_PID
+    fi
+
+    log-info "Started BSPWM event monitor (PID: $_BSPWM_EVENT_MONITOR_PID)"
+    return 0
+}
+
+# Stop event monitor
+#
+# Function: bspwm-event-monitor-stop
+# Description: Stop the BSPWM event monitor
+# Returns:
+#   0 - Monitor stopped
+#   3 - Monitor not running
+# Example:
+#   bspwm-event-monitor-stop
+#
+bspwm-event-monitor-stop() {
+    if [[ "$_BSPWM_EVENT_MONITOR_ACTIVE" != "true" ]]; then
+        log-warn "Event monitor not running"
+        return 3
+    fi
+
+    if [[ -n "$_BSPWM_EVENT_MONITOR_PID" ]]; then
+        kill "$_BSPWM_EVENT_MONITOR_PID" 2>/dev/null || true
+
+        # Untrack with lifecycle if available
+        if [[ "$BSPWM_LIFECYCLE_AVAILABLE" == "true" ]]; then
+            lifecycle-untrack-job $_BSPWM_EVENT_MONITOR_PID
+        fi
+    fi
+
+    _BSPWM_EVENT_MONITOR_PID=""
+    _BSPWM_EVENT_MONITOR_ACTIVE=false
+
+    log-info "Stopped BSPWM event monitor"
+    return 0
+}
+
+# ------------------------------
+# Configuration Management
+# ------------------------------
+
+# Apply configuration
+#
+# Function: bspwm-config-apply
+# Description: Apply BSPWM configuration settings
+# Parameters:
+#   $1 - Config file path (optional, default: $BSPWM_CONFIG_DIR/config)
+# Returns:
+#   0 - Configuration applied
+#   3 - Config file not found
+# Example:
+#   bspwm-config-apply
+#   bspwm-config-apply "/path/to/config"
+#
+bspwm-config-apply() {
+    local config_file="${1:-$BSPWM_CONFIG_DIR/config}"
+
+    if [[ ! -f "$config_file" ]]; then
+        log-error "Config file not found: $config_file"
+        return 3
+    fi
+
+    log-info "Applying BSPWM configuration from: $config_file"
+
+    # Source the configuration file
+    source "$config_file"
+
+    return 0
+}
+
+# Set configuration value
+#
+# Function: bspwm-config-set
+# Description: Set a BSPWM configuration value
+# Parameters:
+#   $1 - Config key (e.g., border_width, window_gap)
+#   $2 - Config value
+# Returns:
+#   0 - Success
+#   2 - Invalid arguments
+# Example:
+#   bspwm-config-set border_width 2
+#   bspwm-config-set window_gap 10
+#
+bspwm-config-set() {
+    local key="$1"
+    local value="$2"
+
+    common-validate-required "$key" "config key" || return 2
+    common-validate-required "$value" "config value" || return 2
+
+    if _bspwm-exec config "$key" "$value"; then
+        log-debug "Set config: $key = $value"
+
+        # Save to persistent config if available
+        if [[ "$BSPWM_CONFIG_AVAILABLE" == "true" ]]; then
+            config-set "bspwm.config.$key" "$value"
+        fi
+
+        return 0
+    else
+        return 1
+    fi
+}
+
+# Get configuration value
+#
+# Function: bspwm-config-get
+# Description: Get a BSPWM configuration value
+# Parameters:
+#   $1 - Config key
+# Output: Configuration value
+# Example:
+#   value=$(bspwm-config-get border_width)
+#
+bspwm-config-get() {
+    local key="$1"
+
+    common-validate-required "$key" "config key" || return 2
+
+    _bspwm-exec config "$key"
+}
+
+# ------------------------------
+# Utility Functions
+# ------------------------------
+
+# Get focus history
+#
+# Function: bspwm-focus-history
+# Description: Get the focus history (recently focused nodes)
+# Parameters:
+#   $1 - Number of entries (optional, default: all)
+# Output: Node IDs, one per line
+# Example:
+#   bspwm-focus-history 5
+#
+bspwm-focus-history() {
+    local count="${1:-${#_BSPWM_FOCUS_HISTORY[@]}}"
+
+    for ((i=0; i<count && i<${#_BSPWM_FOCUS_HISTORY[@]}; i++)); do
+        echo "${_BSPWM_FOCUS_HISTORY[$i]}"
+    done
+}
+
+# Focus previous node from history
+#
+# Function: bspwm-focus-previous
+# Description: Focus the previously focused node from history
+# Returns:
+#   0 - Success
+#   3 - No previous node in history
+# Example:
+#   bspwm-focus-previous
+#
+bspwm-focus-previous() {
+    if [[ ${#_BSPWM_FOCUS_HISTORY[@]} -gt 0 ]]; then
+        local prev="${_BSPWM_FOCUS_HISTORY[0]}"
+        bspwm-node-focus "$prev"
+    else
+        log-warn "No previous node in focus history"
+        return 3
+    fi
+}
+
+# Balance tree
+#
+# Function: bspwm-balance
+# Description: Balance the window tree to equalize area
+# Parameters:
+#   $1 - Desktop selector (optional, default: focused)
+# Returns:
+#   0 - Success
+# Example:
+#   bspwm-balance
+#   bspwm-balance web
+#
+bspwm-balance() {
+    local desktop="${1:-focused}"
+
+    if _bspwm-exec node "@$desktop:/" -B; then
+        log-debug "Balanced desktop: $desktop"
+        return 0
+    else
+        return 1
+    fi
+}
+
+# Equalize splits
+#
+# Function: bspwm-equalize
+# Description: Reset all splits to equal size
+# Parameters:
+#   $1 - Desktop selector (optional, default: focused)
+# Returns:
+#   0 - Success
+# Example:
+#   bspwm-equalize
+#
+bspwm-equalize() {
+    local desktop="${1:-focused}"
+
+    if _bspwm-exec node "@$desktop:/" -E; then
+        log-debug "Equalized desktop: $desktop"
+        return 0
+    else
+        return 1
+    fi
+}
+
+# ------------------------------
+# Help and Information
+# ------------------------------
+
+# Display help
+#
+# Usage: bspwm-help
+#
+bspwm-help() {
+    cat <<EOF
+_bspwm - Binary Space Partition Window Manager Integration
+
+Version: $BSPWM_VERSION
+
+USAGE:
+  source "\${DOTLIB}/_bspwm"
+
+QUERY OPERATIONS:
+  bspwm-desktop-list [MONITOR]        List all desktops
+  bspwm-monitor-list                  List all monitors
+  bspwm-desktop-focused                Get focused desktop
+  bspwm-monitor-focused                Get focused monitor
+  bspwm-node-focused                   Get focused node ID
+  bspwm-node-info [NODE]               Get node information
+
+DESKTOP OPERATIONS:
+  bspwm-desktop-focus DESKTOP         Focus a desktop
+  bspwm-desktop-add NAME [MONITOR]    Add a desktop
+  bspwm-desktop-remove NAME           Remove a desktop
+  bspwm-desktop-rename OLD NEW        Rename a desktop
+  bspwm-desktop-layout MODE [DESKTOP] Set desktop layout (tiled/monocle)
+
+NODE OPERATIONS:
+  bspwm-node-focus NODE                Focus a node
+  bspwm-node-close [NODE]              Close a node gracefully
+  bspwm-node-kill [NODE]               Kill a node forcefully
+  bspwm-node-state STATE [NODE]        Set node state
+  bspwm-node-flag FLAG VALUE [NODE]    Set node flag
+  bspwm-node-to-desktop DESKTOP [NODE] Move node to desktop
+
+RULE MANAGEMENT:
+  bspwm-rule-add CLASS OPTIONS...      Add window rule
+  bspwm-rule-remove CLASS              Remove window rule
+  bspwm-rule-list                      List all rules
+
+LAYOUT MANAGEMENT:
+  bspwm-layout-save NAME [DESKTOP]     Save desktop layout
+  bspwm-layout-restore NAME [DESKTOP]  Restore desktop layout
+  bspwm-layout-list                    List saved layouts
+
+EVENT MONITORING:
+  bspwm-event-monitor-start            Start event monitor
+  bspwm-event-monitor-stop             Stop event monitor
+
+CONFIGURATION:
+  bspwm-config-apply [FILE]            Apply configuration
+  bspwm-config-set KEY VALUE           Set config value
+  bspwm-config-get KEY                 Get config value
+
+UTILITIES:
+  bspwm-focus-history [COUNT]          Show focus history
+  bspwm-focus-previous                 Focus previous node
+  bspwm-balance [DESKTOP]              Balance window tree
+  bspwm-equalize [DESKTOP]             Equalize splits
+  bspwm-is-running                     Check if BSPWM is running
+  bspwm-version                        Get BSPWM version
+  bspwm-help                           Display this help
+  bspwm-info                           Display system information
+  bspwm-self-test                      Run self-tests
+
+For detailed documentation: cat ~/.local/docs/lib/_bspwm.md
+EOF
+}
+
+# Display system information
+#
+# Usage: bspwm-info
+#
+bspwm-info() {
+    cat <<EOF
+_bspwm Extension Information
+
+Version:          $BSPWM_VERSION
+Config Directory: $BSPWM_CONFIG_DIR
+Cache Directory:  $BSPWM_CACHE_DIR
+State Directory:  $BSPWM_STATE_DIR
+Data Directory:   $BSPWM_DATA_DIR
+
+Configuration:
+  Debug Mode:     $BSPWM_DEBUG
+  Verbose Mode:   $BSPWM_VERBOSE
+  Dry Run:        $BSPWM_DRY_RUN
+  Emit Events:    $BSPWM_EMIT_EVENTS
+  Cache TTL:      ${BSPWM_CACHE_TTL}s
+  Static TTL:     ${BSPWM_CACHE_STATIC_TTL}s
+
+Integration Status:
+  _events:        ${BSPWM_EVENTS_AVAILABLE:-false}
+  _cache:         ${BSPWM_CACHE_AVAILABLE:-false}
+  _config:        ${BSPWM_CONFIG_AVAILABLE:-false}
+  _lifecycle:     ${BSPWM_LIFECYCLE_AVAILABLE:-false}
+  jq:             $(common-command-exists jq && echo "true" || echo "false")
+
+BSPWM Status:
+  Running:        $(bspwm-is-running && echo "yes" || echo "no")
+  Version:        $(bspwm-version 2>/dev/null || echo "N/A")
+  Socket:         $BSPWM_SOCKET
+
+Event Monitor:
+  Active:         $_BSPWM_EVENT_MONITOR_ACTIVE
+  PID:            ${_BSPWM_EVENT_MONITOR_PID:-N/A}
+
+Focus History:
+  Entries:        ${#_BSPWM_FOCUS_HISTORY[@]}
+  Max Size:       $_BSPWM_FOCUS_HISTORY_SIZE
+EOF
+}
+
+# Run self-tests
+#
+# Usage: bspwm-self-test
+#
+bspwm-self-test() {
+    log-info "Running _bspwm v$BSPWM_VERSION self-test..."
+    local tests_passed=0
+    local tests_failed=0
+
+    # Test 1: BSPWM availability
+    if bspwm-is-running; then
+        log-info "✓ BSPWM is running"
+        ((tests_passed++))
+    else
+        log-warn "⚠ BSPWM is not running (some tests will be skipped)"
+    fi
+
+    # Test 2: Command availability
+    if common-command-exists bspc; then
+        log-info "✓ bspc command available"
+        ((tests_passed++))
+    else
+        log-error "✗ bspc command not found"
+        ((tests_failed++))
+    fi
+
+    # Test 3: Directory creation
+    if [[ -d "$BSPWM_CONFIG_DIR" ]]; then
+        log-info "✓ Config directory exists"
+        ((tests_passed++))
+    else
+        log-error "✗ Config directory missing"
+        ((tests_failed++))
+    fi
+
+    # Test 4: Cache functionality (if available)
+    if [[ "$BSPWM_CACHE_AVAILABLE" == "true" ]]; then
+        local test_key="bspwm:test:$(date +%s)"
+        cache-set "$test_key" "test_value" 1
+        if [[ "$(cache-get "$test_key")" == "test_value" ]]; then
+            log-info "✓ Cache integration works"
+            ((tests_passed++))
+        else
+            log-error "✗ Cache integration failed"
+            ((tests_failed++))
+        fi
+        cache-delete "$test_key"
+    else
+        log-info "⚠ Cache not available (skipping cache test)"
+    fi
+
+    # Test 5: Query operations (if BSPWM running)
+    if bspwm-is-running; then
+        if bspwm-monitor-list >/dev/null 2>&1; then
+            log-info "✓ Query operations work"
+            ((tests_passed++))
+        else
+            log-error "✗ Query operations failed"
+            ((tests_failed++))
+        fi
+    fi
+
+    # Test 6: Event system (if available)
+    if [[ "$BSPWM_EVENTS_AVAILABLE" == "true" ]]; then
+        local test_event_received=false
+        test_handler() { test_event_received=true; }
+
+        events-on "bspwm.test.event" test_handler
+        _bspwm-emit "bspwm.test.event"
+
+        if [[ "$test_event_received" == "true" ]]; then
+            log-info "✓ Event system integration works"
+            ((tests_passed++))
+        else
+            log-error "✗ Event system integration failed"
+            ((tests_failed++))
+        fi
+
+        events-off "bspwm.test.event" test_handler
+        unfunction test_handler 2>/dev/null
+    else
+        log-info "⚠ Events not available (skipping event test)"
+    fi
+
+    # Summary
+    log-info ""
+    log-info "Self-tests complete: $tests_passed passed, $tests_failed failed"
+
+    if [[ $tests_failed -eq 0 ]]; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+# ------------------------------
+# Module Initialization
+# ------------------------------
+
+# Initialize directories
+_bspwm-init
+
+# Register cleanup if lifecycle available
+if [[ "$BSPWM_LIFECYCLE_AVAILABLE" == "true" ]]; then
+    _bspwm-cleanup() {
+        # Stop event monitor if running
+        [[ "$_BSPWM_EVENT_MONITOR_ACTIVE" == "true" ]] && \
+            bspwm-event-monitor-stop
+    }
+
+    lifecycle-cleanup _bspwm-cleanup
+fi
+
+# Log module load
+log-debug "_bspwm extension loaded (version $BSPWM_VERSION)"
+log-debug "Integrations: events=$BSPWM_EVENTS_AVAILABLE, cache=$BSPWM_CACHE_AVAILABLE, config=$BSPWM_CONFIG_AVAILABLE"

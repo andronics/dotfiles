@@ -18,10 +18,9 @@ readonly SCRIPT_NAME="$(basename "$0")"
 # ----------------------------------------------------------------------
 
 # Load player library
-if ! source "$(command -v _player)" 2>/dev/null; then
-    echo "ERROR: _player extension library not found" >&2
-    echo "Please ensure /home/andronics/.dotfiles/lib is in PATH" >&2
-    exit 1
+if ! source "${DOTLIB}/_player" 2>/dev/null; then
+    echo "[ERROR] _player requires _player v2.0 - cannot load" >&2
+    return 1
 fi
 
 # ----------------------------------------------------------------------

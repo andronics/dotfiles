@@ -1,0 +1,916 @@
+#!/usr/bin/env zsh
+
+# _string - Comprehensive string manipulation utilities
+# Part of the dotfiles library v2.0
+# Version: 1.0.0
+#
+# Usage:
+#   source "${DOTLIB}/_string"
+#
+# Provides:
+#   - Case conversion (upper, lower, title, camel, snake, kebab)
+#   - Trimming and padding operations
+#   - String validation and testing
+#   - URL encoding/decoding
+#   - String splitting and joining
+#   - Template replacement
+#   - Character operations
+#   - String comparison and matching
+#   - Encoding/decoding (base64, hex)
+#   - Line operations
+#   - Hash functions
+#
+# All functions support both piped input and argument input:
+#   echo "hello" | string-uppercase
+#   string-uppercase "hello"
+#
+# Dependencies:
+#   Required:
+#     - _common v2.0: Core utilities
+#   Optional (gracefully degraded):
+#     - _log v2.0: Logging functions
+#     - _cache v2.0: Performance caching
+
+# ------------------------------
+# Source Guard
+# ------------------------------
+
+[[ -n "${STRING_LOADED:-}" ]] && return 0
+declare -g STRING_LOADED=1
+
+# ------------------------------
+# Version
+# ------------------------------
+
+declare -gr STRING_VERSION="1.0.0"
+
+# ------------------------------
+# Load Dependencies
+# ------------------------------
+
+# Load _common (required)
+if ! source "${DOTLIB}/_common" 2>/dev/null; then
+    echo "[ERROR] _string requires _common - cannot load" >&2
+    return 6
+fi
+
+# Load _log (optional with fallback)
+if ! source "${DOTLIB}/_log" 2>/dev/null; then
+    log-error() { echo "[ERROR] $*" >&2; }
+    log-warning() { echo "[WARNING] $*" >&2; }
+fi
+
+# Load _cache (optional)
+source "${DOTLIB}/_cache" 2>/dev/null || true
+
+# ------------------------------
+# Configuration Variables
+# ------------------------------
+
+# Default padding character
+declare -g STRING_PAD_CHAR="${STRING_PAD_CHAR:- }"
+
+# Default trim characters (space and tab)
+declare -g STRING_TRIM_CHARS="${STRING_TRIM_CHARS:- \t}"
+
+# ------------------------------
+# Helper Functions
+# ------------------------------
+
+# Get input from pipe or argument
+# Internal helper for dual input mode support
+string--get-input() {
+    if [[ -p /dev/stdin ]]; then
+        cat
+    else
+        echo -n "$1"
+    fi
+}
+
+# ------------------------------
+# Case Conversion Functions
+# ------------------------------
+
+# Convert string to lowercase
+# Usage: string-lowercase "HELLO" => "hello"
+#        echo "HELLO" | string-lowercase => "hello"
+string-lowercase() {
+    string--get-input "$1" | tr '[:upper:]' '[:lower:]'
+}
+
+# Convert string to uppercase
+# Usage: string-uppercase "hello" => "HELLO"
+#        echo "hello" | string-uppercase => "HELLO"
+string-uppercase() {
+    string--get-input "$1" | tr '[:lower:]' '[:upper:]'
+}
+
+# Convert string to title case (first letter of each word capitalized)
+# Usage: string-titlecase "hello world" => "Hello World"
+string-titlecase() {
+    local input=$(string--get-input "$1")
+    awk '{
+        for (i=1; i<=NF; i++) {
+            $i = toupper(substr($i, 1, 1)) tolower(substr($i, 2))
+        }
+        print
+    }' <<< "$input"
+}
+
+# Convert string to sentence case (first letter of first word capitalized)
+# Usage: string-sentencecase "hello world" => "Hello world"
+string-sentencecase() {
+    local input=$(string--get-input "$1")
+    awk '{
+        $1 = toupper(substr($1, 1, 1)) tolower(substr($1, 2))
+        for (i=2; i<=NF; i++) {
+            $i = tolower($i)
+        }
+        print
+    }' <<< "$input"
+}
+
+# Convert string to camelCase
+# Usage: string-camelcase "hello world" => "helloWorld"
+string-camelcase() {
+    local input=$(string--get-input "$1")
+    echo "$input" | awk '{
+        $1 = tolower($1)
+        for (i=2; i<=NF; i++) {
+            $i = toupper(substr($i, 1, 1)) tolower(substr($i, 2))
+        }
+        printf("%s", $0)
+    }' | tr -d ' '
+}
+
+# Convert string to PascalCase
+# Usage: string-pascalcase "hello world" => "HelloWorld"
+string-pascalcase() {
+    local input=$(string--get-input "$1")
+    echo "$input" | awk '{
+        for (i=1; i<=NF; i++) {
+            $i = toupper(substr($i, 1, 1)) tolower(substr($i, 2))
+        }
+        printf("%s", $0)
+    }' | tr -d ' '
+}
+
+# Convert string to snake_case
+# Usage: string-snakecase "Hello World" => "hello_world"
+string-snakecase() {
+    local input=$(string--get-input "$1")
+    echo "$input" | tr '[:upper:]' '[:lower:]' | tr ' -' '__'
+}
+
+# Convert string to kebab-case
+# Usage: string-kebabcase "Hello World" => "hello-world"
+string-kebabcase() {
+    local input=$(string--get-input "$1")
+    echo "$input" | tr '[:upper:]' '[:lower:]' | tr ' _' '--'
+}
+
+# Convert string to SCREAMING_SNAKE_CASE
+# Usage: string-screamingsnakecase "hello world" => "HELLO_WORLD"
+string-screamingsnakecase() {
+    local input=$(string--get-input "$1")
+    echo "$input" | tr '[:lower:]' '[:upper:]' | tr ' -' '__'
+}
+
+# ------------------------------
+# Trimming and Padding Functions
+# ------------------------------
+
+# Trim whitespace from both sides
+# Usage: string-trim "  hello  " => "hello"
+string-trim() {
+    local input=$(string--get-input "$1")
+    sed 's/^[[:space:]]*//;s/[[:space:]]*$//' <<< "$input"
+}
+
+# Trim whitespace from left side
+# Usage: string-trim-left "  hello  " => "hello  "
+string-trim-left() {
+    local input=$(string--get-input "$1")
+    sed 's/^[[:space:]]*//' <<< "$input"
+}
+
+# Trim whitespace from right side
+# Usage: string-trim-right "  hello  " => "  hello"
+string-trim-right() {
+    local input=$(string--get-input "$1")
+    sed 's/[[:space:]]*$//' <<< "$input"
+}
+
+# Pad string to width (left-aligned, pad right)
+# Usage: string-pad-right "hello" 10 => "hello     "
+#        string-pad-right "hello" 10 "." => "hello....."
+string-pad-right() {
+    local str="$1"
+    local width="$2"
+    local char="${3:-$STRING_PAD_CHAR}"
+
+    if ! common-validate-numeric "$width" 2>/dev/null; then
+        log-error "string-pad-right: width must be numeric: $width"
+        return 1
+    fi
+
+    printf "%-*s" "$width" "$str" | tr ' ' "$char"
+}
+
+# Pad string to width (right-aligned, pad left)
+# Usage: string-pad-left "hello" 10 => "     hello"
+#        string-pad-left "hello" 10 "0" => "00000hello"
+string-pad-left() {
+    local str="$1"
+    local width="$2"
+    local char="${3:-$STRING_PAD_CHAR}"
+
+    if ! common-validate-numeric "$width" 2>/dev/null; then
+        log-error "string-pad-left: width must be numeric: $width"
+        return 1
+    fi
+
+    printf "%*s" "$width" "$str" | tr ' ' "$char"
+}
+
+# Pad string to width (centered)
+# Usage: string-pad-center "hello" 11 => "   hello   "
+string-pad-center() {
+    local str="$1"
+    local width="$2"
+    local char="${3:-$STRING_PAD_CHAR}"
+
+    if ! common-validate-numeric "$width" 2>/dev/null; then
+        log-error "string-pad-center: width must be numeric: $width"
+        return 1
+    fi
+
+    local str_len=${#str}
+    local pad_total=$((width - str_len))
+
+    if [[ $pad_total -le 0 ]]; then
+        echo "$str"
+        return 0
+    fi
+
+    local pad_left=$((pad_total / 2))
+    local pad_right=$((pad_total - pad_left))
+
+    printf "%*s%s%*s" "$pad_left" "" "$str" "$pad_right" "" | tr ' ' "$char"
+}
+
+# ------------------------------
+# Validation and Testing Functions
+# ------------------------------
+
+# Check if string is empty
+# Usage: string-is-empty "" && echo "empty"
+string-is-empty() {
+    local input=$(string--get-input "$1")
+    [[ -z "$input" ]]
+}
+
+# Check if string is not empty
+# Usage: string-is-not-empty "hello" && echo "not empty"
+string-is-not-empty() {
+    local input=$(string--get-input "$1")
+    [[ -n "$input" ]]
+}
+
+# Check if string contains only whitespace
+# Usage: string-is-blank "   " && echo "blank"
+string-is-blank() {
+    local input=$(string--get-input "$1")
+    [[ "$input" =~ ^[[:space:]]*$ ]]
+}
+
+# Check if string is numeric (integer)
+# Usage: string-is-numeric "123" && echo "numeric"
+string-is-numeric() {
+    local input=$(string--get-input "$1")
+    [[ "$input" =~ ^-?[0-9]+$ ]]
+}
+
+# Check if string is positive integer
+# Usage: string-is-positive-integer "123" && echo "positive"
+string-is-positive-integer() {
+    local input=$(string--get-input "$1")
+    [[ "$input" =~ ^[0-9]+$ ]] && [[ "$input" -gt 0 ]]
+}
+
+# Check if string is alphanumeric
+# Usage: string-is-alphanumeric "hello123" && echo "alphanumeric"
+string-is-alphanumeric() {
+    local input=$(string--get-input "$1")
+    [[ "$input" =~ ^[[:alnum:]]+$ ]]
+}
+
+# Check if string is alphabetic
+# Usage: string-is-alpha "hello" && echo "alpha"
+string-is-alpha() {
+    local input=$(string--get-input "$1")
+    [[ "$input" =~ ^[[:alpha:]]+$ ]]
+}
+
+# Check if string starts with prefix
+# Usage: string-starts-with "hello world" "hello" && echo "yes"
+string-starts-with() {
+    local str="$1"
+    local prefix="$2"
+    [[ "$str" == "$prefix"* ]]
+}
+
+# Check if string ends with suffix
+# Usage: string-ends-with "hello world" "world" && echo "yes"
+string-ends-with() {
+    local str="$1"
+    local suffix="$2"
+    [[ "$str" == *"$suffix" ]]
+}
+
+# Check if string contains substring
+# Usage: string-contains "hello world" "wor" && echo "yes"
+string-contains() {
+    local str="$1"
+    local substring="$2"
+    [[ "$str" == *"$substring"* ]]
+}
+
+# Check if string matches pattern (glob)
+# Usage: string-matches "hello.txt" "*.txt" && echo "matches"
+string-matches() {
+    local str="$1"
+    local pattern="$2"
+    [[ "$str" == $pattern ]]
+}
+
+# Check if string matches regex
+# Usage: string-matches-regex "hello123" "^[a-z]+[0-9]+$" && echo "matches"
+string-matches-regex() {
+    local str="$1"
+    local regex="$2"
+    [[ "$str" =~ $regex ]]
+}
+
+# ------------------------------
+# String Operation Functions
+# ------------------------------
+
+# Get string length
+# Usage: string-length "hello" => 5
+string-length() {
+    local input=$(string--get-input "$1")
+    echo ${#input}
+}
+
+# Reverse string
+# Usage: string-reverse "hello" => "olleh"
+string-reverse() {
+    local input=$(string--get-input "$1")
+    echo "$input" | rev
+}
+
+# Repeat string n times
+# Usage: string-repeat "hello" 3 => "hellohellohello"
+string-repeat() {
+    local str="$1"
+    local count="$2"
+
+    if ! common-validate-numeric "$count" 2>/dev/null; then
+        log-error "string-repeat: count must be numeric: $count"
+        return 1
+    fi
+
+    for ((i=0; i<count; i++)); do
+        printf "%s" "$str"
+    done
+}
+
+# Extract substring
+# Usage: string-substring "hello world" 0 5 => "hello"
+#        string-substring "hello world" 6 => "world"
+string-substring() {
+    local str="$1"
+    local start="$2"
+    local length="${3:-}"
+
+    if [[ -n "$length" ]]; then
+        echo "${str:$start:$length}"
+    else
+        echo "${str:$start}"
+    fi
+}
+
+# Replace first occurrence
+# Usage: string-replace-first "hello world hello" "hello" "hi" => "hi world hello"
+string-replace-first() {
+    local str="$1"
+    local search="$2"
+    local replace="$3"
+    echo "${str/$search/$replace}"
+}
+
+# Replace all occurrences
+# Usage: string-replace-all "hello world hello" "hello" "hi" => "hi world hi"
+string-replace-all() {
+    local str="$1"
+    local search="$2"
+    local replace="$3"
+    echo "${str//$search/$replace}"
+}
+
+# Remove prefix
+# Usage: string-remove-prefix "hello world" "hello " => "world"
+string-remove-prefix() {
+    local str="$1"
+    local prefix="$2"
+    echo "${str#$prefix}"
+}
+
+# Remove suffix
+# Usage: string-remove-suffix "hello world" " world" => "hello"
+string-remove-suffix() {
+    local str="$1"
+    local suffix="$2"
+    echo "${str%$suffix}"
+}
+
+# Split string by delimiter (output one per line)
+# Usage: string-split "a,b,c" "," => a\nb\nc
+string-split() {
+    local str="$1"
+    local delimiter="$2"
+    echo "$str" | tr "$delimiter" '\n'
+}
+
+# Join strings with delimiter
+# Usage: string-join "," "a" "b" "c" => "a,b,c"
+string-join() {
+    local delimiter="$1"
+    shift
+    local result=""
+    local first=true
+
+    for item in "$@"; do
+        if [[ "$first" == "true" ]]; then
+            result="$item"
+            first=false
+        else
+            result="${result}${delimiter}${item}"
+        fi
+    done
+
+    echo "$result"
+}
+
+# Count occurrences of substring
+# Usage: string-count "hello world hello" "hello" => 2
+string-count() {
+    local str="$1"
+    local substring="$2"
+    local temp="${str//$substring}"
+    echo $(( (${#str} - ${#temp}) / ${#substring} ))
+}
+
+# Index of first occurrence
+# Usage: string-index-of "hello world" "world" => 6
+string-index-of() {
+    local str="$1"
+    local substring="$2"
+    local prefix="${str%%$substring*}"
+
+    if [[ "$prefix" == "$str" ]]; then
+        echo "-1"
+    else
+        echo ${#prefix}
+    fi
+}
+
+# Last index of occurrence
+# Usage: string-last-index-of "hello world hello" "hello" => 12
+string-last-index-of() {
+    local str="$1"
+    local substring="$2"
+    local suffix="${str##*$substring}"
+
+    if [[ "$suffix" == "$str" ]]; then
+        echo "-1"
+    else
+        echo $((${#str} - ${#suffix} - ${#substring}))
+    fi
+}
+
+# ------------------------------
+# URL Encoding/Decoding Functions
+# ------------------------------
+
+# URL encode string
+# Usage: string-url-encode "hello world" => "hello%20world"
+string-url-encode() {
+    local input=$(string--get-input "$1")
+    awk '
+    BEGIN {
+        for (i = 0; i < 256; i++) {
+            ord_map[sprintf("%c", i)] = i
+        }
+    }
+    {
+        for (i = 1; i <= length($0); i++) {
+            char = substr($0, i, 1);
+            if (char ~ /[a-zA-Z0-9.~_-]/) {
+                printf("%s", char);
+            } else {
+                printf("%%%02X", ord_map[char]);
+            }
+        }
+    }' <<< "$input"
+}
+
+# URL decode string
+# Usage: string-url-decode "hello%20world" => "hello world"
+string-url-decode() {
+    local input=$(string--get-input "$1")
+    printf '%b' "$(echo "$input" | sed 's/%/\\x/g')"
+}
+
+# ------------------------------
+# Encoding/Decoding Functions
+# ------------------------------
+
+# Base64 encode
+# Usage: string-base64-encode "hello" => "aGVsbG8="
+string-base64-encode() {
+    local input=$(string--get-input "$1")
+    echo -n "$input" | base64
+}
+
+# Base64 decode
+# Usage: string-base64-decode "aGVsbG8=" => "hello"
+string-base64-decode() {
+    local input=$(string--get-input "$1")
+    echo "$input" | base64 -d 2>/dev/null
+}
+
+# Hex encode
+# Usage: string-hex-encode "hello" => "68656c6c6f"
+string-hex-encode() {
+    local input=$(string--get-input "$1")
+    echo -n "$input" | xxd -p | tr -d '\n'
+}
+
+# Hex decode
+# Usage: string-hex-decode "68656c6c6f" => "hello"
+string-hex-decode() {
+    local input=$(string--get-input "$1")
+    echo "$input" | xxd -r -p 2>/dev/null
+}
+
+# ------------------------------
+# Character Operation Functions
+# ------------------------------
+
+# Get ASCII/Unicode value of character
+# Usage: string-ord "A" => 65
+string-ord() {
+    local input=$(string--get-input "$1")
+    printf "%d" "'${input:0:1}"
+}
+
+# Get character from ASCII/Unicode value
+# Usage: string-chr 65 => "A"
+string-chr() {
+    local code="$1"
+    printf "\\$(printf '%03o' "$code")"
+}
+
+# Get character at index
+# Usage: string-char-at "hello" 1 => "e"
+string-char-at() {
+    local str="$1"
+    local index="$2"
+    echo "${str:$index:1}"
+}
+
+# ------------------------------
+# Line Operation Functions
+# ------------------------------
+
+# Get number of lines
+# Usage: echo -e "line1\nline2\nline3" | string-line-count => 3
+string-line-count() {
+    local input=$(string--get-input "$1")
+    echo "$input" | wc -l
+}
+
+# Get specific line by number (1-indexed)
+# Usage: echo -e "line1\nline2\nline3" | string-line-at 2 => "line2"
+string-line-at() {
+    local index="$1"
+    local input=$(string--get-input "$2")
+    echo "$input" | sed -n "${index}p"
+}
+
+# Get first line
+# Usage: echo -e "line1\nline2\nline3" | string-first-line => "line1"
+string-first-line() {
+    local input=$(string--get-input "$1")
+    echo "$input" | head -n 1
+}
+
+# Get last line
+# Usage: echo -e "line1\nline2\nline3" | string-last-line => "line3"
+string-last-line() {
+    local input=$(string--get-input "$1")
+    echo "$input" | tail -n 1
+}
+
+# Remove empty lines
+# Usage: echo -e "line1\n\nline2\n\nline3" | string-remove-empty-lines => "line1\nline2\nline3"
+string-remove-empty-lines() {
+    local input=$(string--get-input "$1")
+    echo "$input" | sed '/^$/d'
+}
+
+# Remove duplicate lines (preserves order)
+# Usage: echo -e "a\nb\na\nc\nb" | string-remove-duplicate-lines => "a\nb\nc"
+string-remove-duplicate-lines() {
+    local input=$(string--get-input "$1")
+    echo "$input" | awk '!seen[$0]++'
+}
+
+# Sort lines
+# Usage: echo -e "c\na\nb" | string-sort-lines => "a\nb\nc"
+string-sort-lines() {
+    local input=$(string--get-input "$1")
+    echo "$input" | sort
+}
+
+# Sort lines (reverse)
+# Usage: echo -e "a\nb\nc" | string-sort-lines-reverse => "c\nb\na"
+string-sort-lines-reverse() {
+    local input=$(string--get-input "$1")
+    echo "$input" | sort -r
+}
+
+# ------------------------------
+# Comparison Functions
+# ------------------------------
+
+# Compare strings (equal)
+# Usage: string-equals "hello" "hello" && echo "equal"
+string-equals() {
+    local str1="$1"
+    local str2="$2"
+    [[ "$str1" == "$str2" ]]
+}
+
+# Compare strings (case-insensitive)
+# Usage: string-equals-ignore-case "Hello" "hello" && echo "equal"
+string-equals-ignore-case() {
+    local str1=$(string-lowercase "$1")
+    local str2=$(string-lowercase "$2")
+    [[ "$str1" == "$str2" ]]
+}
+
+# Compare strings (less than)
+# Usage: string-less-than "abc" "xyz" && echo "less"
+string-less-than() {
+    local str1="$1"
+    local str2="$2"
+    [[ "$str1" < "$str2" ]]
+}
+
+# Compare strings (greater than)
+# Usage: string-greater-than "xyz" "abc" && echo "greater"
+string-greater-than() {
+    local str1="$1"
+    local str2="$2"
+    [[ "$str1" > "$str2" ]]
+}
+
+# ------------------------------
+# Hash Functions
+# ------------------------------
+
+# Get MD5 hash of string
+# Usage: string-md5 "hello" => "5d41402abc4b2a76b9719d911017c592"
+string-md5() {
+    local input=$(string--get-input "$1")
+    if common-command-exists "md5sum"; then
+        echo -n "$input" | md5sum | cut -d' ' -f1
+    elif common-command-exists "md5"; then
+        echo -n "$input" | md5
+    else
+        log-error "string-md5: md5sum or md5 command not found"
+        return 1
+    fi
+}
+
+# Get SHA1 hash of string
+# Usage: string-sha1 "hello" => "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d"
+string-sha1() {
+    local input=$(string--get-input "$1")
+    if common-command-exists "sha1sum"; then
+        echo -n "$input" | sha1sum | cut -d' ' -f1
+    elif common-command-exists "shasum"; then
+        echo -n "$input" | shasum | cut -d' ' -f1
+    else
+        log-error "string-sha1: sha1sum or shasum command not found"
+        return 1
+    fi
+}
+
+# Get SHA256 hash of string
+# Usage: string-sha256 "hello" => "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+string-sha256() {
+    local input=$(string--get-input "$1")
+    if common-command-exists "sha256sum"; then
+        echo -n "$input" | sha256sum | cut -d' ' -f1
+    elif common-command-exists "shasum"; then
+        echo -n "$input" | shasum -a 256 | cut -d' ' -f1
+    else
+        log-error "string-sha256: sha256sum or shasum command not found"
+        return 1
+    fi
+}
+
+# ------------------------------
+# Utility Functions
+# ------------------------------
+
+# Truncate string to max length with ellipsis
+# Usage: string-truncate "hello world" 8 => "hello..."
+#        string-truncate "hello world" 8 "…" => "hello w…"
+string-truncate() {
+    local str="$1"
+    local max_len="$2"
+    local ellipsis="${3:-...}"
+
+    if [[ ${#str} -le $max_len ]]; then
+        echo "$str"
+    else
+        local truncated="${str:0:$((max_len - ${#ellipsis}))}"
+        echo "${truncated}${ellipsis}"
+    fi
+}
+
+# Wrap text to specified width
+# Usage: string-wrap "hello world this is a test" 10
+string-wrap() {
+    local input=$(string--get-input "$1")
+    local width="${2:-80}"
+    echo "$input" | fold -s -w "$width"
+}
+
+# Slugify string (make URL-friendly)
+# Usage: string-slugify "Hello World!" => "hello-world"
+string-slugify() {
+    local input=$(string--get-input "$1")
+    echo "$input" | string-lowercase | sed 's/[^a-z0-9]/-/g' | sed 's/-\+/-/g' | sed 's/^-//;s/-$//'
+}
+
+# Generate random string
+# Usage: string-random 16 => "a8f3k9m2p5q7r1s4"
+string-random() {
+    local length="${1:-16}"
+    local charset="${2:-a-zA-Z0-9}"
+    tr -dc "$charset" < /dev/urandom | head -c "$length"
+}
+
+# ------------------------------
+# Self-Test Function
+# ------------------------------
+
+string-self-test() {
+    echo "=== _string v${STRING_VERSION} self-test ==="
+    echo ""
+
+    local tests_passed=0
+    local tests_failed=0
+
+    # Test 1: Case conversion
+    echo -n "Test 1: Case conversion... "
+    if [[ "$(string-lowercase "HELLO")" == "hello" ]] && \
+       [[ "$(string-uppercase "hello")" == "HELLO" ]] && \
+       [[ "$(string-kebabcase "Hello World")" == "hello-world" ]]; then
+        echo "PASS"
+        tests_passed=$((tests_passed + 1))
+    else
+        echo "FAIL"
+        tests_failed=$((tests_failed + 1))
+    fi
+
+    # Test 2: Trimming
+    echo -n "Test 2: Trimming... "
+    if [[ "$(string-trim "  hello  ")" == "hello" ]] && \
+       [[ "$(string-trim-left "  hello  ")" == "hello  " ]]; then
+        echo "PASS"
+        tests_passed=$((tests_passed + 1))
+    else
+        echo "FAIL"
+        tests_failed=$((tests_failed + 1))
+    fi
+
+    # Test 3: Validation
+    echo -n "Test 3: Validation... "
+    if string-is-numeric "123" && \
+       string-is-alpha "hello" && \
+       string-contains "hello world" "wor"; then
+        echo "PASS"
+        tests_passed=$((tests_passed + 1))
+    else
+        echo "FAIL"
+        tests_failed=$((tests_failed + 1))
+    fi
+
+    # Test 4: String operations
+    echo -n "Test 4: String operations... "
+    if [[ "$(string-length "hello")" == "5" ]] && \
+       [[ "$(string-reverse "hello")" == "olleh" ]] && \
+       [[ "$(string-replace-all "hello world hello" "hello" "hi")" == "hi world hi" ]]; then
+        echo "PASS"
+        tests_passed=$((tests_passed + 1))
+    else
+        echo "FAIL"
+        tests_failed=$((tests_failed + 1))
+    fi
+
+    # Test 5: Substring
+    echo -n "Test 5: Substring... "
+    if [[ "$(string-substring "hello world" 0 5)" == "hello" ]] && \
+       [[ "$(string-substring "hello world" 6)" == "world" ]]; then
+        echo "PASS"
+        tests_passed=$((tests_passed + 1))
+    else
+        echo "FAIL"
+        tests_failed=$((tests_failed + 1))
+    fi
+
+    # Test 6: Split/Join
+    echo -n "Test 6: Split/Join... "
+    if [[ "$(string-join "," "a" "b" "c")" == "a,b,c" ]] && \
+       [[ "$(string-count "hello hello hello" "hello")" == "3" ]]; then
+        echo "PASS"
+        tests_passed=$((tests_passed + 1))
+    else
+        echo "FAIL"
+        tests_failed=$((tests_failed + 1))
+    fi
+
+    # Test 7: Padding
+    echo -n "Test 7: Padding... "
+    local padded=$(string-pad-right "hi" 5)
+    if [[ ${#padded} -eq 5 ]]; then
+        echo "PASS"
+        tests_passed=$((tests_passed + 1))
+    else
+        echo "FAIL (length=${#padded})"
+        tests_failed=$((tests_failed + 1))
+    fi
+
+    # Test 8: URL encoding
+    echo -n "Test 8: URL encoding... "
+    local encoded=$(string-url-encode "hello world")
+    if [[ "$encoded" == "hello%20world" ]]; then
+        echo "PASS"
+        tests_passed=$((tests_passed + 1))
+    else
+        echo "FAIL (got: $encoded)"
+        tests_failed=$((tests_failed + 1))
+    fi
+
+    # Test 9: Base64
+    echo -n "Test 9: Base64 encoding... "
+    local b64=$(string-base64-encode "hello")
+    local decoded=$(string-base64-decode "$b64")
+    if [[ "$decoded" == "hello" ]]; then
+        echo "PASS"
+        tests_passed=$((tests_passed + 1))
+    else
+        echo "FAIL"
+        tests_failed=$((tests_failed + 1))
+    fi
+
+    # Test 10: Comparison
+    echo -n "Test 10: Comparison... "
+    if string-equals "hello" "hello" && \
+       ! string-equals "hello" "world" && \
+       string-equals-ignore-case "Hello" "hello"; then
+        echo "PASS"
+        tests_passed=$((tests_passed + 1))
+    else
+        echo "FAIL"
+        tests_failed=$((tests_failed + 1))
+    fi
+
+    echo ""
+    echo "=== Results: $tests_passed passed, $tests_failed failed ==="
+
+    if [[ $tests_failed -eq 0 ]]; then
+        echo "SUCCESS: All tests passed"
+        return 0
+    else
+        echo "FAILURE: Some tests failed"
+        return 1
+    fi
+}

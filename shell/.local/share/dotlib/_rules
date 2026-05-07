@@ -1,0 +1,982 @@
+#!/usr/bin/env zsh
+
+# _rules - Rule engine for conditional automation
+# Part of the dotfiles library v2.0
+# Version: 1.0.0
+#
+# Usage:
+#   source "${DOTLIB}/_rules"
+#
+# Provides:
+#   - Rule definition and registration
+#   - Condition evaluation with logical operators (AND, OR, NOT)
+#   - Action execution with context passing
+#   - Rule priority and ordering
+#   - Rule chains (if-then-else, sequences)
+#   - Rule groups and patterns
+#   - Event integration
+#   - Statistics tracking
+#   - Dry-run mode support
+#   - Rule validation
+#
+# Dependencies:
+#   Required:
+#     - _common v2.0: Core utilities
+#   Optional (gracefully degraded):
+#     - _log v2.0: Logging functions
+#     - _events v2.0: Event system integration
+#     - _dryrun v2.0: Dry-run mode support
+
+# ------------------------------
+# Source Guard
+# ------------------------------
+
+[[ -n "${RULES_LOADED:-}" ]] && return 0
+declare -g RULES_LOADED=1
+
+# ------------------------------
+# Version
+# ------------------------------
+
+declare -gr RULES_VERSION="1.0.0"
+
+# ------------------------------
+# Load Dependencies
+# ------------------------------
+
+# Load _common (required)
+if ! source "${DOTLIB}/_common" 2>/dev/null; then
+    echo "[ERROR] _rules requires _common - cannot load" >&2
+    return 6
+fi
+
+# Load _log (optional with fallback)
+if ! source "${DOTLIB}/_log" 2>/dev/null; then
+    log-info() { echo "[INFO] $*"; }
+    log-error() { echo "[ERROR] $*" >&2; }
+    log-warning() { echo "[WARNING] $*" >&2; }
+    log-debug() { [[ "${RULES_DEBUG:-false}" == "true" ]] && echo "[DEBUG] $*" >&2 || true; }
+    log-success() { echo "[SUCCESS] $*"; }
+fi
+
+# Load _events (optional)
+source "${DOTLIB}/_events" 2>/dev/null || true
+
+# Load _dryrun (optional)
+source "${DOTLIB}/_dryrun" 2>/dev/null || true
+
+# ------------------------------
+# Configuration Variables
+# ------------------------------
+
+# Enable debug logging
+declare -g RULES_DEBUG="${RULES_DEBUG:-false}"
+
+# Enable rule execution logging
+declare -g RULES_ENABLE_LOGGING="${RULES_ENABLE_LOGGING:-false}"
+
+# Directory for rule logs (XDG-compliant) - evaluated lazily
+declare -g RULES_LOG_DIR="${RULES_LOG_DIR:-}"
+
+# Stop on first error in sequences
+declare -g RULES_STOP_ON_ERROR="${RULES_STOP_ON_ERROR:-false}"
+
+# Dry-run mode (preview actions without executing)
+declare -g RULES_DRY_RUN="${RULES_DRY_RUN:-false}"
+
+# Enable event emission
+declare -g RULES_EMIT_EVENTS="${RULES_EMIT_EVENTS:-true}"
+
+# ------------------------------
+# Global State
+# ------------------------------
+
+# Rules registry: rule_id -> "priority|condition_func|action_func|description"
+declare -gA _RULES_REGISTRY
+
+# Rule execution statistics
+declare -gA _RULES_STATS_MATCHED
+declare -gA _RULES_STATS_EXECUTED
+declare -gA _RULES_STATS_FAILED
+
+# Rule dependencies (for dependency-ordered execution)
+declare -gA _RULES_DEPENDENCIES
+
+# ------------------------------
+# Rule Definition Functions
+# ------------------------------
+
+# Define a new rule
+# Usage: rules-define <rule_id> <condition_func> <action_func> [priority] [description]
+# Exit codes:
+#   0 - Success
+#   1 - Invalid arguments
+#   2 - Condition function not found
+#   3 - Action function not found
+rules-define() {
+    local rule_id="$1"
+    local condition="$2"
+    local action="$3"
+    local priority="${4:-100}"
+    local description="${5:-}"
+
+    # Validate required arguments
+    if [[ -z "$rule_id" ]] || [[ -z "$condition" ]] || [[ -z "$action" ]]; then
+        log-error "rules-define: rule_id, condition, and action required"
+        return 1
+    fi
+
+    # Validate priority is numeric
+    if ! common-validate-numeric "$priority" 2>/dev/null; then
+        log-error "rules-define: priority must be an integer: $priority"
+        return 1
+    fi
+
+    # Validate condition function exists
+    if ! common-command-exists "$condition" && ! typeset -f "$condition" >/dev/null 2>&1; then
+        log-error "rules-define: condition function not found: $condition"
+        return 2
+    fi
+
+    # Validate action function exists
+    if ! common-command-exists "$action" && ! typeset -f "$action" >/dev/null 2>&1; then
+        log-error "rules-define: action function not found: $action"
+        return 3
+    fi
+
+    # Store rule definition
+    _RULES_REGISTRY[$rule_id]="${priority}|${condition}|${action}|${description}"
+
+    # Initialize statistics
+    _RULES_STATS_MATCHED[$rule_id]=0
+    _RULES_STATS_EXECUTED[$rule_id]=0
+    _RULES_STATS_FAILED[$rule_id]=0
+
+    log-debug "rules-define: defined rule '$rule_id' (priority=$priority)"
+
+    # Emit event
+    rules--emit-event "rule.defined" "$rule_id" "$priority" "$condition" "$action"
+
+    return 0
+}
+
+# Remove a rule
+# Usage: rules-remove <rule_id>
+rules-remove() {
+    local rule_id="$1"
+
+    if [[ -z "$rule_id" ]]; then
+        log-error "rules-remove: rule_id required"
+        return 1
+    fi
+
+    if [[ -z "${_RULES_REGISTRY[$rule_id]:-}" ]]; then
+        log-warning "rules-remove: rule not found: $rule_id"
+        return 1
+    fi
+
+    # Remove from registry
+    unset "_RULES_REGISTRY[$rule_id]"
+    unset "_RULES_STATS_MATCHED[$rule_id]"
+    unset "_RULES_STATS_EXECUTED[$rule_id]"
+    unset "_RULES_STATS_FAILED[$rule_id]"
+    unset "_RULES_DEPENDENCIES[$rule_id]"
+
+    log-debug "rules-remove: removed rule '$rule_id'"
+    rules--emit-event "rule.removed" "$rule_id"
+
+    return 0
+}
+
+# Clear all rules
+# Usage: rules-clear
+rules-clear() {
+    local count=${#_RULES_REGISTRY[@]}
+
+    _RULES_REGISTRY=()
+    _RULES_STATS_MATCHED=()
+    _RULES_STATS_EXECUTED=()
+    _RULES_STATS_FAILED=()
+    _RULES_DEPENDENCIES=()
+
+    log-debug "rules-clear: cleared $count rules"
+    rules--emit-event "rules.cleared" "$count"
+
+    return 0
+}
+
+# Check if rule exists
+# Usage: rules-exists <rule_id>
+rules-exists() {
+    local rule_id="$1"
+    [[ -n "${_RULES_REGISTRY[$rule_id]:-}" ]]
+}
+
+# ------------------------------
+# Rule Evaluation Functions
+# ------------------------------
+
+# Evaluate a single rule
+# Usage: rules-eval <rule_id> [context_args...]
+# Exit codes:
+#   0 - Rule matched and action succeeded
+#   1 - Rule not found or didn't match
+#   2 - Action execution failed
+rules-eval() {
+    local rule_id="$1"
+    shift
+    local context=("$@")
+
+    # Check rule exists
+    if ! rules-exists "$rule_id"; then
+        log-error "rules-eval: rule not found: $rule_id"
+        return 1
+    fi
+
+    # Parse rule definition
+    local rule_def="${_RULES_REGISTRY[$rule_id]}"
+    local priority="${rule_def%%|*}"
+    local rest="${rule_def#*|}"
+    local condition="${rest%%|*}"
+    rest="${rest#*|}"
+    local action="${rest%%|*}"
+    local description="${rest#*|}"
+
+    log-debug "rules-eval: evaluating rule '$rule_id' (condition=$condition)"
+
+    # Evaluate condition
+    if "$condition" "${context[@]}"; then
+        _RULES_STATS_MATCHED[$rule_id]=$(( ${_RULES_STATS_MATCHED[$rule_id]} + 1 ))
+
+        log-debug "rules-eval: rule '$rule_id' matched (action=$action)"
+        rules--emit-event "rule.matched" "$rule_id" "$condition"
+
+        # Execute action (respect dry-run mode)
+        if [[ "${RULES_DRY_RUN}" == "true" ]]; then
+            log-info "[DRY-RUN] Would execute action for rule '$rule_id': $action"
+            _RULES_STATS_EXECUTED[$rule_id]=$(( ${_RULES_STATS_EXECUTED[$rule_id]} + 1 ))
+            return 0
+        fi
+
+        if "$action" "${context[@]}"; then
+            _RULES_STATS_EXECUTED[$rule_id]=$(( ${_RULES_STATS_EXECUTED[$rule_id]} + 1 ))
+
+            log-debug "rules-eval: rule '$rule_id' executed successfully"
+            rules--emit-event "rule.executed" "$rule_id" "$action"
+            rules--log-execution "$rule_id" "success" "$condition" "$action"
+
+            return 0
+        else
+            local exit_code=$?
+            _RULES_STATS_FAILED[$rule_id]=$(( ${_RULES_STATS_FAILED[$rule_id]} + 1 ))
+
+            log-error "rules-eval: rule '$rule_id' action failed (exit=$exit_code)"
+            rules--emit-event "rule.failed" "$rule_id" "$action" "$exit_code"
+            rules--log-execution "$rule_id" "failed" "$condition" "$action" "$exit_code"
+
+            return 2
+        fi
+    fi
+
+    log-debug "rules-eval: rule '$rule_id' did not match"
+    return 1
+}
+
+# Evaluate all rules (in priority order)
+# Usage: rules-eval-all [context_args...]
+# Returns: Number of rules that matched
+rules-eval-all() {
+    local context=("$@")
+    local matched=0
+    local executed=0
+    local failed=0
+
+    log-debug "rules-eval-all: evaluating ${#_RULES_REGISTRY[@]} rules"
+
+    # Get rules sorted by priority (lower number = higher priority)
+    local sorted_rules=()
+    for rule_id in "${(@k)_RULES_REGISTRY}"; do
+        local rule_def="${_RULES_REGISTRY[$rule_id]}"
+        local priority="${rule_def%%|*}"
+        sorted_rules+=("${priority}:${rule_id}")
+    done
+
+    # Sort numerically by priority
+    sorted_rules=(${(n)sorted_rules})
+
+    # Evaluate each rule
+    for entry in "${sorted_rules[@]}"; do
+        local rule_id="${entry#*:}"
+
+        if rules-eval "$rule_id" "${context[@]}"; then
+            matched=$((matched + 1))
+            executed=$((executed + 1))
+        elif [[ $? -eq 2 ]]; then
+            # Action failed
+            matched=$((matched + 1))
+            failed=$((failed + 1))
+        fi
+    done
+
+    log-debug "rules-eval-all: $matched matched, $executed executed, $failed failed"
+    rules--emit-event "rules.evaluated" "${#_RULES_REGISTRY[@]}" "$matched" "$executed" "$failed"
+
+    return $matched
+}
+
+# Evaluate rules until one matches (first-match strategy)
+# Usage: rules-eval-first [context_args...]
+# Exit codes:
+#   0 - A rule matched and executed successfully
+#   1 - No rules matched
+#   2 - Rule matched but action failed
+rules-eval-first() {
+    local context=("$@")
+
+    # Get rules sorted by priority
+    local sorted_rules=()
+    for rule_id in "${(@k)_RULES_REGISTRY}"; do
+        local rule_def="${_RULES_REGISTRY[$rule_id]}"
+        local priority="${rule_def%%|*}"
+        sorted_rules+=("${priority}:${rule_id}")
+    done
+
+    sorted_rules=(${(n)sorted_rules})
+
+    # Evaluate until first match
+    for entry in "${sorted_rules[@]}"; do
+        local rule_id="${entry#*:}"
+
+        if rules-eval "$rule_id" "${context[@]}"; then
+            log-debug "rules-eval-first: first matching rule: $rule_id"
+            return 0
+        elif [[ $? -eq 2 ]]; then
+            # Matched but failed
+            log-error "rules-eval-first: first matching rule failed: $rule_id"
+            return 2
+        fi
+    done
+
+    log-debug "rules-eval-first: no rules matched"
+    return 1
+}
+
+# ------------------------------
+# Condition Helper Functions
+# ------------------------------
+
+# Compare two values with an operator
+# Usage: rules-compare <value1> <operator> <value2>
+# Operators: eq/==, ne/!=, gt, ge/gte, lt, le/lte, contains, starts-with, ends-with, matches
+rules-compare() {
+    local val1="$1"
+    local op="$2"
+    local val2="$3"
+
+    case "$op" in
+        eq|==)
+            [[ "$val1" == "$val2" ]]
+            ;;
+        ne|!=)
+            [[ "$val1" != "$val2" ]]
+            ;;
+        gt)
+            if common-validate-numeric "$val1" 2>/dev/null && common-validate-numeric "$val2" 2>/dev/null; then
+                [[ "$val1" -gt "$val2" ]]
+            else
+                [[ "$val1" > "$val2" ]]
+            fi
+            ;;
+        ge|gte)
+            if common-validate-numeric "$val1" 2>/dev/null && common-validate-numeric "$val2" 2>/dev/null; then
+                [[ "$val1" -ge "$val2" ]]
+            else
+                [[ "$val1" > "$val2" ]] || [[ "$val1" == "$val2" ]]
+            fi
+            ;;
+        lt)
+            if common-validate-numeric "$val1" 2>/dev/null && common-validate-numeric "$val2" 2>/dev/null; then
+                [[ "$val1" -lt "$val2" ]]
+            else
+                [[ "$val1" < "$val2" ]]
+            fi
+            ;;
+        le|lte)
+            if common-validate-numeric "$val1" 2>/dev/null && common-validate-numeric "$val2" 2>/dev/null; then
+                [[ "$val1" -le "$val2" ]]
+            else
+                [[ "$val1" < "$val2" ]] || [[ "$val1" == "$val2" ]]
+            fi
+            ;;
+        contains)
+            [[ "$val1" == *"$val2"* ]]
+            ;;
+        starts-with)
+            [[ "$val1" == "$val2"* ]]
+            ;;
+        ends-with)
+            [[ "$val1" == *"$val2" ]]
+            ;;
+        matches)
+            [[ "$val1" =~ $val2 ]]
+            ;;
+        in)
+            # Check if val1 is in comma-separated list val2
+            local IFS=','
+            for item in ${(s:,:)val2}; do
+                [[ "$val1" == "$item" ]] && return 0
+            done
+            return 1
+            ;;
+        *)
+            log-error "rules-compare: unknown operator: $op"
+            return 1
+            ;;
+    esac
+}
+
+# Logical AND - combine two conditions
+# Usage: rules-and <cond1_func> <cond2_func> [args...]
+rules-and() {
+    local cond1="$1"
+    local cond2="$2"
+    shift 2
+    local args=("$@")
+
+    "$cond1" "${args[@]}" && "$cond2" "${args[@]}"
+}
+
+# Logical OR - combine two conditions
+# Usage: rules-or <cond1_func> <cond2_func> [args...]
+rules-or() {
+    local cond1="$1"
+    local cond2="$2"
+    shift 2
+    local args=("$@")
+
+    "$cond1" "${args[@]}" || "$cond2" "${args[@]}"
+}
+
+# Logical NOT - negate a condition
+# Usage: rules-not <cond_func> [args...]
+rules-not() {
+    local cond="$1"
+    shift
+    local args=("$@")
+
+    ! "$cond" "${args[@]}"
+}
+
+# ------------------------------
+# Common Condition Functions
+# ------------------------------
+
+# Always true condition
+rules-cond-always() { return 0; }
+
+# Always false condition
+rules-cond-never() { return 1; }
+
+# Check if file exists
+# Usage: rules-cond-file-exists <path>
+rules-cond-file-exists() {
+    local path="$1"
+    [[ -f "$path" ]]
+}
+
+# Check if directory exists
+# Usage: rules-cond-dir-exists <path>
+rules-cond-dir-exists() {
+    local path="$1"
+    [[ -d "$path" ]]
+}
+
+# Check if path exists (file or directory)
+# Usage: rules-cond-path-exists <path>
+rules-cond-path-exists() {
+    local path="$1"
+    [[ -e "$path" ]]
+}
+
+# Check if file is older than N seconds
+# Usage: rules-cond-file-older-than <path> <seconds>
+rules-cond-file-older-than() {
+    local path="$1"
+    local max_age="$2"
+
+    if [[ ! -f "$path" ]]; then
+        return 1
+    fi
+
+    local file_time=$(stat -c %Y "$path" 2>/dev/null || stat -f %m "$path" 2>/dev/null)
+    local current_time=$(date +%s)
+    local age=$((current_time - file_time))
+
+    [[ $age -gt $max_age ]]
+}
+
+# Check if file is larger than N bytes
+# Usage: rules-cond-file-larger-than <path> <bytes>
+rules-cond-file-larger-than() {
+    local path="$1"
+    local max_size="$2"
+
+    if [[ ! -f "$path" ]]; then
+        return 1
+    fi
+
+    local file_size=$(stat -c %s "$path" 2>/dev/null || stat -f %z "$path" 2>/dev/null)
+    [[ $file_size -gt $max_size ]]
+}
+
+# Check if command exists
+# Usage: rules-cond-command-exists <command>
+rules-cond-command-exists() {
+    local cmd="$1"
+    common-command-exists "$cmd"
+}
+
+# Check if environment variable is set
+# Usage: rules-cond-env-set <var_name>
+rules-cond-env-set() {
+    local var="$1"
+    [[ -n "${(P)var}" ]]
+}
+
+# Check if environment variable equals value
+# Usage: rules-cond-env-equals <var_name> <value>
+rules-cond-env-equals() {
+    local var="$1"
+    local value="$2"
+    [[ "${(P)var}" == "$value" ]]
+}
+
+# Check current time is between hours
+# Usage: rules-cond-time-between <start_hour> <end_hour>
+rules-cond-time-between() {
+    local start="$1"
+    local end="$2"
+    local current=$(date +%H)
+
+    [[ $current -ge $start ]] && [[ $current -lt $end ]]
+}
+
+# Check day of week
+# Usage: rules-cond-day-of-week <day>  # 0=Sunday, 1=Monday, etc.
+rules-cond-day-of-week() {
+    local target_day="$1"
+    local current_day=$(date +%w)
+
+    [[ $current_day -eq $target_day ]]
+}
+
+# ------------------------------
+# Common Action Functions
+# ------------------------------
+
+# No-op action (does nothing)
+rules-action-noop() { return 0; }
+
+# Echo action
+# Usage: rules-action-echo <message>
+rules-action-echo() {
+    echo "$@"
+}
+
+# Log to file action
+# Usage: rules-action-log <file> <message>
+rules-action-log() {
+    local logfile="$1"
+    shift
+    local message="$*"
+    local timestamp=$(date "+%Y-%m-%d %H:%M:%S")
+
+    echo "[$timestamp] $message" >> "$logfile"
+}
+
+# Execute command action
+# Usage: rules-action-exec <command> [args...]
+rules-action-exec() {
+    "$@"
+}
+
+# Send notification (if available)
+# Usage: rules-action-notify <title> <message>
+rules-action-notify() {
+    local title="$1"
+    local message="$2"
+
+    if common-command-exists "notify-send"; then
+        notify-send "$title" "$message"
+    else
+        echo "NOTIFICATION: $title - $message"
+    fi
+}
+
+# ------------------------------
+# Rule Chain Functions
+# ------------------------------
+
+# If-then-else chain
+# Usage: rules-chain-if <if_rule_id> <then_rule_id> [else_rule_id] [context...]
+rules-chain-if() {
+    local if_rule="$1"
+    local then_rule="$2"
+    local else_rule="${3:-}"
+    shift 3
+    local context=("$@")
+
+    if rules-eval "$if_rule" "${context[@]}"; then
+        rules-eval "$then_rule" "${context[@]}"
+    elif [[ -n "$else_rule" ]]; then
+        rules-eval "$else_rule" "${context[@]}"
+    fi
+}
+
+# Execute rules in sequence
+# Usage: rules-chain-sequence <rule_id1> [rule_id2...] -- [context...]
+rules-chain-sequence() {
+    local rules=()
+
+    # Parse rule IDs before --
+    while [[ $# -gt 0 ]] && [[ "$1" != "--" ]]; do
+        rules+=("$1")
+        shift
+    done
+
+    # Skip -- delimiter
+    [[ "$1" == "--" ]] && shift
+
+    local context=("$@")
+    local failed=0
+
+    # Execute each rule in sequence
+    for rule_id in "${rules[@]}"; do
+        if ! rules-eval "$rule_id" "${context[@]}"; then
+            failed=$((failed + 1))
+
+            if [[ "${RULES_STOP_ON_ERROR}" == "true" ]]; then
+                log-error "rules-chain-sequence: stopped on error at rule '$rule_id'"
+                return 1
+            fi
+        fi
+    done
+
+    return $failed
+}
+
+# ------------------------------
+# Rule Group Functions
+# ------------------------------
+
+# Evaluate all rules matching a pattern
+# Usage: rules-group-eval <pattern> [context...]
+# Returns: Number of rules that matched
+rules-group-eval() {
+    local pattern="$1"
+    shift
+    local context=("$@")
+
+    local matched=0
+
+    for rule_id in "${(@k)_RULES_REGISTRY}"; do
+        if [[ "$rule_id" == $pattern ]]; then
+            if rules-eval "$rule_id" "${context[@]}"; then
+                matched=$((matched + 1))
+            fi
+        fi
+    done
+
+    return $matched
+}
+
+# ------------------------------
+# Statistics Functions
+# ------------------------------
+
+# Get rule statistics
+# Usage: rules-stats [rule_id]
+rules-stats() {
+    local rule_id="${1:-}"
+
+    if [[ -n "$rule_id" ]]; then
+        # Stats for specific rule
+        if ! rules-exists "$rule_id"; then
+            log-error "rules-stats: rule not found: $rule_id"
+            return 1
+        fi
+
+        local rule_def="${_RULES_REGISTRY[$rule_id]}"
+        local priority="${rule_def%%|*}"
+        local rest="${rule_def#*|}"
+        local condition="${rest%%|*}"
+        rest="${rest#*|}"
+        local action="${rest%%|*}"
+        local description="${rest#*|}"
+
+        echo "Rule: $rule_id"
+        [[ -n "$description" ]] && echo "  Description: $description"
+        echo "  Priority: $priority"
+        echo "  Condition: $condition"
+        echo "  Action: $action"
+        echo "  Matched: ${_RULES_STATS_MATCHED[$rule_id]}"
+        echo "  Executed: ${_RULES_STATS_EXECUTED[$rule_id]}"
+        echo "  Failed: ${_RULES_STATS_FAILED[$rule_id]}"
+    else
+        # Stats for all rules
+        echo "Rule Engine Statistics"
+        echo "====================="
+        echo ""
+        echo "Total rules: ${#_RULES_REGISTRY[@]}"
+        echo ""
+
+        if [[ ${#_RULES_REGISTRY[@]} -gt 0 ]]; then
+            echo "Rules:"
+            for rid in "${(@k)_RULES_REGISTRY}"; do
+                echo "  $rid:"
+                echo "    Matched: ${_RULES_STATS_MATCHED[$rid]}"
+                echo "    Executed: ${_RULES_STATS_EXECUTED[$rid]}"
+                echo "    Failed: ${_RULES_STATS_FAILED[$rid]}"
+            done
+        fi
+    fi
+}
+
+# Reset statistics
+# Usage: rules-stats-reset [rule_id]
+rules-stats-reset() {
+    local rule_id="${1:-}"
+
+    if [[ -n "$rule_id" ]]; then
+        _RULES_STATS_MATCHED[$rule_id]=0
+        _RULES_STATS_EXECUTED[$rule_id]=0
+        _RULES_STATS_FAILED[$rule_id]=0
+    else
+        for rid in "${(@k)_RULES_REGISTRY}"; do
+            _RULES_STATS_MATCHED[$rid]=0
+            _RULES_STATS_EXECUTED[$rid]=0
+            _RULES_STATS_FAILED[$rid]=0
+        done
+    fi
+
+    log-debug "rules-stats-reset: reset statistics"
+    return 0
+}
+
+# ------------------------------
+# Rule Listing Functions
+# ------------------------------
+
+# List all rules
+# Usage: rules-list
+rules-list() {
+    if [[ ${#_RULES_REGISTRY[@]} -eq 0 ]]; then
+        echo "No rules defined"
+        return 0
+    fi
+
+    echo "Defined Rules:"
+    echo ""
+
+    # Sort by priority
+    local sorted_rules=()
+    for rule_id in "${(@k)_RULES_REGISTRY}"; do
+        local rule_def="${_RULES_REGISTRY[$rule_id]}"
+        local priority="${rule_def%%|*}"
+        sorted_rules+=("${priority}:${rule_id}")
+    done
+
+    sorted_rules=(${(n)sorted_rules})
+
+    for entry in "${sorted_rules[@]}"; do
+        local rule_id="${entry#*:}"
+        local rule_def="${_RULES_REGISTRY[$rule_id]}"
+        local priority="${rule_def%%|*}"
+        local rest="${rule_def#*|}"
+        local condition="${rest%%|*}"
+        rest="${rest#*|}"
+        local action="${rest%%|*}"
+        local description="${rest#*|}"
+
+        echo "  [$priority] $rule_id"
+        [[ -n "$description" ]] && echo "      Description: $description"
+        echo "      Condition: $condition"
+        echo "      Action: $action"
+        echo ""
+    done
+}
+
+# Get rule count
+# Usage: count=$(rules-count)
+rules-count() {
+    echo "${#_RULES_REGISTRY[@]}"
+}
+
+# ------------------------------
+# Internal Helper Functions
+# ------------------------------
+
+# Emit event (if _events is available)
+rules--emit-event() {
+    if [[ "${RULES_EMIT_EVENTS}" != "true" ]] || [[ -z "${EVENTS_LOADED:-}" ]]; then
+        return 0
+    fi
+
+    events-emit "$@"
+}
+
+# Log rule execution (if logging enabled)
+rules--log-execution() {
+    if [[ "${RULES_ENABLE_LOGGING}" != "true" ]]; then
+        return 0
+    fi
+
+    # Set default log directory if not set
+    if [[ -z "$RULES_LOG_DIR" ]]; then
+        RULES_LOG_DIR="$(common-lib-state-dir)/rules"
+    fi
+
+    # Ensure log directory exists
+    if [[ ! -d "$RULES_LOG_DIR" ]]; then
+        mkdir -p "$RULES_LOG_DIR" 2>/dev/null || return 1
+    fi
+
+    local rule_id="$1"
+    local status="$2"
+    local condition="$3"
+    local action="$4"
+    local exit_code="${5:-0}"
+
+    local timestamp=$(date "+%Y-%m-%d %H:%M:%S")
+    local logfile="${RULES_LOG_DIR}/rules.log"
+
+    echo "[$timestamp] rule=$rule_id status=$status condition=$condition action=$action exit=$exit_code" >> "$logfile"
+}
+
+# ------------------------------
+# Self-Test Function
+# ------------------------------
+
+rules-self-test() {
+    echo "=== _rules v${RULES_VERSION} self-test ==="
+    echo ""
+
+    local tests_passed=0
+    local tests_failed=0
+
+    # Test 1: Rule definition
+    echo -n "Test 1: Define rule... "
+    if rules-define "test-rule" "rules-cond-always" "rules-action-noop" 100 "Test rule"; then
+        echo "PASS"
+        tests_passed=$((tests_passed + 1))
+    else
+        echo "FAIL"
+        tests_failed=$((tests_failed + 1))
+    fi
+
+    # Test 2: Rule exists
+    echo -n "Test 2: Check rule exists... "
+    if rules-exists "test-rule"; then
+        echo "PASS"
+        tests_passed=$((tests_passed + 1))
+    else
+        echo "FAIL"
+        tests_failed=$((tests_failed + 1))
+    fi
+
+    # Test 3: Rule evaluation
+    echo -n "Test 3: Evaluate rule... "
+    if rules-eval "test-rule"; then
+        echo "PASS"
+        tests_passed=$((tests_passed + 1))
+    else
+        echo "FAIL"
+        tests_failed=$((tests_failed + 1))
+    fi
+
+    # Test 4: Rule statistics
+    echo -n "Test 4: Check statistics... "
+    if [[ ${_RULES_STATS_MATCHED[test-rule]} -eq 1 ]] && [[ ${_RULES_STATS_EXECUTED[test-rule]} -eq 1 ]]; then
+        echo "PASS"
+        tests_passed=$((tests_passed + 1))
+    else
+        echo "FAIL (matched=${_RULES_STATS_MATCHED[test-rule]} executed=${_RULES_STATS_EXECUTED[test-rule]})"
+        tests_failed=$((tests_failed + 1))
+    fi
+
+    # Test 5: Condition helpers
+    echo -n "Test 5: Compare function... "
+    if rules-compare "hello" "eq" "hello" && \
+       rules-compare "5" "gt" "3" && \
+       rules-compare "hello world" "contains" "world"; then
+        echo "PASS"
+        tests_passed=$((tests_passed + 1))
+    else
+        echo "FAIL"
+        tests_failed=$((tests_failed + 1))
+    fi
+
+    # Test 6: Logical operators
+    echo -n "Test 6: Logical AND/OR/NOT... "
+    if rules-and "rules-cond-always" "rules-cond-always" && \
+       rules-or "rules-cond-always" "rules-cond-never" && \
+       rules-not "rules-cond-never"; then
+        echo "PASS"
+        tests_passed=$((tests_passed + 1))
+    else
+        echo "FAIL"
+        tests_failed=$((tests_failed + 1))
+    fi
+
+    # Test 7: File conditions
+    echo -n "Test 7: File existence check... "
+    if rules-cond-file-exists "/etc/passwd"; then
+        echo "PASS"
+        tests_passed=$((tests_passed + 1))
+    else
+        echo "FAIL"
+        tests_failed=$((tests_failed + 1))
+    fi
+
+    # Test 8: Command existence
+    echo -n "Test 8: Command existence... "
+    if rules-cond-command-exists "ls"; then
+        echo "PASS"
+        tests_passed=$((tests_passed + 1))
+    else
+        echo "FAIL"
+        tests_failed=$((tests_failed + 1))
+    fi
+
+    # Test 9: Rule removal
+    echo -n "Test 9: Remove rule... "
+    if rules-remove "test-rule" && ! rules-exists "test-rule"; then
+        echo "PASS"
+        tests_passed=$((tests_passed + 1))
+    else
+        echo "FAIL"
+        tests_failed=$((tests_failed + 1))
+    fi
+
+    # Test 10: Rule count
+    echo -n "Test 10: Rule count... "
+    if [[ $(rules-count) -eq 0 ]]; then
+        echo "PASS"
+        tests_passed=$((tests_passed + 1))
+    else
+        echo "FAIL"
+        tests_failed=$((tests_failed + 1))
+    fi
+
+    echo ""
+    echo "=== Results: $tests_passed passed, $tests_failed failed ==="
+
+    if [[ $tests_failed -eq 0 ]]; then
+        echo "SUCCESS: All tests passed"
+        return 0
+    else
+        echo "FAILURE: Some tests failed"
+        return 1
+    fi
+}
+

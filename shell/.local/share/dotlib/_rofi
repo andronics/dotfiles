@@ -1,0 +1,1267 @@
+#!/usr/bin/env zsh
+
+# _rofi - Modern Rofi integration wrapper with comprehensive UI operations
+# Part of the dotfiles library v2.0
+# Version: 1.0.0
+#
+# Usage:
+#   source "${DOTLIB}/_rofi"
+#
+# Provides:
+#   - Menu builders (simple, multi-select, custom formatting)
+#   - Prompt dialogs (confirm, input, password, selection)
+#   - Window management integration
+#   - Application launcher
+#   - Theme management
+#   - Dynamic option generation
+#   - Custom styling and formatting
+#   - Configuration helpers
+#   - Message and notification dialogs
+#   - Progress indicators
+#   - Custom modi support
+#
+# Dependencies:
+#   Layer 1: _common v2.0 (required)
+#   Layer 2: _log v2.0 (optional), _lifecycle v3.0 (optional), _cache v2.0 (optional)
+#   External: rofi (required)
+
+# ------------------------------
+# Source Guard
+# ------------------------------
+
+[[ -n "${ROFI_LOADED:-}" ]] && return 0
+
+# ------------------------------
+# Version
+# ------------------------------
+
+declare -gr ROFI_VERSION="1.0.0"
+declare -g ROFI_LOADED=1
+
+# ------------------------------
+# Layer 1: Load Foundation
+# ------------------------------
+
+# Load _common (required)
+if ! source "${DOTLIB}/_common" 2>/dev/null; then
+    echo "[ERROR] _rofi requires _common - cannot load" >&2
+    return 1
+fi
+
+# ------------------------------
+# Layer 2: Load Infrastructure (Optional)
+# ------------------------------
+
+# Load _log (optional, with fallback)
+if ! source "${DOTLIB}/_log" 2>/dev/null; then
+    log-trace() { [[ "${TRACE:-0}" == "1" ]] && echo "[TRACE] $*" >&2 || true; }
+    log-debug() { [[ "${DEBUG:-0}" == "1" ]] && echo "[DEBUG] $*" >&2 || true; }
+    log-info() { echo "[INFO] $*" >&2; }
+    log-warn() { echo "[WARN] $*" >&2; }
+    log-error() { echo "[ERROR] $*" >&2; }
+fi
+
+# Load _cache (optional)
+source "${DOTLIB}/_cache" 2>/dev/null || true
+
+# Load _lifecycle (optional, for cleanup)
+source "${DOTLIB}/_lifecycle" 2>/dev/null || true
+
+# ------------------------------
+# Configuration Variables
+# ------------------------------
+# All configurable via environment variables
+
+# ROFI_CONFIG: Path to rofi config file
+declare -g ROFI_CONFIG="${ROFI_CONFIG:-$(common-get-xdg-config-home)/rofi/config.rasi}"
+
+# ROFI_THEME: Theme name or path
+declare -g ROFI_THEME="${ROFI_THEME:-}"
+
+# ROFI_DEFAULT_FORMAT: Default output format
+#   s: String (selected text)
+#   i: Index (0-based)
+#   d: Index (1-based)
+#   q: Quote-escaped string
+#   p: Quote-escaped string (shell)
+#   f: Filter text
+#   F: Quote-escaped filter text
+declare -g ROFI_DEFAULT_FORMAT="${ROFI_DEFAULT_FORMAT:-s}"
+
+# ROFI_DEFAULT_PROMPT: Default prompt text
+declare -g ROFI_DEFAULT_PROMPT="${ROFI_DEFAULT_PROMPT:-Select}"
+
+# ROFI_CONFIRM_MESSAGE: Default confirmation message
+declare -g ROFI_CONFIRM_MESSAGE="${ROFI_CONFIRM_MESSAGE:-Are you sure?}"
+
+# ROFI_CONFIRM_YES: Text for confirmation "yes" option
+declare -g ROFI_CONFIRM_YES="${ROFI_CONFIRM_YES:-Yes}"
+
+# ROFI_CONFIRM_NO: Text for confirmation "no" option
+declare -g ROFI_CONFIRM_NO="${ROFI_CONFIRM_NO:-No}"
+
+# ROFI_WIDTH: Default window width (characters or pixels)
+declare -g ROFI_WIDTH="${ROFI_WIDTH:-}"
+
+# ROFI_HEIGHT: Default window height (lines or pixels)
+declare -g ROFI_HEIGHT="${ROFI_HEIGHT:-}"
+
+# ROFI_LINES: Default visible lines
+declare -g ROFI_LINES="${ROFI_LINES:-10}"
+
+# ROFI_COLUMNS: Default number of columns
+declare -g ROFI_COLUMNS="${ROFI_COLUMNS:-1}"
+
+# ROFI_CASE_SENSITIVE: Case-sensitive matching
+declare -g ROFI_CASE_SENSITIVE="${ROFI_CASE_SENSITIVE:-false}"
+
+# ROFI_MATCHING: Matching algorithm
+#   normal: Default matching
+#   regex: Regular expression
+#   glob: Glob pattern
+#   fuzzy: Fuzzy matching
+declare -g ROFI_MATCHING="${ROFI_MATCHING:-normal}"
+
+# ROFI_SORT: Enable sorting
+declare -g ROFI_SORT="${ROFI_SORT:-false}"
+
+# ROFI_CYCLE: Cycle through list
+declare -g ROFI_CYCLE="${ROFI_CYCLE:-true}"
+
+# ROFI_MULTI_SELECT: Enable multi-select mode
+declare -g ROFI_MULTI_SELECT="${ROFI_MULTI_SELECT:-false}"
+
+# ROFI_NO_CUSTOM: Disable custom input
+declare -g ROFI_NO_CUSTOM="${ROFI_NO_CUSTOM:-false}"
+
+# ROFI_MARKUP: Enable markup in options
+declare -g ROFI_MARKUP="${ROFI_MARKUP:-false}"
+
+# ROFI_LOCATION: Window location (0-8, compass directions)
+#   0: center, 1: top-left, 2: top, 3: top-right
+#   4: left, 5: center, 6: right
+#   7: bottom-left, 8: bottom, 9: bottom-right
+declare -g ROFI_LOCATION="${ROFI_LOCATION:-}"
+
+# ROFI_FULLSCREEN: Fullscreen mode
+declare -g ROFI_FULLSCREEN="${ROFI_FULLSCREEN:-false}"
+
+# ROFI_FIXED_NUM_LINES: Fixed number of lines
+declare -g ROFI_FIXED_NUM_LINES="${ROFI_FIXED_NUM_LINES:-false}"
+
+# ------------------------------
+# Internal State
+# ------------------------------
+
+# Store last selected value
+declare -g _ROFI_LAST_SELECTION=""
+
+# Store last exit code
+declare -g _ROFI_LAST_EXIT_CODE=0
+
+# Rofi exit codes
+declare -gr ROFI_EXIT_SUCCESS=0
+declare -gr ROFI_EXIT_CANCEL=1
+declare -gr ROFI_EXIT_ERROR=2
+declare -gr ROFI_EXIT_CUSTOM_1=10
+declare -gr ROFI_EXIT_CUSTOM_2=11
+declare -gr ROFI_EXIT_CUSTOM_3=12
+declare -gr ROFI_EXIT_CUSTOM_4=13
+declare -gr ROFI_EXIT_CUSTOM_5=14
+declare -gr ROFI_EXIT_CUSTOM_6=15
+declare -gr ROFI_EXIT_CUSTOM_7=16
+declare -gr ROFI_EXIT_CUSTOM_8=17
+declare -gr ROFI_EXIT_CUSTOM_9=18
+declare -gr ROFI_EXIT_CUSTOM_10=19
+
+# ------------------------------
+# Dependency Validation
+# ------------------------------
+
+# rofi-check: Check if rofi is available
+# Usage: rofi-check || return 1
+# Returns: 0 if rofi is available, 1 otherwise
+rofi-check() {
+    if ! common-command-exists rofi; then
+        log-error "rofi is not installed"
+        log-error "Install with: sudo pacman -S rofi (or equivalent)"
+        return 1
+    fi
+    return 0
+}
+
+# rofi-init: Initialize rofi system
+# Usage: rofi-init
+# Returns: 0 on success, 1 on failure
+rofi-init() {
+    log-debug "Initializing rofi system"
+
+    # Check if rofi is available
+    rofi-check || return 1
+
+    # Create config directory if it doesn't exist
+    local config_dir="$(dirname "$ROFI_CONFIG")"
+    if [[ ! -d "$config_dir" ]]; then
+        mkdir -p "$config_dir" 2>/dev/null || {
+            log-warn "Failed to create rofi config directory: $config_dir"
+        }
+    fi
+
+    log-debug "rofi initialized successfully"
+    return 0
+}
+
+# rofi-version-check: Get rofi version
+# Usage: version=$(rofi-version-check)
+# Returns: Version string
+rofi-version-check() {
+    if ! rofi-check; then
+        return 1
+    fi
+    rofi -version | head -n1 | awk '{print $2}'
+}
+
+# ------------------------------
+# Configuration Helpers
+# ------------------------------
+
+# rofi-set-theme: Set rofi theme
+# Usage: rofi-set-theme <theme>
+# Args: theme - Theme name or path
+rofi-set-theme() {
+    local theme="${1:?Theme required}"
+    ROFI_THEME="$theme"
+    log-debug "Set rofi theme: $theme"
+}
+
+# rofi-set-format: Set default format
+# Usage: rofi-set-format <format>
+# Args: format - Output format (s, i, d, q, p, f, F)
+# Returns: 0 on success, 1 on invalid format
+rofi-set-format() {
+    local format="${1:?Format required}"
+    if [[ "$format" =~ ^[sidqpfF]$ ]]; then
+        ROFI_DEFAULT_FORMAT="$format"
+        log-debug "Set rofi format: $format"
+        return 0
+    else
+        log-error "Invalid format: $format (valid: s, i, d, q, p, f, F)"
+        return 1
+    fi
+}
+
+# rofi-set-prompt: Set default prompt
+# Usage: rofi-set-prompt <prompt>
+# Args: prompt - Prompt text
+rofi-set-prompt() {
+    local prompt="${1:?Prompt required}"
+    ROFI_DEFAULT_PROMPT="$prompt"
+    log-debug "Set rofi prompt: $prompt"
+}
+
+# rofi-set-lines: Set default lines
+# Usage: rofi-set-lines <lines>
+# Args: lines - Number of visible lines
+rofi-set-lines() {
+    local lines="${1:?Lines required}"
+    ROFI_LINES="$lines"
+    log-debug "Set rofi lines: $lines"
+}
+
+# rofi-set-columns: Set default columns
+# Usage: rofi-set-columns <columns>
+# Args: columns - Number of columns
+rofi-set-columns() {
+    local columns="${1:?Columns required}"
+    ROFI_COLUMNS="$columns"
+    log-debug "Set rofi columns: $columns"
+}
+
+# rofi-enable-case-sensitive: Enable case-sensitive matching
+# Usage: rofi-enable-case-sensitive
+rofi-enable-case-sensitive() {
+    ROFI_CASE_SENSITIVE="true"
+    log-debug "Enabled case-sensitive matching"
+}
+
+# rofi-disable-case-sensitive: Disable case-sensitive matching
+# Usage: rofi-disable-case-sensitive
+rofi-disable-case-sensitive() {
+    ROFI_CASE_SENSITIVE="false"
+    log-debug "Disabled case-sensitive matching"
+}
+
+# rofi-set-matching: Set matching algorithm
+# Usage: rofi-set-matching <matching>
+# Args: matching - Matching algorithm (normal, regex, glob, fuzzy)
+# Returns: 0 on success, 1 on invalid algorithm
+rofi-set-matching() {
+    local matching="${1:?Matching algorithm required}"
+    case "$matching" in
+        normal|regex|glob|fuzzy)
+            ROFI_MATCHING="$matching"
+            log-debug "Set matching algorithm: $matching"
+            return 0
+            ;;
+        *)
+            log-error "Invalid matching: $matching (valid: normal, regex, glob, fuzzy)"
+            return 1
+            ;;
+    esac
+}
+
+# rofi-enable-sort: Enable sorting
+# Usage: rofi-enable-sort
+rofi-enable-sort() {
+    ROFI_SORT="true"
+    log-debug "Enabled sorting"
+}
+
+# rofi-disable-sort: Disable sorting
+# Usage: rofi-disable-sort
+rofi-disable-sort() {
+    ROFI_SORT="false"
+    log-debug "Disabled sorting"
+}
+
+# rofi-enable-multi-select: Enable multi-select
+# Usage: rofi-enable-multi-select
+rofi-enable-multi-select() {
+    ROFI_MULTI_SELECT="true"
+    log-debug "Enabled multi-select"
+}
+
+# rofi-disable-multi-select: Disable multi-select
+# Usage: rofi-disable-multi-select
+rofi-disable-multi-select() {
+    ROFI_MULTI_SELECT="false"
+    log-debug "Disabled multi-select"
+}
+
+# rofi-enable-markup: Enable markup
+# Usage: rofi-enable-markup
+rofi-enable-markup() {
+    ROFI_MARKUP="true"
+    log-debug "Enabled markup"
+}
+
+# rofi-disable-markup: Disable markup
+# Usage: rofi-disable-markup
+rofi-disable-markup() {
+    ROFI_MARKUP="false"
+    log-debug "Disabled markup"
+}
+
+# rofi-get-config: Get current configuration
+# Usage: rofi-get-config
+# Returns: Configuration summary
+rofi-get-config() {
+    echo "Rofi Configuration:"
+    echo "  Version:           $(rofi-version-check 2>/dev/null || echo "unknown")"
+    echo "  Config File:       ${ROFI_CONFIG}"
+    echo "  Theme:             ${ROFI_THEME:-default}"
+    echo "  Format:            ${ROFI_DEFAULT_FORMAT}"
+    echo "  Prompt:            ${ROFI_DEFAULT_PROMPT}"
+    echo "  Lines:             ${ROFI_LINES}"
+    echo "  Columns:           ${ROFI_COLUMNS}"
+    echo "  Case Sensitive:    ${ROFI_CASE_SENSITIVE}"
+    echo "  Matching:          ${ROFI_MATCHING}"
+    echo "  Sort:              ${ROFI_SORT}"
+    echo "  Multi-Select:      ${ROFI_MULTI_SELECT}"
+    echo "  Markup:            ${ROFI_MARKUP}"
+}
+
+# ------------------------------
+# Argument Building
+# ------------------------------
+
+# _rofi-build-args: Build common rofi arguments
+# Usage: args=($(_rofi-build-args))
+# Returns: Array of rofi arguments
+_rofi-build-args() {
+    local -a args=()
+
+    # Config file
+    if [[ -f "$ROFI_CONFIG" ]]; then
+        args+=(-config "$ROFI_CONFIG")
+    fi
+
+    # Theme
+    if [[ -n "$ROFI_THEME" ]]; then
+        args+=(-theme "$ROFI_THEME")
+    fi
+
+    # Case sensitivity
+    if [[ "$ROFI_CASE_SENSITIVE" == "true" ]]; then
+        args+=(-case-sensitive)
+    fi
+
+    # Matching
+    if [[ "$ROFI_MATCHING" != "normal" ]]; then
+        args+=(-matching "$ROFI_MATCHING")
+    fi
+
+    # Sort
+    if [[ "$ROFI_SORT" == "true" ]]; then
+        args+=(-sort)
+    fi
+
+    # Cycle
+    if [[ "$ROFI_CYCLE" == "true" ]]; then
+        args+=(-cycle)
+    fi
+
+    # Multi-select
+    if [[ "$ROFI_MULTI_SELECT" == "true" ]]; then
+        args+=(-multi-select)
+    fi
+
+    # No custom input
+    if [[ "$ROFI_NO_CUSTOM" == "true" ]]; then
+        args+=(-no-custom)
+    fi
+
+    # Markup
+    if [[ "$ROFI_MARKUP" == "true" ]]; then
+        args+=(-markup-rows)
+    fi
+
+    # Width
+    if [[ -n "$ROFI_WIDTH" ]]; then
+        args+=(-width "$ROFI_WIDTH")
+    fi
+
+    # Height
+    if [[ -n "$ROFI_HEIGHT" ]]; then
+        args+=(-height "$ROFI_HEIGHT")
+    fi
+
+    # Location
+    if [[ -n "$ROFI_LOCATION" ]]; then
+        args+=(-location "$ROFI_LOCATION")
+    fi
+
+    # Fullscreen
+    if [[ "$ROFI_FULLSCREEN" == "true" ]]; then
+        args+=(-fullscreen)
+    fi
+
+    # Fixed lines
+    if [[ "$ROFI_FIXED_NUM_LINES" == "true" ]]; then
+        args+=(-fixed-num-lines)
+    fi
+
+    echo "${args[@]}"
+}
+
+# ------------------------------
+# Core Menu Functions
+# ------------------------------
+
+# rofi-dmenu: Basic dmenu wrapper
+# Usage: rofi-dmenu [prompt] [format] [lines]
+# Args:
+#   prompt - Prompt text (optional)
+#   format - Output format (optional)
+#   lines - Number of lines (optional)
+# Returns: Selected value
+rofi-dmenu() {
+    if ! rofi-check; then
+        return 1
+    fi
+
+    local prompt="${1:-$ROFI_DEFAULT_PROMPT}"
+    local format="${2:-$ROFI_DEFAULT_FORMAT}"
+    local lines="${3:-$ROFI_LINES}"
+
+    local -a args=(
+        -dmenu
+        -p "$prompt"
+        -format "$format"
+        -lines "$lines"
+    )
+
+    # Add common args
+    local common_args=($(_rofi-build-args))
+    args+=("${common_args[@]}")
+
+    log-debug "rofi-dmenu: ${args[*]}"
+
+    local result
+    result=$(rofi "${args[@]}" 2>/dev/null)
+    _ROFI_LAST_EXIT_CODE=$?
+    _ROFI_LAST_SELECTION="$result"
+
+    echo "$result"
+    return $_ROFI_LAST_EXIT_CODE
+}
+
+# rofi-menu: Menu with custom message
+# Usage: rofi-menu <prompt> <message> [format]
+# Args:
+#   prompt - Prompt text
+#   message - Message to display
+#   format - Output format (optional)
+# Returns: Selected value
+rofi-menu() {
+    if ! rofi-check; then
+        return 1
+    fi
+
+    local prompt="${1:-$ROFI_DEFAULT_PROMPT}"
+    local message="$2"
+    local format="${3:-$ROFI_DEFAULT_FORMAT}"
+
+    local -a args=(
+        -dmenu
+        -p "$prompt"
+        -format "$format"
+        -lines "$ROFI_LINES"
+    )
+
+    if [[ -n "$message" ]]; then
+        args+=(-mesg "$message")
+    fi
+
+    # Add common args
+    local common_args=($(_rofi-build-args))
+    args+=("${common_args[@]}")
+
+    log-debug "rofi-menu: ${args[*]}"
+
+    local result
+    result=$(rofi "${args[@]}" 2>/dev/null)
+    _ROFI_LAST_EXIT_CODE=$?
+    _ROFI_LAST_SELECTION="$result"
+
+    echo "$result"
+    return $_ROFI_LAST_EXIT_CODE
+}
+
+# rofi-select: Select from options
+# Usage: rofi-select <prompt> <option1> [option2] [option3] ...
+#        echo -e "opt1\nopt2" | rofi-select <prompt>
+# Args:
+#   prompt - Prompt text
+#   options - Options to choose from (either as args or piped input)
+# Returns: Selected value
+rofi-select() {
+    if ! rofi-check; then
+        return 1
+    fi
+
+    local prompt="${1:-$ROFI_DEFAULT_PROMPT}"
+    shift
+
+    local options=""
+
+    # Check for piped input
+    if [[ -p /dev/stdin ]]; then
+        options=$(cat)
+    elif [[ $# -gt 0 ]]; then
+        # Join arguments with newlines
+        options=$(printf "%s\n" "$@")
+    else
+        log-error "No options provided"
+        return 1
+    fi
+
+    echo -e "$options" | rofi-dmenu "$prompt"
+}
+
+# rofi-multi-select: Multi-select from options
+# Usage: rofi-multi-select <prompt> <option1> [option2] ...
+# Args:
+#   prompt - Prompt text
+#   options - Options to choose from
+# Returns: Selected values (newline-separated)
+rofi-multi-select() {
+    if ! rofi-check; then
+        return 1
+    fi
+
+    local prompt="${1:-$ROFI_DEFAULT_PROMPT}"
+    shift
+
+    # Save current multi-select state
+    local old_multi_select="$ROFI_MULTI_SELECT"
+    ROFI_MULTI_SELECT="true"
+
+    local result
+    result=$(rofi-select "$prompt" "$@")
+    local exit_code=$?
+
+    # Restore multi-select state
+    ROFI_MULTI_SELECT="$old_multi_select"
+
+    echo "$result"
+    return $exit_code
+}
+
+# ------------------------------
+# Prompt Functions
+# ------------------------------
+
+# rofi-confirm: Confirmation prompt
+# Usage: rofi-confirm [message] [yes_text] [no_text]
+# Args:
+#   message - Confirmation message (optional)
+#   yes_text - Text for yes option (optional)
+#   no_text - Text for no option (optional)
+# Returns: 0 if yes selected, 1 otherwise
+rofi-confirm() {
+    if ! rofi-check; then
+        return 1
+    fi
+
+    local message="${1:-$ROFI_CONFIRM_MESSAGE}"
+    local yes_text="${2:-$ROFI_CONFIRM_YES}"
+    local no_text="${3:-$ROFI_CONFIRM_NO}"
+
+    local -a args=(
+        -dmenu
+        -p "Confirmation"
+        -mesg "$message"
+        -format "s"
+        -lines 2
+        -columns 2
+        -width 250
+    )
+
+    # Disable custom input for confirmation
+    args+=(-no-custom)
+
+    # Add common args
+    local common_args=($(_rofi-build-args))
+    args+=("${common_args[@]}")
+
+    log-debug "rofi-confirm: ${args[*]}"
+
+    local result
+    result=$(echo -e "${no_text}\n${yes_text}" | rofi "${args[@]}" 2>/dev/null)
+    local exit_code=$?
+
+    _ROFI_LAST_EXIT_CODE=$exit_code
+    _ROFI_LAST_SELECTION="$result"
+
+    # Return success if user selected yes
+    if [[ "$result" == "$yes_text" ]] && [[ $exit_code -eq 0 ]]; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+# rofi-input: Input prompt (allows custom input)
+# Usage: rofi-input <prompt> [message] [default]
+# Args:
+#   prompt - Prompt text
+#   message - Message to display (optional)
+#   default - Default value (optional)
+# Returns: User input
+rofi-input() {
+    if ! rofi-check; then
+        return 1
+    fi
+
+    local prompt="${1:-Input}"
+    local message="$2"
+    local default="$3"
+
+    local -a args=(
+        -dmenu
+        -p "$prompt"
+        -format "s"
+        -lines 0
+    )
+
+    if [[ -n "$message" ]]; then
+        args+=(-mesg "$message")
+    fi
+
+    if [[ -n "$default" ]]; then
+        args+=(-filter "$default")
+    fi
+
+    # Add common args
+    local common_args=($(_rofi-build-args))
+    args+=("${common_args[@]}")
+
+    log-debug "rofi-input: ${args[*]}"
+
+    local result
+    result=$(echo -n "" | rofi "${args[@]}" 2>/dev/null)
+    _ROFI_LAST_EXIT_CODE=$?
+    _ROFI_LAST_SELECTION="$result"
+
+    echo "$result"
+    return $_ROFI_LAST_EXIT_CODE
+}
+
+# rofi-password: Password prompt (hidden input)
+# Usage: rofi-password [prompt] [message]
+# Args:
+#   prompt - Prompt text (optional)
+#   message - Message to display (optional)
+# Returns: Password (not stored in last selection)
+rofi-password() {
+    if ! rofi-check; then
+        return 1
+    fi
+
+    local prompt="${1:-Password}"
+    local message="$2"
+
+    local -a args=(
+        -dmenu
+        -p "$prompt"
+        -format "s"
+        -lines 0
+        -password
+    )
+
+    if [[ -n "$message" ]]; then
+        args+=(-mesg "$message")
+    fi
+
+    # Add common args
+    local common_args=($(_rofi-build-args))
+    args+=("${common_args[@]}")
+
+    log-debug "rofi-password: ${args[*]}"
+
+    local result
+    result=$(echo -n "" | rofi "${args[@]}" 2>/dev/null)
+    _ROFI_LAST_EXIT_CODE=$?
+
+    # Don't store password in last selection
+    _ROFI_LAST_SELECTION=""
+
+    echo "$result"
+    return $_ROFI_LAST_EXIT_CODE
+}
+
+# rofi-yesno: Yes/No prompt (alias for rofi-confirm)
+# Usage: rofi-yesno [message]
+# Returns: 0 for yes, 1 for no
+rofi-yesno() {
+    rofi-confirm "$@"
+}
+
+# rofi-choice: Choice prompt with custom options
+# Usage: rofi-choice <prompt> <message> <option1> [option2] ...
+# Args:
+#   prompt - Prompt text
+#   message - Message to display
+#   options - Options to choose from
+# Returns: Selected option
+rofi-choice() {
+    if ! rofi-check; then
+        return 1
+    fi
+
+    local prompt="${1:-Choose}"
+    local message="$2"
+    shift 2
+
+    if [[ $# -eq 0 ]]; then
+        log-error "No choices provided"
+        return 1
+    fi
+
+    local options=$(printf "%s\n" "$@")
+
+    local -a args=(
+        -dmenu
+        -p "$prompt"
+        -format "s"
+        -lines "$#"
+        -no-custom
+    )
+
+    if [[ -n "$message" ]]; then
+        args+=(-mesg "$message")
+    fi
+
+    # Add common args
+    local common_args=($(_rofi-build-args))
+    args+=("${common_args[@]}")
+
+    log-debug "rofi-choice: ${args[*]}"
+
+    local result
+    result=$(echo -e "$options" | rofi "${args[@]}" 2>/dev/null)
+    _ROFI_LAST_EXIT_CODE=$?
+    _ROFI_LAST_SELECTION="$result"
+
+    echo "$result"
+    return $_ROFI_LAST_EXIT_CODE
+}
+
+# rofi-message: Display message dialog
+# Usage: rofi-message <message> [title]
+# Args:
+#   message - Message to display
+#   title - Dialog title (optional)
+# Returns: 0 on OK, 1 on cancel
+rofi-message() {
+    if ! rofi-check; then
+        return 1
+    fi
+
+    local message="${1:?Message required}"
+    local title="${2:-Message}"
+
+    local -a args=(
+        -dmenu
+        -p "$title"
+        -mesg "$message"
+        -format "s"
+        -lines 0
+        -no-custom
+    )
+
+    # Add common args
+    local common_args=($(_rofi-build-args))
+    args+=("${common_args[@]}")
+
+    log-debug "rofi-message: ${args[*]}"
+
+    echo -n "" | rofi "${args[@]}" 2>/dev/null
+    return $?
+}
+
+# ------------------------------
+# Window Management
+# ------------------------------
+
+# rofi-windows: Show window switcher
+# Usage: rofi-windows
+# Returns: 0 on success
+rofi-windows() {
+    if ! rofi-check; then
+        return 1
+    fi
+
+    local -a args=(-show window)
+
+    # Add theme if set
+    if [[ -n "$ROFI_THEME" ]]; then
+        args+=(-theme "$ROFI_THEME")
+    fi
+
+    log-debug "rofi-windows: ${args[*]}"
+
+    rofi "${args[@]}" 2>/dev/null
+    return $?
+}
+
+# rofi-windows-current-desktop: Show window switcher for current desktop
+# Usage: rofi-windows-current-desktop
+# Returns: 0 on success
+rofi-windows-current-desktop() {
+    if ! rofi-check; then
+        return 1
+    fi
+
+    local -a args=(
+        -show window
+        -window-match-fields desktop
+    )
+
+    # Add theme if set
+    if [[ -n "$ROFI_THEME" ]]; then
+        args+=(-theme "$ROFI_THEME")
+    fi
+
+    log-debug "rofi-windows-current-desktop: ${args[*]}"
+
+    rofi "${args[@]}" 2>/dev/null
+    return $?
+}
+
+# ------------------------------
+# Application Launcher
+# ------------------------------
+
+# rofi-apps: Show application launcher
+# Usage: rofi-apps
+# Returns: 0 on success
+rofi-apps() {
+    if ! rofi-check; then
+        return 1
+    fi
+
+    local -a args=(-show drun)
+
+    # Add theme if set
+    if [[ -n "$ROFI_THEME" ]]; then
+        args+=(-theme "$ROFI_THEME")
+    fi
+
+    log-debug "rofi-apps: ${args[*]}"
+
+    rofi "${args[@]}" 2>/dev/null
+    return $?
+}
+
+# rofi-run: Show run dialog
+# Usage: rofi-run
+# Returns: 0 on success
+rofi-run() {
+    if ! rofi-check; then
+        return 1
+    fi
+
+    local -a args=(-show run)
+
+    # Add theme if set
+    if [[ -n "$ROFI_THEME" ]]; then
+        args+=(-theme "$ROFI_THEME")
+    fi
+
+    log-debug "rofi-run: ${args[*]}"
+
+    rofi "${args[@]}" 2>/dev/null
+    return $?
+}
+
+# rofi-ssh: Show SSH connections
+# Usage: rofi-ssh
+# Returns: 0 on success
+rofi-ssh() {
+    if ! rofi-check; then
+        return 1
+    fi
+
+    local -a args=(-show ssh)
+
+    # Add theme if set
+    if [[ -n "$ROFI_THEME" ]]; then
+        args+=(-theme "$ROFI_THEME")
+    fi
+
+    log-debug "rofi-ssh: ${args[*]}"
+
+    rofi "${args[@]}" 2>/dev/null
+    return $?
+}
+
+# ------------------------------
+# Theme Management
+# ------------------------------
+
+# rofi-list-themes: List available themes
+# Usage: rofi-list-themes
+# Returns: List of theme names
+rofi-list-themes() {
+    if ! rofi-check; then
+        return 1
+    fi
+
+    rofi -dump-theme 2>/dev/null | grep -E '^\s*\*' | sed 's/^\s*\* //' | sort
+}
+
+# rofi-select-theme: Show theme selector
+# Usage: rofi-select-theme
+# Returns: Selected theme name
+rofi-select-theme() {
+    if ! rofi-check; then
+        return 1
+    fi
+
+    local themes=$(rofi-list-themes)
+    local selected=$(echo "$themes" | rofi-select "Select Theme")
+
+    if [[ -n "$selected" ]]; then
+        rofi-set-theme "$selected"
+        echo "$selected"
+        return 0
+    else
+        return 1
+    fi
+}
+
+# rofi-dump-theme: Dump current theme
+# Usage: rofi-dump-theme
+# Returns: Theme configuration
+rofi-dump-theme() {
+    if ! rofi-check; then
+        return 1
+    fi
+
+    rofi -dump-theme 2>/dev/null
+}
+
+# rofi-get-config-dir: Get config directory
+# Usage: config_dir=$(rofi-get-config-dir)
+# Returns: Config directory path
+rofi-get-config-dir() {
+    dirname "$ROFI_CONFIG"
+}
+
+# ------------------------------
+# Utility Functions
+# ------------------------------
+
+# rofi-last-selection: Get last selection
+# Usage: selection=$(rofi-last-selection)
+# Returns: Last selected value
+rofi-last-selection() {
+    echo "$_ROFI_LAST_SELECTION"
+}
+
+# rofi-last-exit-code: Get last exit code
+# Usage: rofi-last-exit-code
+# Returns: Last exit code
+rofi-last-exit-code() {
+    return $_ROFI_LAST_EXIT_CODE
+}
+
+# rofi-help: Show rofi help
+# Usage: rofi-help
+# Returns: Rofi help text
+rofi-help() {
+    if ! rofi-check; then
+        return 1
+    fi
+
+    rofi -help 2>&1
+}
+
+# rofi-list-modi: Show available modi
+# Usage: rofi-list-modi
+# Returns: List of available modi
+rofi-list-modi() {
+    if ! rofi-check; then
+        return 1
+    fi
+
+    rofi -show-modi 2>/dev/null
+}
+
+# ------------------------------
+# Format Helpers
+# ------------------------------
+
+# rofi-format-icon: Format option with icon
+# Usage: rofi-format-icon <icon> <text>
+# Args:
+#   icon - Icon character or emoji
+#   text - Option text
+# Returns: Formatted string
+rofi-format-icon() {
+    local icon="${1:?Icon required}"
+    local text="${2:?Text required}"
+    echo "${icon}  ${text}"
+}
+
+# rofi-format-markup: Format option with markup
+# Usage: rofi-format-markup <text> [color] [weight]
+# Args:
+#   text - Text to format
+#   color - Text color (optional)
+#   weight - Font weight (optional, default: normal)
+# Returns: Markup-formatted string
+rofi-format-markup() {
+    local text="${1:?Text required}"
+    local color="$2"
+    local weight="${3:-normal}"
+
+    if [[ -n "$color" ]]; then
+        echo "<span color='$color' weight='$weight'>$text</span>"
+    else
+        echo "<span weight='$weight'>$text</span>"
+    fi
+}
+
+# rofi-separator: Create separator line
+# Usage: rofi-separator [char] [length]
+# Args:
+#   char - Separator character (optional, default: ─)
+#   length - Line length (optional, default: 50)
+# Returns: Separator string
+rofi-separator() {
+    local char="${1:-─}"
+    local length="${2:-50}"
+    printf "${char}%.0s" $(seq 1 $length)
+}
+
+# ------------------------------
+# Custom Modi Helpers
+# ------------------------------
+
+# rofi-modi: Run custom modi
+# Usage: rofi-modi <modi_name> <modi_script>
+# Args:
+#   modi_name - Name of modi
+#   modi_script - Path to modi script
+# Returns: 0 on success
+rofi-modi() {
+    if ! rofi-check; then
+        return 1
+    fi
+
+    local modi_name="${1:?Modi name required}"
+    local modi_script="${2:?Modi script required}"
+
+    if [[ ! -x "$modi_script" ]]; then
+        log-error "Modi script not executable: $modi_script"
+        return 1
+    fi
+
+    local -a args=(
+        -show "$modi_name"
+        -modi "${modi_name}:${modi_script}"
+    )
+
+    # Add theme if set
+    if [[ -n "$ROFI_THEME" ]]; then
+        args+=(-theme "$ROFI_THEME")
+    fi
+
+    log-debug "rofi-modi: ${args[*]}"
+
+    rofi "${args[@]}" 2>/dev/null
+    return $?
+}
+
+# ------------------------------
+# Module Info
+# ------------------------------
+
+# rofi-version: Show module version
+# Usage: rofi-version
+# Returns: Version string
+rofi-version() {
+    echo "lib/_rofi version ${ROFI_VERSION}"
+}
+
+# rofi-info: Show module information
+# Usage: rofi-info
+# Returns: Module information
+rofi-info() {
+    cat <<EOF
+lib/_rofi v${ROFI_VERSION}
+
+Modern Rofi integration wrapper providing comprehensive UI operations.
+
+Dependencies:
+  Required: _common v2.0, rofi
+  Optional: _log v2.0, _lifecycle v3.0, _cache v2.0
+
+Features:
+  - Menu builders (simple, multi-select, custom)
+  - Prompt dialogs (confirm, input, password, selection)
+  - Window management integration
+  - Application launcher
+  - Theme management
+  - Custom modi support
+  - Format helpers
+
+Configuration:
+  ROFI_CONFIG, ROFI_THEME, ROFI_DEFAULT_FORMAT
+  ROFI_DEFAULT_PROMPT, ROFI_LINES, ROFI_COLUMNS
+  ROFI_CASE_SENSITIVE, ROFI_MATCHING, ROFI_SORT
+
+Functions:
+  Core: rofi-init, rofi-check, rofi-dmenu, rofi-menu, rofi-select
+  Prompts: rofi-confirm, rofi-input, rofi-password, rofi-choice
+  Windows: rofi-windows, rofi-apps, rofi-run
+  Themes: rofi-list-themes, rofi-select-theme
+  Config: rofi-set-theme, rofi-set-format, rofi-get-config
+EOF
+}
+
+# ------------------------------
+# Self-Test
+# ------------------------------
+
+# rofi-self-test: Run self-tests
+# Usage: rofi-self-test
+# Returns: 0 if all tests pass, 1 otherwise
+rofi-self-test() {
+    log-info "Running lib/_rofi self-tests..."
+
+    local tests_passed=0
+    local tests_failed=0
+
+    # Test 1: Check rofi availability
+    if rofi-check; then
+        log-info "PASS: rofi is available"
+        ((tests_passed++))
+    else
+        log-error "FAIL: rofi is not available"
+        ((tests_failed++))
+    fi
+
+    # Test 2: Get version
+    local version=$(rofi-version-check 2>/dev/null)
+    if [[ -n "$version" ]]; then
+        log-info "PASS: rofi version: $version"
+        ((tests_passed++))
+    else
+        log-error "FAIL: Failed to get rofi version"
+        ((tests_failed++))
+    fi
+
+    # Test 3: Build arguments
+    local args=$(_rofi-build-args)
+    if [[ -n "$args" ]] || [[ $? -eq 0 ]]; then
+        log-info "PASS: Argument building works"
+        ((tests_passed++))
+    else
+        log-error "FAIL: Argument building failed"
+        ((tests_failed++))
+    fi
+
+    # Test 4: Configuration
+    ROFI_LINES=15
+    if [[ "$ROFI_LINES" == "15" ]]; then
+        log-info "PASS: Configuration variables work"
+        ((tests_passed++))
+        ROFI_LINES=10  # Reset
+    else
+        log-error "FAIL: Configuration variables failed"
+        ((tests_failed++))
+    fi
+
+    # Test 5: Format validation
+    if rofi-set-format "i"; then
+        log-info "PASS: Format validation works"
+        ((tests_passed++))
+        rofi-set-format "s"  # Reset
+    else
+        log-error "FAIL: Format validation failed"
+        ((tests_failed++))
+    fi
+
+    # Test 6: Matching validation
+    if rofi-set-matching "fuzzy"; then
+        log-info "PASS: Matching validation works"
+        ((tests_passed++))
+        rofi-set-matching "normal"  # Reset
+    else
+        log-error "FAIL: Matching validation failed"
+        ((tests_failed++))
+    fi
+
+    # Test 7: Config directory
+    local config_dir=$(rofi-get-config-dir)
+    if [[ -n "$config_dir" ]]; then
+        log-info "PASS: Config directory: $config_dir"
+        ((tests_passed++))
+    else
+        log-error "FAIL: Failed to get config directory"
+        ((tests_failed++))
+    fi
+
+    # Summary
+    log-info "Self-tests complete: $tests_passed passed, $tests_failed failed"
+
+    if [[ $tests_failed -eq 0 ]]; then
+        return 0
+    else
+        return 1
+    fi
+}

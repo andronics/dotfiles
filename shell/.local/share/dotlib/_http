@@ -1,0 +1,821 @@
+#!/usr/bin/env zsh
+
+# _http - HTTP request utilities and helpers
+# Part of the dotfiles library v2.0
+# Version: 1.0.0
+#
+# Usage:
+#   source "${DOTLIB}/_http"
+#
+# Provides:
+#   - HTTP methods (GET, POST, PUT, DELETE, PATCH, HEAD)
+#   - Request header management
+#   - Response parsing (JSON, XML, HTML)
+#   - Authentication (Basic, Bearer, API Key)
+#   - Query parameter building
+#   - Status code handling
+#   - Timeout management
+#   - Retry logic with backoff
+#   - Download utilities
+#   - URL encoding/decoding
+#   - Webhook utilities
+#
+# Dependencies:
+#   Required:
+#     - _common v2.0: Core utilities
+#     - curl: HTTP client
+#   Optional (gracefully degraded):
+#     - _log v2.0: Logging functions
+#     - _cache v2.0: Response caching
+#     - _lifecycle v3.0: Cleanup registration
+#     - jq: JSON parsing
+#     - httpie: Alternative HTTP client
+
+# ------------------------------
+# Source Guard
+# ------------------------------
+
+[[ -n "${_HTTP_LOADED}" ]] && return 0
+declare -gr _HTTP_LOADED=1
+
+# ------------------------------
+# Version
+# ------------------------------
+
+declare -gr HTTP_VERSION="1.0.0"
+
+# ------------------------------
+# Dependency Loading
+# ------------------------------
+
+# Load foundation (required)
+if ! source "${DOTLIB}/_common" 2>/dev/null; then
+    echo "[ERROR] _http requires _common - cannot load" >&2
+    return 1
+fi
+
+# Load infrastructure (optional with fallbacks)
+if ! source "${DOTLIB}/_log" 2>/dev/null; then
+    log-info() { echo "[INFO] $*"; }
+    log-error() { echo "[ERROR] $*" >&2; }
+    log-warn() { echo "[WARN] $*" >&2; }
+    log-debug() { [[ "${HTTP_DEBUG:-false}" == "true" ]] && echo "[DEBUG] $*" >&2 || true; }
+    log-success() { echo "[SUCCESS] $*"; }
+fi
+
+# Load optional dependencies
+source "${DOTLIB}/_cache" 2>/dev/null || true
+declare -g HTTP_CACHE_AVAILABLE=$(common-command-exists "cache-set" && echo "true" || echo "false")
+
+source "${DOTLIB}/_lifecycle" 2>/dev/null || true
+declare -g HTTP_LIFECYCLE_AVAILABLE=$(common-command-exists "lifecycle-add-cleanup" && echo "true" || echo "false")
+
+# ------------------------------
+# Configuration
+# ------------------------------
+
+# Default timeout in seconds
+declare -g HTTP_TIMEOUT="${HTTP_TIMEOUT:-30}"
+
+# Default user agent
+declare -g HTTP_USER_AGENT="${HTTP_USER_AGENT:-dotfiles-http/${HTTP_VERSION}}"
+
+# Follow redirects
+declare -g HTTP_FOLLOW_REDIRECTS="${HTTP_FOLLOW_REDIRECTS:-true}"
+
+# Max redirects
+declare -g HTTP_MAX_REDIRECTS="${HTTP_MAX_REDIRECTS:-10}"
+
+# Retry attempts
+declare -g HTTP_RETRY_ATTEMPTS="${HTTP_RETRY_ATTEMPTS:-3}"
+
+# Retry delay in seconds
+declare -g HTTP_RETRY_DELAY="${HTTP_RETRY_DELAY:-1}"
+
+# Debug mode
+declare -g HTTP_DEBUG="${HTTP_DEBUG:-false}"
+
+# Cache TTL for responses (seconds)
+declare -g HTTP_CACHE_TTL="${HTTP_CACHE_TTL:-300}"
+
+# Temporary response storage (per-session)
+declare -g -A _HTTP_RESPONSE_HEADERS=()
+declare -g -A _HTTP_RESPONSE_BODY=()
+declare -g -A _HTTP_RESPONSE_CODE=()
+
+# ------------------------------
+# Tool Detection
+# ------------------------------
+
+# Check if curl is available (required)
+http-check-curl() {
+    if ! common-command-exists "curl"; then
+        log-error "curl not found - required for HTTP operations"
+        return 6
+    fi
+    return 0
+}
+
+# Check if httpie is available (optional)
+http-check-httpie() {
+    common-command-exists "http"
+}
+
+# Check if jq is available (optional)
+http-check-jq() {
+    common-command-exists "jq"
+}
+
+# ------------------------------
+# Core Request Functions
+# ------------------------------
+
+# Make HTTP request (internal)
+# Usage: _http-request <method> <url> [data] [headers...]
+_http-request() {
+    local method="${1}"
+    local url="${2}"
+    local data="${3:-}"
+    shift 3
+    local -a headers=("$@")
+
+    # Validate inputs
+    if [[ -z "$method" ]] || [[ -z "$url" ]]; then
+        log-error "Method and URL required"
+        return 1
+    fi
+
+    if ! http-check-curl; then
+        return 6
+    fi
+
+    # Create temporary files for response
+    local response_file=$(mktemp)
+    local headers_file=$(mktemp)
+
+    # Register cleanup if lifecycle available
+    if [[ "$HTTP_LIFECYCLE_AVAILABLE" == "true" ]]; then
+        lifecycle-add-cleanup "HTTP temp files" "rm -f '$response_file' '$headers_file'"
+    fi
+
+    # Build curl command
+    local -a curl_args=(
+        -X "$method"
+        -s                              # Silent
+        -w "\n%{http_code}"             # Write HTTP code at end
+        -D "$headers_file"              # Dump headers
+        -o "$response_file"             # Output body
+        --max-time "$HTTP_TIMEOUT"
+        -A "$HTTP_USER_AGENT"
+    )
+
+    # Follow redirects
+    if [[ "$HTTP_FOLLOW_REDIRECTS" == "true" ]]; then
+        curl_args+=(--location --max-redirs "$HTTP_MAX_REDIRECTS")
+    fi
+
+    # Add custom headers
+    for header in "${headers[@]}"; do
+        [[ -n "$header" ]] && curl_args+=(-H "$header")
+    done
+
+    # Add data for POST/PUT/PATCH
+    if [[ -n "$data" ]]; then
+        curl_args+=(--data "$data")
+    fi
+
+    # Execute request with retry logic
+    local attempt=1
+    local http_code=""
+    local curl_exit=1
+
+    while (( attempt <= HTTP_RETRY_ATTEMPTS )); do
+        log-debug "HTTP $method $url (attempt $attempt/$HTTP_RETRY_ATTEMPTS)"
+
+        http_code=$(curl "${curl_args[@]}" "$url" 2>&1 | tail -1)
+        curl_exit=$?
+
+        # Check if successful
+        if (( curl_exit == 0 )) && [[ "$http_code" =~ ^[0-9]+$ ]]; then
+            break
+        fi
+
+        # Retry with exponential backoff
+        if (( attempt < HTTP_RETRY_ATTEMPTS )); then
+            local delay=$((HTTP_RETRY_DELAY * attempt))
+            log-debug "Retry after ${delay}s"
+            sleep "$delay"
+        fi
+
+        ((attempt++))
+    done
+
+    # Read response body
+    local body=$(cat "$response_file" 2>/dev/null)
+
+    # Clean up temp files
+    rm -f "$response_file" "$headers_file"
+
+    # Check curl exit code
+    if (( curl_exit != 0 )); then
+        log-error "HTTP request failed (curl exit: $curl_exit)"
+        return 1
+    fi
+
+    # Store response for later retrieval
+    local request_id="${method}_${url}"
+    _HTTP_RESPONSE_CODE[$request_id]="$http_code"
+    _HTTP_RESPONSE_BODY[$request_id]="$body"
+
+    # Output body
+    echo "$body"
+
+    # Return success/failure based on HTTP code
+    if [[ "$http_code" =~ ^2[0-9][0-9]$ ]]; then
+        return 0
+    else
+        log-warn "HTTP $method $url returned $http_code"
+        return 1
+    fi
+}
+
+# Make HTTP GET request
+# Usage: http-get <url> [headers...]
+http-get() {
+    local url="${1}"
+    shift
+
+    _http-request "GET" "$url" "" "$@"
+}
+
+# Make HTTP POST request
+# Usage: http-post <url> <data> [headers...]
+http-post() {
+    local url="${1}"
+    local data="${2}"
+    shift 2
+
+    _http-request "POST" "$url" "$data" "$@"
+}
+
+# Make HTTP PUT request
+# Usage: http-put <url> <data> [headers...]
+http-put() {
+    local url="${1}"
+    local data="${2}"
+    shift 2
+
+    _http-request "PUT" "$url" "$data" "$@"
+}
+
+# Make HTTP DELETE request
+# Usage: http-delete <url> [headers...]
+http-delete() {
+    local url="${1}"
+    shift
+
+    _http-request "DELETE" "$url" "" "$@"
+}
+
+# Make HTTP PATCH request
+# Usage: http-patch <url> <data> [headers...]
+http-patch() {
+    local url="${1}"
+    local data="${2}"
+    shift 2
+
+    _http-request "PATCH" "$url" "$data" "$@"
+}
+
+# Make HTTP HEAD request
+# Usage: http-head <url> [headers...]
+http-head() {
+    local url="${1}"
+    shift
+
+    if ! http-check-curl; then
+        return 6
+    fi
+
+    curl -I -s --max-time "$HTTP_TIMEOUT" -A "$HTTP_USER_AGENT" "$@" "$url"
+}
+
+# ------------------------------
+# Response Helpers
+# ------------------------------
+
+# Get last response HTTP code
+# Usage: http-response-code <method> <url>
+http-response-code() {
+    local method="${1}"
+    local url="${2}"
+    local request_id="${method}_${url}"
+
+    echo "${_HTTP_RESPONSE_CODE[$request_id]:-0}"
+}
+
+# Get last response body
+# Usage: http-response-body <method> <url>
+http-response-body() {
+    local method="${1}"
+    local url="${2}"
+    local request_id="${method}_${url}"
+
+    echo "${_HTTP_RESPONSE_BODY[$request_id]:-}"
+}
+
+# Check if response was successful (2xx)
+# Usage: http-success <method> <url>
+http-success() {
+    local code=$(http-response-code "$1" "$2")
+    [[ "$code" =~ ^2[0-9][0-9]$ ]]
+}
+
+# ------------------------------
+# JSON Helpers
+# ------------------------------
+
+# POST JSON data
+# Usage: http-post-json <url> <json_data> [extra_headers...]
+http-post-json() {
+    local url="${1}"
+    local data="${2}"
+    shift 2
+
+    http-post "$url" "$data" "Content-Type: application/json" "$@"
+}
+
+# PUT JSON data
+# Usage: http-put-json <url> <json_data> [extra_headers...]
+http-put-json() {
+    local url="${1}"
+    local data="${2}"
+    shift 2
+
+    http-put "$url" "$data" "Content-Type: application/json" "$@"
+}
+
+# PATCH JSON data
+# Usage: http-patch-json <url> <json_data> [extra_headers...]
+http-patch-json() {
+    local url="${1}"
+    local data="${2}"
+    shift 2
+
+    http-patch "$url" "$data" "Content-Type: application/json" "$@"
+}
+
+# Parse JSON response
+# Usage: http-parse-json <response> <jq_query>
+http-parse-json() {
+    local response="${1}"
+    local query="${2}"
+
+    if ! http-check-jq; then
+        log-error "jq not found - required for JSON parsing"
+        return 6
+    fi
+
+    echo "$response" | jq -r "$query"
+}
+
+# ------------------------------
+# Authentication
+# ------------------------------
+
+# Basic authentication header
+# Usage: auth_header=$(http-basic-auth <username> <password>)
+http-basic-auth() {
+    local username="${1}"
+    local password="${2}"
+
+    if [[ -z "$username" ]] || [[ -z "$password" ]]; then
+        log-error "Username and password required"
+        return 1
+    fi
+
+    local credentials=$(echo -n "${username}:${password}" | base64 -w0)
+    echo "Authorization: Basic ${credentials}"
+}
+
+# Bearer token header
+# Usage: auth_header=$(http-bearer-token <token>)
+http-bearer-token() {
+    local token="${1}"
+
+    if [[ -z "$token" ]]; then
+        log-error "Token required"
+        return 1
+    fi
+
+    echo "Authorization: Bearer ${token}"
+}
+
+# API key header
+# Usage: auth_header=$(http-api-key <key> [header_name])
+http-api-key() {
+    local key="${1}"
+    local header_name="${2:-X-API-Key}"
+
+    if [[ -z "$key" ]]; then
+        log-error "API key required"
+        return 1
+    fi
+
+    echo "${header_name}: ${key}"
+}
+
+# ------------------------------
+# URL Encoding
+# ------------------------------
+
+# URL encode a string
+# Usage: encoded=$(http-url-encode <string>)
+http-url-encode() {
+    local string="${1}"
+
+    if [[ -z "$string" ]]; then
+        log-error "String required"
+        return 1
+    fi
+
+    local encoded=""
+    for ((i=0; i<${#string}; i++)); do
+        local char="${string:$i:1}"
+        case "$char" in
+            [a-zA-Z0-9.~_-])
+                encoded+="$char"
+                ;;
+            ' ')
+                encoded+="%20"
+                ;;
+            *)
+                encoded+=$(printf '%%%02X' "'$char")
+                ;;
+        esac
+    done
+
+    echo "$encoded"
+}
+
+# URL decode a string
+# Usage: decoded=$(http-url-decode <string>)
+http-url-decode() {
+    local string="${1}"
+
+    if [[ -z "$string" ]]; then
+        log-error "String required"
+        return 1
+    fi
+
+    # Replace %XX with corresponding character
+    local decoded=""
+    local i=0
+    while [[ $i -lt ${#string} ]]; do
+        local char="${string:$i:1}"
+        if [[ "$char" == "%" ]] && [[ $((i+2)) -lt ${#string} ]]; then
+            local hex="${string:$((i+1)):2}"
+            decoded+=$(printf "\\x${hex}")
+            i=$((i+3))
+        elif [[ "$char" == "+" ]]; then
+            decoded+=" "
+            i=$((i+1))
+        else
+            decoded+="$char"
+            i=$((i+1))
+        fi
+    done
+
+    echo "$decoded"
+}
+
+# Build query string from key-value pairs
+# Usage: query=$(http-query-string <key1> <val1> [key2 val2...])
+http-query-string() {
+    local -a params=()
+
+    while [[ $# -ge 2 ]]; do
+        local key="${1}"
+        local val="${2}"
+        shift 2
+
+        params+=("$(http-url-encode "$key")=$(http-url-encode "$val")")
+    done
+
+    local IFS='&'
+    echo "${params[*]}"
+}
+
+# ------------------------------
+# Download Helpers
+# ------------------------------
+
+# Download file
+# Usage: http-download <url> <output_file> [--progress]
+http-download() {
+    local url="${1}"
+    local output="${2}"
+    shift 2
+    local show_progress=false
+
+    # Parse options
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --progress|-p)
+                show_progress=true
+                shift
+                ;;
+            *)
+                shift
+                ;;
+        esac
+    done
+
+    # Validate inputs
+    if [[ -z "$url" ]] || [[ -z "$output" ]]; then
+        log-error "URL and output file required"
+        return 1
+    fi
+
+    if ! http-check-curl; then
+        return 6
+    fi
+
+    # Download
+    if $show_progress; then
+        curl -L -# -o "$output" --max-time "$HTTP_TIMEOUT" "$url"
+    else
+        curl -L -s -o "$output" --max-time "$HTTP_TIMEOUT" "$url"
+    fi
+
+    local exit_code=$?
+
+    if (( exit_code == 0 )); then
+        log-success "Downloaded: $output"
+    else
+        log-error "Download failed: $url"
+    fi
+
+    return $exit_code
+}
+
+# ------------------------------
+# Status Checks
+# ------------------------------
+
+# Check if URL is reachable
+# Usage: http-ping <url>
+http-ping() {
+    local url="${1}"
+
+    if [[ -z "$url" ]]; then
+        log-error "URL required"
+        return 1
+    fi
+
+    if ! http-check-curl; then
+        return 6
+    fi
+
+    local http_code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 "$url" 2>/dev/null)
+
+    if [[ "$http_code" =~ ^[2-3][0-9][0-9]$ ]]; then
+        log-debug "URL reachable: $url ($http_code)"
+        return 0
+    else
+        log-debug "URL unreachable: $url ($http_code)"
+        return 1
+    fi
+}
+
+# Get HTTP status code for URL
+# Usage: code=$(http-status-code <url>)
+http-status-code() {
+    local url="${1}"
+
+    if [[ -z "$url" ]]; then
+        log-error "URL required"
+        return 1
+    fi
+
+    if ! http-check-curl; then
+        return 6
+    fi
+
+    curl -s -o /dev/null -w "%{http_code}" --max-time 5 "$url" 2>/dev/null
+}
+
+# ------------------------------
+# Webhook Utilities
+# ------------------------------
+
+# Parse webhook payload (expects JSON)
+# Usage: value=$(webhook-parse-payload <payload> <field>)
+webhook-parse-payload() {
+    local payload="${1}"
+    local field="${2}"
+
+    if [[ -z "$payload" ]] || [[ -z "$field" ]]; then
+        log-error "Payload and field required"
+        return 1
+    fi
+
+    http-parse-json "$payload" "$field"
+}
+
+# Validate webhook signature (HMAC SHA256)
+# Usage: webhook-validate-signature <payload> <signature> <secret>
+webhook-validate-signature() {
+    local payload="${1}"
+    local received_sig="${2}"
+    local secret="${3}"
+
+    if [[ -z "$payload" ]] || [[ -z "$received_sig" ]] || [[ -z "$secret" ]]; then
+        log-error "Payload, signature, and secret required"
+        return 1
+    fi
+
+    if ! common-command-exists "openssl"; then
+        log-error "OpenSSL not found - required for signature validation"
+        return 6
+    fi
+
+    local computed_sig=$(echo -n "$payload" | openssl dgst -sha256 -hmac "$secret" 2>/dev/null | awk '{print $2}')
+
+    if [[ "$received_sig" == "$computed_sig" ]]; then
+        log-debug "Webhook signature valid"
+        return 0
+    else
+        log-error "Webhook signature invalid"
+        return 1
+    fi
+}
+
+# ------------------------------
+# Configuration
+# ------------------------------
+
+# Set timeout
+# Usage: http-set-timeout <seconds>
+http-set-timeout() {
+    local timeout="${1}"
+
+    if [[ -z "$timeout" ]] || ! [[ "$timeout" =~ ^[0-9]+$ ]]; then
+        log-error "Invalid timeout: $timeout"
+        return 1
+    fi
+
+    HTTP_TIMEOUT="$timeout"
+    log-debug "HTTP timeout set to ${timeout}s"
+}
+
+# Set user agent
+# Usage: http-set-user-agent <agent>
+http-set-user-agent() {
+    local agent="${1}"
+
+    if [[ -z "$agent" ]]; then
+        log-error "User agent required"
+        return 1
+    fi
+
+    HTTP_USER_AGENT="$agent"
+    log-debug "HTTP user agent set to: $agent"
+}
+
+# ------------------------------
+# Self-Test
+# ------------------------------
+
+# Test HTTP functions
+# Usage: http-self-test
+http-self-test() {
+    echo "=== _http v${HTTP_VERSION} Self-Test ==="
+    echo ""
+
+    local tests_passed=0
+    local tests_failed=0
+
+    # Test 1: Check curl availability
+    echo -n "Test 1: curl availability... "
+    if http-check-curl; then
+        echo "PASS"
+        ((tests_passed++))
+    else
+        echo "FAIL"
+        ((tests_failed++))
+        echo "  curl not found - HTTP functions will not work"
+        echo ""
+        echo "=== Self-Test Summary ==="
+        echo "Passed: $tests_passed"
+        echo "Failed: $tests_failed"
+        return 1
+    fi
+
+    # Test 2: URL encoding
+    echo -n "Test 2: URL encoding... "
+    local original="hello world"
+    local encoded=$(http-url-encode "$original")
+    if [[ "$encoded" == "hello%20world" ]]; then
+        echo "PASS"
+        ((tests_passed++))
+    else
+        echo "FAIL (got: $encoded)"
+        ((tests_failed++))
+    fi
+
+    # Test 3: URL decoding
+    echo -n "Test 3: URL decoding... "
+    local decoded=$(http-url-decode "hello%20world")
+    if [[ "$decoded" == "hello world" ]]; then
+        echo "PASS"
+        ((tests_passed++))
+    else
+        echo "FAIL (got: $decoded)"
+        ((tests_failed++))
+    fi
+
+    # Test 4: Query string building
+    echo -n "Test 4: Query string building... "
+    local query=$(http-query-string "foo" "bar" "baz" "qux")
+    if [[ "$query" == "foo=bar&baz=qux" ]]; then
+        echo "PASS"
+        ((tests_passed++))
+    else
+        echo "FAIL (got: $query)"
+        ((tests_failed++))
+    fi
+
+    # Test 5: Basic auth header
+    echo -n "Test 5: Basic auth header... "
+    local auth=$(http-basic-auth "user" "pass")
+    if [[ "$auth" =~ ^Authorization:\ Basic\ .*$ ]]; then
+        echo "PASS"
+        ((tests_passed++))
+    else
+        echo "FAIL"
+        ((tests_failed++))
+    fi
+
+    # Test 6: Bearer token header
+    echo -n "Test 6: Bearer token header... "
+    local bearer=$(http-bearer-token "abc123")
+    if [[ "$bearer" == "Authorization: Bearer abc123" ]]; then
+        echo "PASS"
+        ((tests_passed++))
+    else
+        echo "FAIL (got: $bearer)"
+        ((tests_failed++))
+    fi
+
+    # Test 7: API key header
+    echo -n "Test 7: API key header... "
+    local apikey=$(http-api-key "secret123")
+    if [[ "$apikey" == "X-API-Key: secret123" ]]; then
+        echo "PASS"
+        ((tests_passed++))
+    else
+        echo "FAIL (got: $apikey)"
+        ((tests_failed++))
+    fi
+
+    # Test 8: HTTP GET (if network available)
+    echo -n "Test 8: HTTP GET request... "
+    if http-ping "https://httpbin.org/status/200" 2>/dev/null; then
+        local response=$(http-get "https://httpbin.org/status/200" 2>/dev/null)
+        if [[ $? -eq 0 ]]; then
+            echo "PASS"
+            ((tests_passed++))
+        else
+            echo "FAIL"
+            ((tests_failed++))
+        fi
+    else
+        echo "SKIP (network unavailable)"
+    fi
+
+    echo ""
+    echo "=== Self-Test Summary ==="
+    echo "Passed: $tests_passed"
+    echo "Failed: $tests_failed"
+    echo ""
+
+    if (( tests_failed == 0 )); then
+        echo "All tests passed!"
+        return 0
+    else
+        echo "Some tests failed."
+        return 1
+    fi
+}
+
+# ------------------------------
+# Version Info
+# ------------------------------
+
+# Print version information
+# Usage: http-version
+http-version() {
+    echo "_http v${HTTP_VERSION}"
+}
+

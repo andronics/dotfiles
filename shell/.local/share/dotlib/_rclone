@@ -1,0 +1,2332 @@
+#!/usr/bin/env zsh
+
+# _rclone - Rclone Remote Storage Management
+# Part of the dotfiles library v2.0
+# Version: 2.1.0
+#
+# Usage:
+#   source "${DOTLIB}/_rclone"
+#
+# Provides:
+#   - Remote management (list, create, configure, delete)
+#   - File operations (copy, move, sync, check, delete)
+#   - Mount/unmount operations with lifecycle tracking
+#   - Server operations (HTTP, WebDAV, SFTP, FTP)
+#   - Transfer management (progress, stats, bandwidth)
+#   - Configuration helpers
+#   - Filter and exclude management
+#   - Bandwidth control
+#   - RC (Remote Control) API integration
+#   - Caching for remote listings and metadata
+#   - Event emission for integration
+#
+# Dependencies:
+#   Required:
+#     - _common v2.0: Core utilities
+#     - rclone: Remote storage sync tool
+#   Optional (gracefully degraded):
+#     - _log v2.0: Structured logging
+#     - _events v2.0: Event system
+#     - _cache v2.0: Performance caching
+#     - _lifecycle v2.0: Cleanup management
+#     - _config v2.0: Configuration management
+
+# ------------------------------
+# Source Guard
+# ------------------------------
+
+[[ -n "${RCLONE_LOADED:-}" ]] && return 0
+declare -g RCLONE_LOADED=1
+
+# ------------------------------
+# Version
+# ------------------------------
+
+declare -r RCLONE_VERSION="2.1.0"
+
+# ------------------------------
+# Dependency Loading
+# ------------------------------
+
+# Load foundation (required, with minimal fallbacks if missing)
+if ! source "${DOTLIB}/_common" 2>/dev/null; then
+    common-command-exists() { command -v "$1" &>/dev/null; }
+    common-validate-required() {
+        local value="$1"
+        local name="$2"
+        if [[ -z "$value" ]]; then
+            log-error "${name} is required"
+            return 2
+        fi
+        return 0
+    }
+    common-validate-numeric() {
+        local value="$1"
+        if ! [[ "$value" =~ ^[0-9]+$ ]]; then
+            log-error "Value must be numeric: $value"
+            return 2
+        fi
+        return 0
+    }
+fi
+
+# Load infrastructure (optional with fallbacks)
+if ! source "${DOTLIB}/_log" 2>/dev/null; then
+    log-info() { echo "[INFO] $*"; }
+    log-error() { echo "[ERROR] $*" >&2; }
+    log-warn() { echo "[WARN] $*" >&2; }
+    log-warning() { echo "[WARN] $*" >&2; }
+    log-debug() { [[ "${RCLONE_DEBUG:-false}" == "true" ]] && echo "[DEBUG] $*" >&2 || true; }
+    log-trace() { [[ "${RCLONE_DEBUG:-false}" == "true" ]] && echo "[TRACE] $*" >&2 || true; }
+    log-success() { echo "[SUCCESS] $*"; }
+fi
+
+if source "${DOTLIB}/_events" 2>/dev/null; then
+    declare -g RCLONE_EVENTS_AVAILABLE=true
+else
+    declare -g RCLONE_EVENTS_AVAILABLE=false
+fi
+
+if source "${DOTLIB}/_cache" 2>/dev/null; then
+    declare -g RCLONE_CACHE_AVAILABLE=true
+else
+    declare -g RCLONE_CACHE_AVAILABLE=false
+fi
+
+if source "${DOTLIB}/_lifecycle" 2>/dev/null; then
+    declare -g RCLONE_LIFECYCLE_AVAILABLE=true
+else
+    declare -g RCLONE_LIFECYCLE_AVAILABLE=false
+fi
+
+if source "${DOTLIB}/_config" 2>/dev/null; then
+    declare -g RCLONE_CONFIG_AVAILABLE=true
+else
+    declare -g RCLONE_CONFIG_AVAILABLE=false
+fi
+
+# ------------------------------
+# Configuration
+# ------------------------------
+
+# Paths (XDG-compliant)
+if typeset -f common-lib-cache-dir >/dev/null 2>&1; then
+    declare -g RCLONE_CACHE_DIR="$(common-lib-cache-dir)/rclone"
+    declare -g RCLONE_STATE_DIR="$(common-lib-state-dir)/rclone"
+    declare -g RCLONE_CONFIG_DIR="$(common-lib-config-dir)/rclone"
+else
+    # Fallback to XDG standard paths
+    declare -g RCLONE_CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/rclone"
+    declare -g RCLONE_STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/rclone"
+    declare -g RCLONE_CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/rclone"
+fi
+
+# Rclone configuration file path
+declare -g RCLONE_CONFIG="${RCLONE_CONFIG:-${RCLONE_CONFIG_DIR}/rclone.conf}"
+
+# Transfer configuration
+declare -g RCLONE_TRANSFERS="${RCLONE_TRANSFERS:-4}"
+declare -g RCLONE_CHECKERS="${RCLONE_CHECKERS:-8}"
+declare -g RCLONE_BUFFER_SIZE="${RCLONE_BUFFER_SIZE:-16M}"
+declare -g RCLONE_BANDWIDTH_LIMIT="${RCLONE_BANDWIDTH_LIMIT:-}"
+
+# Behavior configuration
+declare -g RCLONE_DRY_RUN="${RCLONE_DRY_RUN:-false}"
+declare -g RCLONE_DEBUG="${RCLONE_DEBUG:-false}"
+declare -g RCLONE_VERBOSE="${RCLONE_VERBOSE:-0}"
+declare -g RCLONE_AUTO_CLEANUP="${RCLONE_AUTO_CLEANUP:-true}"
+
+# Logging configuration
+declare -g RCLONE_STATS_INTERVAL="${RCLONE_STATS_INTERVAL:-1s}"
+declare -g RCLONE_LOG_LEVEL="${RCLONE_LOG_LEVEL:-INFO}"
+declare -g RCLONE_LOG_FILE="${RCLONE_LOG_FILE:-}"
+
+# RC (Remote Control) configuration
+declare -g RCLONE_RC_ENABLED="${RCLONE_RC_ENABLED:-false}"
+declare -g RCLONE_RC_ADDR="${RCLONE_RC_ADDR:-localhost:5572}"
+declare -g RCLONE_RC_USER="${RCLONE_RC_USER:-}"
+declare -g RCLONE_RC_PASS="${RCLONE_RC_PASS:-}"
+
+# Mount configuration
+declare -g RCLONE_MOUNT_OPTIONS="${RCLONE_MOUNT_OPTIONS:-}"
+
+# Filter configuration
+declare -g RCLONE_EXCLUDE_FILE="${RCLONE_EXCLUDE_FILE:-}"
+declare -g RCLONE_FILTER_FILE="${RCLONE_FILTER_FILE:-}"
+
+# Event configuration
+declare -g RCLONE_EVENT_PREFIX="${RCLONE_EVENT_PREFIX:-rclone}"
+declare -g RCLONE_EMIT_EVENTS="${RCLONE_EMIT_EVENTS:-true}"
+
+# Cache configuration
+declare -g RCLONE_CACHE_TTL="${RCLONE_CACHE_TTL:-300}"  # 5 minutes
+declare -g RCLONE_CACHE_REMOTE_LIST_TTL="${RCLONE_CACHE_REMOTE_LIST_TTL:-600}"  # 10 minutes
+
+# ------------------------------
+# Global State
+# ------------------------------
+
+# Last command exit code
+declare -g _RCLONE_LAST_EXIT_CODE=0
+
+# Active mounts tracking (for lifecycle cleanup)
+declare -g -A _RCLONE_MOUNTS=()
+
+# RC server PID
+declare -g RCLONE_RC_PID=""
+
+# Event names for integration
+declare -r RCLONE_EVENT_REMOTE_CREATE="rclone.remote.create"
+declare -r RCLONE_EVENT_REMOTE_DELETE="rclone.remote.delete"
+declare -r RCLONE_EVENT_MOUNT_CREATE="rclone.mount.create"
+declare -r RCLONE_EVENT_MOUNT_DESTROY="rclone.mount.destroy"
+declare -r RCLONE_EVENT_TRANSFER_START="rclone.transfer.start"
+declare -r RCLONE_EVENT_TRANSFER_COMPLETE="rclone.transfer.complete"
+declare -r RCLONE_EVENT_TRANSFER_ERROR="rclone.transfer.error"
+declare -r RCLONE_EVENT_RC_START="rclone.rc.start"
+declare -r RCLONE_EVENT_RC_STOP="rclone.rc.stop"
+
+# ------------------------------
+# Internal Helpers
+# ------------------------------
+
+# Initialize directories
+#
+# Function: _rclone-init-dirs
+# Description: Create necessary directories for rclone operation
+# Returns:
+#   0 - Always succeeds (creates silently)
+#
+_rclone-init-dirs() {
+    mkdir -p "$RCLONE_CACHE_DIR" 2>/dev/null || true
+    mkdir -p "$RCLONE_STATE_DIR" 2>/dev/null || true
+    mkdir -p "$RCLONE_CONFIG_DIR" 2>/dev/null || true
+}
+
+# Emit an event
+#
+# Function: _rclone-emit
+# Description: Emit event using _events if available
+# Parameters:
+#   $1 - Event name (required)
+#   $@ - Event data (optional)
+#
+_rclone-emit() {
+    [[ "$RCLONE_EMIT_EVENTS" != "true" ]] && return 0
+    [[ "$RCLONE_EVENTS_AVAILABLE" != "true" ]] && return 0
+
+    events-emit "$@"
+}
+
+# Build common rclone arguments
+#
+# Function: _rclone-build-args
+# Description: Build array of common rclone CLI arguments based on configuration
+# Output: Space-separated argument string
+# Example:
+#   args=($(_rclone-build-args))
+#   rclone "${args[@]}" copy src dst
+#
+_rclone-build-args() {
+    local -a args=()
+
+    # Config file
+    if [[ -n "$RCLONE_CONFIG" ]]; then
+        args+=(--config "$RCLONE_CONFIG")
+    fi
+
+    # Cache dir
+    if [[ -n "$RCLONE_CACHE_DIR" ]]; then
+        args+=(--cache-dir "$RCLONE_CACHE_DIR")
+    fi
+
+    # Transfers and checkers
+    args+=(--transfers "$RCLONE_TRANSFERS")
+    args+=(--checkers "$RCLONE_CHECKERS")
+
+    # Buffer size
+    if [[ -n "$RCLONE_BUFFER_SIZE" ]]; then
+        args+=(--buffer-size "$RCLONE_BUFFER_SIZE")
+    fi
+
+    # Bandwidth limit
+    if [[ -n "$RCLONE_BANDWIDTH_LIMIT" ]]; then
+        args+=(--bwlimit "$RCLONE_BANDWIDTH_LIMIT")
+    fi
+
+    # Dry run
+    if [[ "$RCLONE_DRY_RUN" == "true" ]]; then
+        args+=(--dry-run)
+    fi
+
+    # Verbose mode
+    if [[ "$RCLONE_VERBOSE" -gt 0 ]]; then
+        local v_flag=""
+        for ((i=0; i<RCLONE_VERBOSE; i++)); do
+            v_flag+="-v"
+        done
+        args+=("$v_flag")
+    fi
+
+    # Stats interval
+    if [[ -n "$RCLONE_STATS_INTERVAL" ]]; then
+        args+=(--stats "$RCLONE_STATS_INTERVAL")
+    fi
+
+    # Log level
+    args+=(--log-level "$RCLONE_LOG_LEVEL")
+
+    # Log file
+    if [[ -n "$RCLONE_LOG_FILE" ]]; then
+        args+=(--log-file "$RCLONE_LOG_FILE")
+    fi
+
+    # Exclude file
+    if [[ -n "$RCLONE_EXCLUDE_FILE" ]] && [[ -f "$RCLONE_EXCLUDE_FILE" ]]; then
+        args+=(--exclude-from "$RCLONE_EXCLUDE_FILE")
+    fi
+
+    # Filter file
+    if [[ -n "$RCLONE_FILTER_FILE" ]] && [[ -f "$RCLONE_FILTER_FILE" ]]; then
+        args+=(--filter-from "$RCLONE_FILTER_FILE")
+    fi
+
+    echo "${args[@]}"
+}
+
+# ------------------------------
+# Availability and Configuration
+# ------------------------------
+
+# Check if rclone is available
+#
+# Function: rclone-check-available
+# Description: Verify rclone command is installed and accessible
+# Returns:
+#   0 - rclone is available
+#   1 - rclone not available
+# Example:
+#   rclone-check-available || echo "rclone not found"
+#
+rclone-check-available() {
+    if ! common-command-exists rclone; then
+        log-error "rclone is not installed"
+        return 1
+    fi
+    return 0
+}
+
+# Require rclone to be available (exit if not)
+#
+# Function: rclone-require-available
+# Description: Exit script if rclone is not available
+# Example:
+#   rclone-require-available  # Script exits if rclone not installed
+#
+rclone-require-available() {
+    rclone-check-available || exit 1
+}
+
+# Get rclone version
+#
+# Function: rclone-get-version
+# Description: Get installed rclone version
+# Output: Version string (e.g., "v1.63.0")
+# Returns:
+#   0 - Success
+#   1 - rclone not available
+# Example:
+#   version=$(rclone-get-version)
+#
+rclone-get-version() {
+    if ! rclone-check-available; then
+        return 1
+    fi
+
+    # Try cache first
+    if [[ "$RCLONE_CACHE_AVAILABLE" == "true" ]]; then
+        local cached=$(cache-get "rclone:version")
+        if [[ -n "$cached" ]]; then
+            echo "$cached"
+            return 0
+        fi
+    fi
+
+    local version
+    version=$(rclone version | head -n1 | awk '{print $2}')
+
+    # Cache result
+    if [[ "$RCLONE_CACHE_AVAILABLE" == "true" ]] && [[ -n "$version" ]]; then
+        cache-set "rclone:version" "$version" 3600  # 1 hour
+    fi
+
+    echo "$version"
+}
+
+# Display current configuration
+#
+# Function: rclone-get-config
+# Description: Display all rclone configuration variables
+# Output: Formatted configuration display
+# Example:
+#   rclone-get-config
+#
+rclone-get-config() {
+    echo "Rclone Configuration:"
+    echo "  Config File:       ${RCLONE_CONFIG}"
+    echo "  Cache Dir:         ${RCLONE_CACHE_DIR}"
+    echo "  State Dir:         ${RCLONE_STATE_DIR}"
+    echo "  Transfers:         ${RCLONE_TRANSFERS}"
+    echo "  Checkers:          ${RCLONE_CHECKERS}"
+    echo "  Buffer Size:       ${RCLONE_BUFFER_SIZE}"
+    echo "  Bandwidth Limit:   ${RCLONE_BANDWIDTH_LIMIT:-none}"
+    echo "  Dry Run:           ${RCLONE_DRY_RUN}"
+    echo "  Verbose:           ${RCLONE_VERBOSE}"
+    echo "  Log Level:         ${RCLONE_LOG_LEVEL}"
+    echo "  Log File:          ${RCLONE_LOG_FILE:-none}"
+    echo "  RC Enabled:        ${RCLONE_RC_ENABLED}"
+    echo "  RC Address:        ${RCLONE_RC_ADDR}"
+    echo ""
+    echo "Integration:"
+    echo "  _events:           ${RCLONE_EVENTS_AVAILABLE}"
+    echo "  _cache:            ${RCLONE_CACHE_AVAILABLE}"
+    echo "  _lifecycle:        ${RCLONE_LIFECYCLE_AVAILABLE}"
+    echo "  _config:           ${RCLONE_CONFIG_AVAILABLE}"
+}
+
+# ------------------------------
+# Configuration Setters
+# ------------------------------
+
+# Set config file path
+#
+# Function: rclone-set-config
+# Description: Change rclone configuration file path
+# Parameters:
+#   $1 - Config file path (required)
+# Returns:
+#   0 - Success
+#   2 - Invalid argument
+# Example:
+#   rclone-set-config "$HOME/.config/rclone/custom.conf"
+#
+rclone-set-config() {
+    local path="$1"
+
+    common-validate-required "$path" "config file path" || return 2
+
+    RCLONE_CONFIG="$path"
+    mkdir -p "$(dirname "$RCLONE_CONFIG")" 2>/dev/null || true
+    log-debug "Config file set" "path=$path"
+}
+
+# Set number of parallel transfers
+#
+# Function: rclone-set-transfers
+# Description: Change number of parallel transfers
+# Parameters:
+#   $1 - Number of transfers (required)
+# Returns:
+#   0 - Success
+#   2 - Invalid argument
+# Example:
+#   rclone-set-transfers 8
+#
+rclone-set-transfers() {
+    local count="$1"
+
+    common-validate-required "$count" "transfer count" || return 2
+    common-validate-numeric "$count" || return 2
+
+    RCLONE_TRANSFERS="$count"
+    log-debug "Transfers set" "count=$count"
+}
+
+# Set number of checkers
+#
+# Function: rclone-set-checkers
+# Description: Change number of parallel checkers
+# Parameters:
+#   $1 - Number of checkers (required)
+# Returns:
+#   0 - Success
+#   2 - Invalid argument
+# Example:
+#   rclone-set-checkers 16
+#
+rclone-set-checkers() {
+    local count="$1"
+
+    common-validate-required "$count" "checker count" || return 2
+    common-validate-numeric "$count" || return 2
+
+    RCLONE_CHECKERS="$count"
+    log-debug "Checkers set" "count=$count"
+}
+
+# Set bandwidth limit
+#
+# Function: rclone-set-bandwidth
+# Description: Set bandwidth limit for transfers
+# Parameters:
+#   $1 - Bandwidth limit (required, e.g., "10M", "1.5G", "off")
+# Returns:
+#   0 - Success
+#   2 - Invalid argument
+# Example:
+#   rclone-set-bandwidth "10M"
+#
+rclone-set-bandwidth() {
+    local limit="$1"
+
+    common-validate-required "$limit" "bandwidth limit" || return 2
+
+    if [[ "$limit" == "off" ]]; then
+        RCLONE_BANDWIDTH_LIMIT=""
+        log-debug "Bandwidth limit disabled"
+    else
+        RCLONE_BANDWIDTH_LIMIT="$limit"
+        log-debug "Bandwidth limit set" "limit=$limit"
+    fi
+}
+
+# Enable dry-run mode
+#
+# Function: rclone-enable-dry-run
+# Description: Enable dry-run mode (no actual operations)
+# Example:
+#   rclone-enable-dry-run
+#
+rclone-enable-dry-run() {
+    export RCLONE_DRY_RUN=true
+    log-info "Dry-run mode enabled"
+}
+
+# Disable dry-run mode
+#
+# Function: rclone-disable-dry-run
+# Description: Disable dry-run mode
+# Example:
+#   rclone-disable-dry-run
+#
+rclone-disable-dry-run() {
+    export RCLONE_DRY_RUN=false
+    log-info "Dry-run mode disabled"
+}
+
+# Set verbose level
+#
+# Function: rclone-set-verbose
+# Description: Set verbosity level (0-2)
+# Parameters:
+#   $1 - Verbose level (required, 0-2)
+# Returns:
+#   0 - Success
+#   2 - Invalid level
+# Example:
+#   rclone-set-verbose 1
+#
+rclone-set-verbose() {
+    local level="$1"
+
+    if ! [[ "$level" =~ ^[0-2]$ ]]; then
+        log-error "Invalid verbose level: $level (valid: 0, 1, 2)"
+        return 2
+    fi
+
+    RCLONE_VERBOSE="$level"
+    log-debug "Verbose level set" "level=$level"
+}
+
+# Set log level
+#
+# Function: rclone-set-log-level
+# Description: Set rclone log level
+# Parameters:
+#   $1 - Log level (required: DEBUG, INFO, NOTICE, ERROR)
+# Returns:
+#   0 - Success
+#   2 - Invalid level
+# Example:
+#   rclone-set-log-level DEBUG
+#
+rclone-set-log-level() {
+    local level="$1"
+
+    case "$level" in
+        DEBUG|INFO|NOTICE|ERROR)
+            RCLONE_LOG_LEVEL="$level"
+            log-debug "Log level set" "level=$level"
+            return 0
+            ;;
+        *)
+            log-error "Invalid log level: $level (valid: DEBUG, INFO, NOTICE, ERROR)"
+            return 2
+            ;;
+    esac
+}
+
+# Set exclude file
+#
+# Function: rclone-set-exclude-file
+# Description: Set path to exclude patterns file
+# Parameters:
+#   $1 - File path (required)
+# Returns:
+#   0 - Success
+#   2 - Invalid argument
+#   3 - File not found
+# Example:
+#   rclone-set-exclude-file "$HOME/.config/rclone/exclude.txt"
+#
+rclone-set-exclude-file() {
+    local file="$1"
+
+    common-validate-required "$file" "exclude file path" || return 2
+
+    if [[ ! -f "$file" ]]; then
+        log-error "Exclude file not found: $file"
+        return 3
+    fi
+
+    RCLONE_EXCLUDE_FILE="$file"
+    log-info "Exclude file set: $file"
+}
+
+# Set filter file
+#
+# Function: rclone-set-filter-file
+# Description: Set path to filter rules file
+# Parameters:
+#   $1 - File path (required)
+# Returns:
+#   0 - Success
+#   2 - Invalid argument
+#   3 - File not found
+# Example:
+#   rclone-set-filter-file "$HOME/.config/rclone/filter.txt"
+#
+rclone-set-filter-file() {
+    local file="$1"
+
+    common-validate-required "$file" "filter file path" || return 2
+
+    if [[ ! -f "$file" ]]; then
+        log-error "Filter file not found: $file"
+        return 3
+    fi
+
+    RCLONE_FILTER_FILE="$file"
+    log-info "Filter file set: $file"
+}
+
+# ------------------------------
+# Remote Management
+# ------------------------------
+
+# List all configured remotes
+#
+# Function: rclone-list-remotes
+# Description: List all configured rclone remotes
+# Output: List of remote names (one per line)
+# Returns:
+#   0 - Success
+#   1 - rclone not available or command failed
+# Example:
+#   rclone-list-remotes
+#
+rclone-list-remotes() {
+    if ! rclone-check-available; then
+        return 1
+    fi
+
+    # Try cache first
+    if [[ "$RCLONE_CACHE_AVAILABLE" == "true" ]]; then
+        local cached=$(cache-get "rclone:remotes:list")
+        if [[ -n "$cached" ]]; then
+            log-trace "Cache hit for remote list"
+            echo "$cached"
+            return 0
+        fi
+    fi
+
+    local -a args=($(_rclone-build-args))
+    local result
+    result=$(rclone listremotes "${args[@]}" 2>&1)
+    local exit_code=$?
+
+    if [[ $exit_code -ne 0 ]]; then
+        log-error "Failed to list remotes" "error=$result"
+        return 1
+    fi
+
+    # Cache successful result
+    if [[ "$RCLONE_CACHE_AVAILABLE" == "true" ]]; then
+        cache-set "rclone:remotes:list" "$result" "$RCLONE_CACHE_REMOTE_LIST_TTL"
+    fi
+
+    echo "$result"
+    return 0
+}
+
+# List remotes with types
+#
+# Function: rclone-list-remotes-long
+# Description: List all configured remotes with their types
+# Output: List of remotes with types (one per line)
+# Returns:
+#   0 - Success
+#   1 - rclone not available or command failed
+# Example:
+#   rclone-list-remotes-long
+#
+rclone-list-remotes-long() {
+    if ! rclone-check-available; then
+        return 1
+    fi
+
+    local -a args=($(_rclone-build-args))
+    rclone listremotes --long "${args[@]}"
+    return $?
+}
+
+# Get remote type
+#
+# Function: rclone-get-remote-type
+# Description: Get the type of a configured remote
+# Parameters:
+#   $1 - Remote name (required)
+# Output: Remote type string (e.g., "s3", "drive", "sftp")
+# Returns:
+#   0 - Success
+#   1 - rclone not available or command failed
+#   2 - Invalid argument
+# Example:
+#   type=$(rclone-get-remote-type "myremote")
+#
+rclone-get-remote-type() {
+    local remote="$1"
+
+    common-validate-required "$remote" "remote name" || return 2
+
+    if ! rclone-check-available; then
+        return 1
+    fi
+
+    # Try cache first
+    if [[ "$RCLONE_CACHE_AVAILABLE" == "true" ]]; then
+        local cached=$(cache-get "rclone:remote:type:${remote}")
+        if [[ -n "$cached" ]]; then
+            echo "$cached"
+            return 0
+        fi
+    fi
+
+    local type
+    type=$(rclone config show "$remote" 2>/dev/null | grep "^type" | awk '{print $3}')
+
+    # Cache result
+    if [[ "$RCLONE_CACHE_AVAILABLE" == "true" ]] && [[ -n "$type" ]]; then
+        cache-set "rclone:remote:type:${remote}" "$type" "$RCLONE_CACHE_REMOTE_LIST_TTL"
+    fi
+
+    echo "$type"
+}
+
+# Check if remote exists
+#
+# Function: rclone-remote-exists
+# Description: Check if a remote is configured
+# Parameters:
+#   $1 - Remote name (required)
+# Returns:
+#   0 - Remote exists
+#   1 - Remote does not exist
+# Example:
+#   if rclone-remote-exists "myremote"; then echo "Exists"; fi
+#
+rclone-remote-exists() {
+    local remote="$1"
+
+    [[ -z "$remote" ]] && return 1
+
+    rclone-list-remotes | grep -q "^${remote}:$"
+}
+
+# Create new remote interactively
+#
+# Function: rclone-create-remote
+# Description: Launch interactive remote creation wizard
+# Returns:
+#   0 - Success
+#   1 - rclone not available or command failed
+# Example:
+#   rclone-create-remote
+#
+rclone-create-remote() {
+    if ! rclone-check-available; then
+        return 1
+    fi
+
+    local -a args=($(_rclone-build-args))
+
+    log-info "Starting interactive remote configuration..."
+    rclone config "${args[@]}"
+    local exit_code=$?
+
+    # Clear remote list cache
+    if [[ "$RCLONE_CACHE_AVAILABLE" == "true" ]]; then
+        cache-clear-namespace "rclone:remotes"
+        cache-clear-namespace "rclone:remote"
+    fi
+
+    if [[ $exit_code -eq 0 ]]; then
+        _rclone-emit "$RCLONE_EVENT_REMOTE_CREATE"
+    fi
+
+    return $exit_code
+}
+
+# Delete remote
+#
+# Function: rclone-delete-remote
+# Description: Delete a configured remote
+# Parameters:
+#   $1 - Remote name (required)
+# Returns:
+#   0 - Success
+#   1 - rclone not available or command failed
+#   2 - Invalid argument
+# Example:
+#   rclone-delete-remote "old-remote"
+#
+rclone-delete-remote() {
+    local remote="$1"
+
+    common-validate-required "$remote" "remote name" || return 2
+
+    if ! rclone-check-available; then
+        return 1
+    fi
+
+    local -a args=($(_rclone-build-args))
+
+    log-info "Deleting remote" "name=$remote"
+    rclone config delete "$remote" "${args[@]}"
+    local exit_code=$?
+
+    # Clear cache
+    if [[ "$RCLONE_CACHE_AVAILABLE" == "true" ]]; then
+        cache-clear-namespace "rclone:remotes"
+        cache-clear-namespace "rclone:remote:type:${remote}"
+    fi
+
+    if [[ $exit_code -eq 0 ]]; then
+        _rclone-emit "$RCLONE_EVENT_REMOTE_DELETE" "name=$remote"
+        log-success "Remote deleted" "name=$remote"
+    else
+        log-error "Failed to delete remote" "name=$remote"
+    fi
+
+    return $exit_code
+}
+
+# Show remote configuration
+#
+# Function: rclone-show-remote
+# Description: Display remote configuration details
+# Parameters:
+#   $1 - Remote name (required)
+# Returns:
+#   0 - Success
+#   1 - rclone not available or command failed
+#   2 - Invalid argument
+# Example:
+#   rclone-show-remote "myremote"
+#
+rclone-show-remote() {
+    local remote="$1"
+
+    common-validate-required "$remote" "remote name" || return 2
+
+    if ! rclone-check-available; then
+        return 1
+    fi
+
+    rclone config show "$remote"
+    return $?
+}
+
+# ------------------------------
+# File Operations
+# ------------------------------
+
+# Copy files from source to destination
+#
+# Function: rclone-copy
+# Description: Copy files/directories from source to destination
+# Parameters:
+#   $1 - Source path (required, can be local or remote:path)
+#   $2 - Destination path (required, can be local or remote:path)
+# Returns:
+#   0 - Success
+#   1 - Command failed
+#   2 - Invalid argument
+# Example:
+#   rclone-copy "/local/data" "remote:/backup/data"
+#
+rclone-copy() {
+    local src="$1"
+    local dst="$2"
+
+    common-validate-required "$src" "source path" || return 2
+    common-validate-required "$dst" "destination path" || return 2
+
+    if ! rclone-check-available; then
+        return 1
+    fi
+
+    local -a args=($(_rclone-build-args))
+
+    log-info "Copying" "src=$src" "dst=$dst"
+    _rclone-emit "$RCLONE_EVENT_TRANSFER_START" "operation=copy" "src=$src" "dst=$dst"
+
+    rclone copy "$src" "$dst" "${args[@]}"
+    _RCLONE_LAST_EXIT_CODE=$?
+
+    if [[ $_RCLONE_LAST_EXIT_CODE -eq 0 ]]; then
+        _rclone-emit "$RCLONE_EVENT_TRANSFER_COMPLETE" "operation=copy" "src=$src" "dst=$dst"
+        log-success "Copy complete" "src=$src" "dst=$dst"
+    else
+        _rclone-emit "$RCLONE_EVENT_TRANSFER_ERROR" "operation=copy" "src=$src" "dst=$dst" "code=$_RCLONE_LAST_EXIT_CODE"
+        log-error "Copy failed" "src=$src" "dst=$dst"
+    fi
+
+    return $_RCLONE_LAST_EXIT_CODE
+}
+
+# Move files from source to destination
+#
+# Function: rclone-move
+# Description: Move files/directories from source to destination
+# Parameters:
+#   $1 - Source path (required)
+#   $2 - Destination path (required)
+# Returns:
+#   0 - Success
+#   1 - Command failed
+#   2 - Invalid argument
+# Example:
+#   rclone-move "/local/data" "remote:/archive/data"
+#
+rclone-move() {
+    local src="$1"
+    local dst="$2"
+
+    common-validate-required "$src" "source path" || return 2
+    common-validate-required "$dst" "destination path" || return 2
+
+    if ! rclone-check-available; then
+        return 1
+    fi
+
+    local -a args=($(_rclone-build-args))
+
+    log-info "Moving" "src=$src" "dst=$dst"
+    _rclone-emit "$RCLONE_EVENT_TRANSFER_START" "operation=move" "src=$src" "dst=$dst"
+
+    rclone move "$src" "$dst" "${args[@]}"
+    _RCLONE_LAST_EXIT_CODE=$?
+
+    if [[ $_RCLONE_LAST_EXIT_CODE -eq 0 ]]; then
+        _rclone-emit "$RCLONE_EVENT_TRANSFER_COMPLETE" "operation=move" "src=$src" "dst=$dst"
+        log-success "Move complete" "src=$src" "dst=$dst"
+    else
+        _rclone-emit "$RCLONE_EVENT_TRANSFER_ERROR" "operation=move" "src=$src" "dst=$dst" "code=$_RCLONE_LAST_EXIT_CODE"
+        log-error "Move failed" "src=$src" "dst=$dst"
+    fi
+
+    return $_RCLONE_LAST_EXIT_CODE
+}
+
+# Sync source to destination
+#
+# Function: rclone-sync
+# Description: Sync source to destination (make destination identical to source)
+# Parameters:
+#   $1 - Source path (required)
+#   $2 - Destination path (required)
+# Returns:
+#   0 - Success
+#   1 - Command failed
+#   2 - Invalid argument
+# Example:
+#   rclone-sync "/local/data" "remote:/backup/data"
+#
+rclone-sync() {
+    local src="$1"
+    local dst="$2"
+
+    common-validate-required "$src" "source path" || return 2
+    common-validate-required "$dst" "destination path" || return 2
+
+    if ! rclone-check-available; then
+        return 1
+    fi
+
+    local -a args=($(_rclone-build-args))
+
+    log-warn "Syncing (destination will be modified)" "src=$src" "dst=$dst"
+    _rclone-emit "$RCLONE_EVENT_TRANSFER_START" "operation=sync" "src=$src" "dst=$dst"
+
+    rclone sync "$src" "$dst" "${args[@]}"
+    _RCLONE_LAST_EXIT_CODE=$?
+
+    if [[ $_RCLONE_LAST_EXIT_CODE -eq 0 ]]; then
+        _rclone-emit "$RCLONE_EVENT_TRANSFER_COMPLETE" "operation=sync" "src=$src" "dst=$dst"
+        log-success "Sync complete" "src=$src" "dst=$dst"
+    else
+        _rclone-emit "$RCLONE_EVENT_TRANSFER_ERROR" "operation=sync" "src=$src" "dst=$dst" "code=$_RCLONE_LAST_EXIT_CODE"
+        log-error "Sync failed" "src=$src" "dst=$dst"
+    fi
+
+    return $_RCLONE_LAST_EXIT_CODE
+}
+
+# Bidirectional sync
+#
+# Function: rclone-bisync
+# Description: Perform bidirectional sync between two paths
+# Parameters:
+#   $1 - Path 1 (required)
+#   $2 - Path 2 (required)
+# Returns:
+#   0 - Success
+#   1 - Command failed
+#   2 - Invalid argument
+# Example:
+#   rclone-bisync "/local/data" "remote:/sync/data"
+#
+rclone-bisync() {
+    local path1="$1"
+    local path2="$2"
+
+    common-validate-required "$path1" "path 1" || return 2
+    common-validate-required "$path2" "path 2" || return 2
+
+    if ! rclone-check-available; then
+        return 1
+    fi
+
+    local -a args=($(_rclone-build-args))
+
+    log-info "Bi-directional sync" "path1=$path1" "path2=$path2"
+    _rclone-emit "$RCLONE_EVENT_TRANSFER_START" "operation=bisync" "path1=$path1" "path2=$path2"
+
+    rclone bisync "$path1" "$path2" "${args[@]}"
+    _RCLONE_LAST_EXIT_CODE=$?
+
+    if [[ $_RCLONE_LAST_EXIT_CODE -eq 0 ]]; then
+        _rclone-emit "$RCLONE_EVENT_TRANSFER_COMPLETE" "operation=bisync" "path1=$path1" "path2=$path2"
+        log-success "Bisync complete" "path1=$path1" "path2=$path2"
+    else
+        _rclone-emit "$RCLONE_EVENT_TRANSFER_ERROR" "operation=bisync" "path1=$path1" "path2=$path2" "code=$_RCLONE_LAST_EXIT_CODE"
+        log-error "Bisync failed" "path1=$path1" "path2=$path2"
+    fi
+
+    return $_RCLONE_LAST_EXIT_CODE
+}
+
+# Check if files are the same
+#
+# Function: rclone-check-files
+# Description: Compare files between source and destination
+# Parameters:
+#   $1 - Source path (required)
+#   $2 - Destination path (required)
+# Returns:
+#   0 - Files are identical
+#   1 - Files differ or command failed
+#   2 - Invalid argument
+# Example:
+#   rclone-check-files "/local/data" "remote:/backup/data"
+#
+rclone-check-files() {
+    local src="$1"
+    local dst="$2"
+
+    common-validate-required "$src" "source path" || return 2
+    common-validate-required "$dst" "destination path" || return 2
+
+    if ! rclone-check-available; then
+        return 1
+    fi
+
+    local -a args=($(_rclone-build-args))
+
+    log-info "Checking files" "src=$src" "dst=$dst"
+    rclone check "$src" "$dst" "${args[@]}"
+    return $?
+}
+
+# List directory contents
+#
+# Function: rclone-ls
+# Description: List files in a path with sizes
+# Parameters:
+#   $1 - Path (required, can be local or remote:path)
+# Returns:
+#   0 - Success
+#   1 - Command failed
+#   2 - Invalid argument
+# Example:
+#   rclone-ls "remote:/data"
+#
+rclone-ls() {
+    local path="$1"
+
+    common-validate-required "$path" "path" || return 2
+
+    if ! rclone-check-available; then
+        return 1
+    fi
+
+    local -a args=($(_rclone-build-args))
+    rclone ls "$path" "${args[@]}"
+    return $?
+}
+
+# List directory contents (long format)
+#
+# Function: rclone-lsl
+# Description: List files in long format with timestamps
+# Parameters:
+#   $1 - Path (required)
+# Returns:
+#   0 - Success
+#   1 - Command failed
+#   2 - Invalid argument
+# Example:
+#   rclone-lsl "remote:/data"
+#
+rclone-lsl() {
+    local path="$1"
+
+    common-validate-required "$path" "path" || return 2
+
+    if ! rclone-check-available; then
+        return 1
+    fi
+
+    local -a args=($(_rclone-build-args))
+    rclone lsl "$path" "${args[@]}"
+    return $?
+}
+
+# List directories only
+#
+# Function: rclone-lsd
+# Description: List directories only
+# Parameters:
+#   $1 - Path (required)
+# Returns:
+#   0 - Success
+#   1 - Command failed
+#   2 - Invalid argument
+# Example:
+#   rclone-lsd "remote:/data"
+#
+rclone-lsd() {
+    local path="$1"
+
+    common-validate-required "$path" "path" || return 2
+
+    if ! rclone-check-available; then
+        return 1
+    fi
+
+    local -a args=($(_rclone-build-args))
+    rclone lsd "$path" "${args[@]}"
+    return $?
+}
+
+# List files in JSON format
+#
+# Function: rclone-lsjson
+# Description: List files in JSON format (useful for parsing)
+# Parameters:
+#   $1 - Path (required)
+# Returns:
+#   0 - Success
+#   1 - Command failed
+#   2 - Invalid argument
+# Output: JSON array of file objects
+# Example:
+#   files=$(rclone-lsjson "remote:/data" | jq '.[].Name')
+#
+rclone-lsjson() {
+    local path="$1"
+
+    common-validate-required "$path" "path" || return 2
+
+    if ! rclone-check-available; then
+        return 1
+    fi
+
+    local -a args=($(_rclone-build-args))
+    rclone lsjson "$path" "${args[@]}"
+    return $?
+}
+
+# Get path size
+#
+# Function: rclone-size
+# Description: Get total size of path
+# Parameters:
+#   $1 - Path (required)
+# Returns:
+#   0 - Success
+#   1 - Command failed
+#   2 - Invalid argument
+# Example:
+#   rclone-size "remote:/data"
+#
+rclone-size() {
+    local path="$1"
+
+    common-validate-required "$path" "path" || return 2
+
+    if ! rclone-check-available; then
+        return 1
+    fi
+
+    local -a args=($(_rclone-build-args))
+    rclone size "$path" "${args[@]}"
+    return $?
+}
+
+# Delete files
+#
+# Function: rclone-delete
+# Description: Delete files from path
+# Parameters:
+#   $1 - Path (required)
+# Returns:
+#   0 - Success
+#   1 - Command failed
+#   2 - Invalid argument
+# Example:
+#   rclone-delete "remote:/old-data"
+#
+rclone-delete() {
+    local path="$1"
+
+    common-validate-required "$path" "path" || return 2
+
+    if ! rclone-check-available; then
+        return 1
+    fi
+
+    local -a args=($(_rclone-build-args))
+
+    log-warn "Deleting files" "path=$path"
+    rclone delete "$path" "${args[@]}"
+    _RCLONE_LAST_EXIT_CODE=$?
+
+    if [[ $_RCLONE_LAST_EXIT_CODE -eq 0 ]]; then
+        log-success "Delete complete" "path=$path"
+    else
+        log-error "Delete failed" "path=$path"
+    fi
+
+    return $_RCLONE_LAST_EXIT_CODE
+}
+
+# Purge directory
+#
+# Function: rclone-purge
+# Description: Delete directory and all contents
+# Parameters:
+#   $1 - Path (required)
+# Returns:
+#   0 - Success
+#   1 - Command failed
+#   2 - Invalid argument
+# Example:
+#   rclone-purge "remote:/old-directory"
+#
+rclone-purge() {
+    local path="$1"
+
+    common-validate-required "$path" "path" || return 2
+
+    if ! rclone-check-available; then
+        return 1
+    fi
+
+    local -a args=($(_rclone-build-args))
+
+    log-warn "Purging directory (recursive delete)" "path=$path"
+    rclone purge "$path" "${args[@]}"
+    _RCLONE_LAST_EXIT_CODE=$?
+
+    if [[ $_RCLONE_LAST_EXIT_CODE -eq 0 ]]; then
+        log-success "Purge complete" "path=$path"
+    else
+        log-error "Purge failed" "path=$path"
+    fi
+
+    return $_RCLONE_LAST_EXIT_CODE
+}
+
+# Remove empty directories
+#
+# Function: rclone-rmdirs
+# Description: Remove empty directories from path
+# Parameters:
+#   $1 - Path (required)
+# Returns:
+#   0 - Success
+#   1 - Command failed
+#   2 - Invalid argument
+# Example:
+#   rclone-rmdirs "remote:/cleanup"
+#
+rclone-rmdirs() {
+    local path="$1"
+
+    common-validate-required "$path" "path" || return 2
+
+    if ! rclone-check-available; then
+        return 1
+    fi
+
+    local -a args=($(_rclone-build-args))
+
+    log-info "Removing empty directories" "path=$path"
+    rclone rmdirs "$path" "${args[@]}"
+    return $?
+}
+
+# Create directory
+#
+# Function: rclone-mkdir
+# Description: Create directory
+# Parameters:
+#   $1 - Path (required)
+# Returns:
+#   0 - Success
+#   1 - Command failed
+#   2 - Invalid argument
+# Example:
+#   rclone-mkdir "remote:/new-directory"
+#
+rclone-mkdir() {
+    local path="$1"
+
+    common-validate-required "$path" "path" || return 2
+
+    if ! rclone-check-available; then
+        return 1
+    fi
+
+    local -a args=($(_rclone-build-args))
+
+    log-info "Creating directory" "path=$path"
+    rclone mkdir "$path" "${args[@]}"
+    return $?
+}
+
+# Remove directory
+#
+# Function: rclone-rmdir
+# Description: Remove empty directory
+# Parameters:
+#   $1 - Path (required)
+# Returns:
+#   0 - Success
+#   1 - Command failed
+#   2 - Invalid argument
+# Example:
+#   rclone-rmdir "remote:/empty-directory"
+#
+rclone-rmdir() {
+    local path="$1"
+
+    common-validate-required "$path" "path" || return 2
+
+    if ! rclone-check-available; then
+        return 1
+    fi
+
+    local -a args=($(_rclone-build-args))
+
+    log-info "Removing directory" "path=$path"
+    rclone rmdir "$path" "${args[@]}"
+    return $?
+}
+
+# ------------------------------
+# Mount Operations
+# ------------------------------
+
+# Mount remote
+#
+# Function: rclone-mount
+# Description: Mount remote as filesystem
+# Parameters:
+#   $1 - Remote path (required, e.g., "remote:" or "remote:/subdir")
+#   $2 - Mountpoint (required, local directory path)
+#   $@ - Additional mount options (optional)
+# Returns:
+#   0 - Success
+#   1 - Mount failed
+#   2 - Invalid argument
+# Example:
+#   rclone-mount "remote:" "/mnt/remote" --read-only
+#
+rclone-mount() {
+    local remote="$1"
+    local mountpoint="$2"
+    shift 2
+    local -a extra_opts=("$@")
+
+    common-validate-required "$remote" "remote path" || return 2
+    common-validate-required "$mountpoint" "mountpoint" || return 2
+
+    if ! rclone-check-available; then
+        return 1
+    fi
+
+    # Create mountpoint if doesn't exist
+    if [[ ! -d "$mountpoint" ]]; then
+        mkdir -p "$mountpoint" || {
+            log-error "Failed to create mountpoint" "path=$mountpoint"
+            return 1
+        }
+    fi
+
+    # Check if already mounted
+    if mountpoint -q "$mountpoint" 2>/dev/null; then
+        log-error "Already mounted" "path=$mountpoint"
+        return 1
+    fi
+
+    local -a args=($(_rclone-build-args))
+
+    # Add default mount options
+    if [[ -n "$RCLONE_MOUNT_OPTIONS" ]]; then
+        args+=(${(z)RCLONE_MOUNT_OPTIONS})
+    fi
+
+    # Add extra options
+    if [[ ${#extra_opts[@]} -gt 0 ]]; then
+        args+=("${extra_opts[@]}")
+    fi
+
+    log-info "Mounting" "remote=$remote" "mountpoint=$mountpoint"
+
+    # Mount in background (daemon mode)
+    rclone mount "$remote" "$mountpoint" --daemon "${args[@]}"
+    local exit_code=$?
+
+    if [[ $exit_code -eq 0 ]]; then
+        _RCLONE_MOUNTS[$mountpoint]="$remote"
+        _rclone-emit "$RCLONE_EVENT_MOUNT_CREATE" "remote=$remote" "mountpoint=$mountpoint"
+
+        # Register cleanup with lifecycle
+        if [[ "$RCLONE_LIFECYCLE_AVAILABLE" == "true" ]]; then
+            lifecycle-cleanup "rclone-unmount '$mountpoint'"
+        fi
+
+        log-success "Mounted successfully" "remote=$remote" "mountpoint=$mountpoint"
+    else
+        log-error "Mount failed" "remote=$remote" "mountpoint=$mountpoint"
+    fi
+
+    return $exit_code
+}
+
+# Unmount remote
+#
+# Function: rclone-unmount
+# Description: Unmount mounted remote
+# Parameters:
+#   $1 - Mountpoint (required)
+# Returns:
+#   0 - Success
+#   1 - Unmount failed
+#   2 - Invalid argument
+# Example:
+#   rclone-unmount "/mnt/remote"
+#
+rclone-unmount() {
+    local mountpoint="$1"
+
+    common-validate-required "$mountpoint" "mountpoint" || return 2
+
+    if ! mountpoint -q "$mountpoint" 2>/dev/null; then
+        log-error "Not mounted" "path=$mountpoint"
+        return 1
+    fi
+
+    log-info "Unmounting" "path=$mountpoint"
+
+    # Try fusermount first, then umount
+    local exit_code
+    if common-command-exists fusermount; then
+        fusermount -u "$mountpoint"
+        exit_code=$?
+    elif common-command-exists umount; then
+        umount "$mountpoint"
+        exit_code=$?
+    else
+        log-error "No unmount tool available (fusermount, umount)"
+        return 1
+    fi
+
+    if [[ $exit_code -eq 0 ]]; then
+        local remote="${_RCLONE_MOUNTS[$mountpoint]}"
+        unset "_RCLONE_MOUNTS[$mountpoint]"
+        _rclone-emit "$RCLONE_EVENT_MOUNT_DESTROY" "remote=$remote" "mountpoint=$mountpoint"
+        log-success "Unmounted successfully" "path=$mountpoint"
+    else
+        log-error "Unmount failed" "path=$mountpoint"
+    fi
+
+    return $exit_code
+}
+
+# List active mounts
+#
+# Function: rclone-list-mounts
+# Description: List all active rclone mounts tracked by this extension
+# Output: List of mount information
+# Example:
+#   rclone-list-mounts
+#
+rclone-list-mounts() {
+    if [[ ${#_RCLONE_MOUNTS[@]} -eq 0 ]]; then
+        echo "No active rclone mounts"
+        return 0
+    fi
+
+    echo "Active rclone mounts:"
+    for mountpoint in ${(k)_RCLONE_MOUNTS[@]}; do
+        echo "  ${_RCLONE_MOUNTS[$mountpoint]} -> $mountpoint"
+    done
+}
+
+# Check if path is mounted
+#
+# Function: rclone-is-mounted
+# Description: Check if a path is currently mounted
+# Parameters:
+#   $1 - Mountpoint (required)
+# Returns:
+#   0 - Path is mounted
+#   1 - Path is not mounted
+# Example:
+#   if rclone-is-mounted "/mnt/remote"; then echo "Mounted"; fi
+#
+rclone-is-mounted() {
+    local mountpoint="$1"
+
+    [[ -z "$mountpoint" ]] && return 1
+
+    mountpoint -q "$mountpoint" 2>/dev/null
+}
+
+# ------------------------------
+# Server Operations
+# ------------------------------
+
+# Serve HTTP
+#
+# Function: rclone-serve-http
+# Description: Serve path over HTTP
+# Parameters:
+#   $1 - Path (required)
+#   $2 - Address (optional, default: localhost:8080)
+# Returns:
+#   0 - Success (server runs in foreground)
+#   1 - Command failed
+#   2 - Invalid argument
+# Example:
+#   rclone-serve-http "remote:/public" "0.0.0.0:8080"
+#
+rclone-serve-http() {
+    local path="$1"
+    local addr="${2:-localhost:8080}"
+
+    common-validate-required "$path" "path" || return 2
+
+    if ! rclone-check-available; then
+        return 1
+    fi
+
+    local -a args=($(_rclone-build-args))
+
+    log-info "Starting HTTP server" "path=$path" "addr=$addr"
+    rclone serve http "$path" --addr "$addr" "${args[@]}"
+    return $?
+}
+
+# Serve WebDAV
+#
+# Function: rclone-serve-webdav
+# Description: Serve path over WebDAV
+# Parameters:
+#   $1 - Path (required)
+#   $2 - Address (optional, default: localhost:8080)
+# Returns:
+#   0 - Success
+#   1 - Command failed
+#   2 - Invalid argument
+# Example:
+#   rclone-serve-webdav "remote:/data" "localhost:8080"
+#
+rclone-serve-webdav() {
+    local path="$1"
+    local addr="${2:-localhost:8080}"
+
+    common-validate-required "$path" "path" || return 2
+
+    if ! rclone-check-available; then
+        return 1
+    fi
+
+    local -a args=($(_rclone-build-args))
+
+    log-info "Starting WebDAV server" "path=$path" "addr=$addr"
+    rclone serve webdav "$path" --addr "$addr" "${args[@]}"
+    return $?
+}
+
+# Serve FTP
+#
+# Function: rclone-serve-ftp
+# Description: Serve path over FTP
+# Parameters:
+#   $1 - Path (required)
+#   $2 - Address (optional, default: localhost:2121)
+# Returns:
+#   0 - Success
+#   1 - Command failed
+#   2 - Invalid argument
+# Example:
+#   rclone-serve-ftp "remote:/data" "localhost:2121"
+#
+rclone-serve-ftp() {
+    local path="$1"
+    local addr="${2:-localhost:2121}"
+
+    common-validate-required "$path" "path" || return 2
+
+    if ! rclone-check-available; then
+        return 1
+    fi
+
+    local -a args=($(_rclone-build-args))
+
+    log-info "Starting FTP server" "path=$path" "addr=$addr"
+    rclone serve ftp "$path" --addr "$addr" "${args[@]}"
+    return $?
+}
+
+# Serve SFTP
+#
+# Function: rclone-serve-sftp
+# Description: Serve path over SFTP
+# Parameters:
+#   $1 - Path (required)
+#   $2 - Address (optional, default: localhost:2022)
+# Returns:
+#   0 - Success
+#   1 - Command failed
+#   2 - Invalid argument
+# Example:
+#   rclone-serve-sftp "remote:/data" "localhost:2022"
+#
+rclone-serve-sftp() {
+    local path="$1"
+    local addr="${2:-localhost:2022}"
+
+    common-validate-required "$path" "path" || return 2
+
+    if ! rclone-check-available; then
+        return 1
+    fi
+
+    local -a args=($(_rclone-build-args))
+
+    log-info "Starting SFTP server" "path=$path" "addr=$addr"
+    rclone serve sftp "$path" --addr "$addr" "${args[@]}"
+    return $?
+}
+
+# Serve Restic repository
+#
+# Function: rclone-serve-restic
+# Description: Serve path as Restic REST repository
+# Parameters:
+#   $1 - Path (required)
+#   $2 - Address (optional, default: localhost:8080)
+# Returns:
+#   0 - Success
+#   1 - Command failed
+#   2 - Invalid argument
+# Example:
+#   rclone-serve-restic "remote:/backups" "localhost:8080"
+#
+rclone-serve-restic() {
+    local path="$1"
+    local addr="${2:-localhost:8080}"
+
+    common-validate-required "$path" "path" || return 2
+
+    if ! rclone-check-available; then
+        return 1
+    fi
+
+    local -a args=($(_rclone-build-args))
+
+    log-info "Starting Restic REST server" "path=$path" "addr=$addr"
+    rclone serve restic "$path" --addr "$addr" "${args[@]}"
+    return $?
+}
+
+# ------------------------------
+# RC (Remote Control) Operations
+# ------------------------------
+
+# Start RC server
+#
+# Function: rclone-rc-start
+# Description: Start rclone RC (Remote Control) server
+# Returns:
+#   0 - Success
+#   1 - Already running or start failed
+# Example:
+#   rclone-rc-start
+#
+rclone-rc-start() {
+    if ! rclone-check-available; then
+        return 1
+    fi
+
+    if [[ -n "$RCLONE_RC_PID" ]] && kill -0 "$RCLONE_RC_PID" 2>/dev/null; then
+        log-error "RC server already running" "pid=$RCLONE_RC_PID"
+        return 1
+    fi
+
+    local -a args=($(_rclone-build-args))
+    args+=(--rc)
+    args+=(--rc-addr "$RCLONE_RC_ADDR")
+
+    if [[ -n "$RCLONE_RC_USER" ]] && [[ -n "$RCLONE_RC_PASS" ]]; then
+        args+=(--rc-user "$RCLONE_RC_USER")
+        args+=(--rc-pass "$RCLONE_RC_PASS")
+    fi
+
+    log-info "Starting RC server" "addr=$RCLONE_RC_ADDR"
+
+    rclone rcd "${args[@]}" &
+    RCLONE_RC_PID=$!
+
+    # Wait to verify startup
+    sleep 1
+
+    if kill -0 "$RCLONE_RC_PID" 2>/dev/null; then
+        _rclone-emit "$RCLONE_EVENT_RC_START" "pid=$RCLONE_RC_PID" "addr=$RCLONE_RC_ADDR"
+
+        # Register cleanup with lifecycle
+        if [[ "$RCLONE_LIFECYCLE_AVAILABLE" == "true" ]]; then
+            lifecycle-track-job $RCLONE_RC_PID
+        fi
+
+        log-success "RC server started" "pid=$RCLONE_RC_PID"
+        return 0
+    else
+        log-error "RC server failed to start"
+        RCLONE_RC_PID=""
+        return 1
+    fi
+}
+
+# Stop RC server
+#
+# Function: rclone-rc-stop
+# Description: Stop rclone RC server
+# Returns:
+#   0 - Success
+#   1 - Not running or stop failed
+# Example:
+#   rclone-rc-stop
+#
+rclone-rc-stop() {
+    if [[ -z "$RCLONE_RC_PID" ]]; then
+        log-error "RC server not running"
+        return 1
+    fi
+
+    if ! kill -0 "$RCLONE_RC_PID" 2>/dev/null; then
+        log-error "RC server PID not found" "pid=$RCLONE_RC_PID"
+        RCLONE_RC_PID=""
+        return 1
+    fi
+
+    log-info "Stopping RC server" "pid=$RCLONE_RC_PID"
+
+    kill "$RCLONE_RC_PID" 2>/dev/null
+    local exit_code=$?
+
+    if [[ $exit_code -eq 0 ]]; then
+        _rclone-emit "$RCLONE_EVENT_RC_STOP" "pid=$RCLONE_RC_PID"
+        RCLONE_RC_PID=""
+        log-success "RC server stopped"
+    else
+        log-error "Failed to stop RC server"
+    fi
+
+    return $exit_code
+}
+
+# Check if RC server is running
+#
+# Function: rclone-rc-is-running
+# Description: Check if RC server is running
+# Returns:
+#   0 - RC server is running
+#   1 - RC server is not running
+# Example:
+#   if rclone-rc-is-running; then echo "Running"; fi
+#
+rclone-rc-is-running() {
+    if [[ -n "$RCLONE_RC_PID" ]] && kill -0 "$RCLONE_RC_PID" 2>/dev/null; then
+        return 0
+    fi
+    return 1
+}
+
+# Call RC endpoint
+#
+# Function: rclone-rc-call
+# Description: Call rclone RC API endpoint
+# Parameters:
+#   $1 - Endpoint (required, e.g., "core/stats")
+#   $@ - JSON data (optional)
+# Returns:
+#   0 - Success
+#   1 - Command failed
+#   2 - Invalid argument
+# Example:
+#   rclone-rc-call "core/stats"
+#
+rclone-rc-call() {
+    local endpoint="$1"
+    shift
+    local json_data="$@"
+
+    common-validate-required "$endpoint" "endpoint" || return 2
+
+    if ! rclone-check-available; then
+        return 1
+    fi
+
+    local -a args=($(_rclone-build-args))
+    args+=(--rc-addr "$RCLONE_RC_ADDR")
+
+    if [[ -n "$RCLONE_RC_USER" ]] && [[ -n "$RCLONE_RC_PASS" ]]; then
+        args+=(--rc-user "$RCLONE_RC_USER")
+        args+=(--rc-pass "$RCLONE_RC_PASS")
+    fi
+
+    if [[ -n "$json_data" ]]; then
+        args+=(--json "$json_data")
+    fi
+
+    rclone rc "$endpoint" "${args[@]}"
+    return $?
+}
+
+# Get RC stats
+#
+# Function: rclone-rc-stats
+# Description: Get RC server statistics
+# Output: JSON statistics
+# Example:
+#   stats=$(rclone-rc-stats)
+#
+rclone-rc-stats() {
+    rclone-rc-call "core/stats"
+}
+
+# Get RC version
+#
+# Function: rclone-rc-version
+# Description: Get RC server version information
+# Output: JSON version information
+# Example:
+#   version=$(rclone-rc-version)
+#
+rclone-rc-version() {
+    rclone-rc-call "core/version"
+}
+
+# ------------------------------
+# Transfer Management
+# ------------------------------
+
+# Get transfer stats
+#
+# Function: rclone-stats
+# Description: Get transfer statistics for path
+# Parameters:
+#   $1 - Path (required)
+# Returns:
+#   0 - Success
+#   1 - Command failed
+#   2 - Invalid argument
+# Example:
+#   rclone-stats "remote:/data"
+#
+rclone-stats() {
+    local path="$1"
+
+    common-validate-required "$path" "path" || return 2
+
+    if ! rclone-check-available; then
+        return 1
+    fi
+
+    local -a args=($(_rclone-build-args))
+    rclone size "$path" --json "${args[@]}"
+    return $?
+}
+
+# Clean up failed transfers
+#
+# Function: rclone-cleanup
+# Description: Clean up failed or partial transfers
+# Parameters:
+#   $1 - Path (required)
+# Returns:
+#   0 - Success
+#   1 - Command failed
+#   2 - Invalid argument
+# Example:
+#   rclone-cleanup "remote:/data"
+#
+rclone-cleanup() {
+    local path="$1"
+
+    common-validate-required "$path" "path" || return 2
+
+    if ! rclone-check-available; then
+        return 1
+    fi
+
+    local -a args=($(_rclone-build-args))
+
+    log-info "Cleaning up" "path=$path"
+    rclone cleanup "$path" "${args[@]}"
+    return $?
+}
+
+# Deduplicate files
+#
+# Function: rclone-dedupe
+# Description: Deduplicate files in path
+# Parameters:
+#   $1 - Path (required)
+#   $2 - Mode (optional, default: interactive)
+#       Valid modes: interactive, first, newest, oldest, rename, list
+# Returns:
+#   0 - Success
+#   1 - Command failed
+#   2 - Invalid argument
+# Example:
+#   rclone-dedupe "remote:/data" "newest"
+#
+rclone-dedupe() {
+    local path="$1"
+    local mode="${2:-interactive}"
+
+    common-validate-required "$path" "path" || return 2
+
+    if ! rclone-check-available; then
+        return 1
+    fi
+
+    local -a args=($(_rclone-build-args))
+
+    log-info "Deduplicating" "path=$path" "mode=$mode"
+    rclone dedupe "$mode" "$path" "${args[@]}"
+    return $?
+}
+
+# Get about information for remote
+#
+# Function: rclone-about
+# Description: Get quota and usage information for remote
+# Parameters:
+#   $1 - Remote name (required)
+# Returns:
+#   0 - Success
+#   1 - Command failed
+#   2 - Invalid argument
+# Example:
+#   rclone-about "remote:"
+#
+rclone-about() {
+    local remote="$1"
+
+    common-validate-required "$remote" "remote" || return 2
+
+    if ! rclone-check-available; then
+        return 1
+    fi
+
+    local -a args=($(_rclone-build-args))
+    rclone about "$remote" "${args[@]}"
+    return $?
+}
+
+# ------------------------------
+# JSON Helpers (for RC operations)
+# ------------------------------
+
+# Build operation JSON for RC
+#
+# Function: rclone-build-operation-json
+# Description: Build JSON for RC operation request
+# Parameters:
+#   $1 - Source filesystem (required)
+#   $2 - Destination filesystem (required)
+# Output: JSON string
+# Example:
+#   json=$(rclone-build-operation-json "/tmp/src" "remote:dst")
+#
+rclone-build-operation-json() {
+    local src="$1"
+    local dst="$2"
+
+    cat <<EOF
+{
+    "srcFs": "${src}",
+    "dstFs": "${dst}",
+    "deleteEmptySrcDirs": true
+}
+EOF
+}
+
+# Build options JSON for RC
+#
+# Function: rclone-build-options-json
+# Description: Build JSON for RC options
+# Parameters:
+#   $1 - Filter file path (optional)
+# Output: JSON string
+# Example:
+#   json=$(rclone-build-options-json "/path/to/filters.txt")
+#
+rclone-build-options-json() {
+    local filter_file="${1:-}"
+
+    if [[ -n "$filter_file" ]]; then
+        cat <<EOF
+{
+    "filter": {
+        "FilterFrom": ["${filter_file}"]
+    },
+    "main": {
+        "TPSLimit": 3,
+        "Transfers": ${RCLONE_TRANSFERS}
+    }
+}
+EOF
+    else
+        cat <<EOF
+{
+    "main": {
+        "TPSLimit": 3,
+        "Transfers": ${RCLONE_TRANSFERS}
+    }
+}
+EOF
+    fi
+}
+
+# ------------------------------
+# Cleanup
+# ------------------------------
+
+# Cleanup function
+#
+# Function: rclone-cleanup
+# Description: Clean up rclone resources (mounts, RC server)
+# Example:
+#   rclone-cleanup  # Usually called automatically via lifecycle
+#
+rclone-cleanup() {
+    log-debug "Cleaning up rclone extension"
+
+    # Stop RC server if running
+    if rclone-rc-is-running; then
+        rclone-rc-stop 2>/dev/null || true
+    fi
+
+    # Unmount all tracked mounts
+    for mountpoint in "${(@k)_RCLONE_MOUNTS}"; do
+        log-debug "Unmounting tracked mount" "path=$mountpoint"
+        rclone-unmount "$mountpoint" 2>/dev/null || true
+    done
+
+    # Clear tracking
+    _RCLONE_MOUNTS=()
+}
+
+# ------------------------------
+# Utility Functions
+# ------------------------------
+
+# Get last exit code
+#
+# Function: rclone-last-exit-code
+# Description: Get exit code from last rclone operation
+# Output: Exit code integer
+# Example:
+#   code=$(rclone-last-exit-code)
+#
+rclone-last-exit-code() {
+    echo "$_RCLONE_LAST_EXIT_CODE"
+}
+
+# Display version
+#
+# Function: rclone-ext-version
+# Description: Display extension version
+# Output: Version string
+# Example:
+#   rclone-ext-version
+#
+rclone-ext-version() {
+    echo "$RCLONE_VERSION"
+}
+
+# Display help
+#
+# Function: rclone-help
+# Description: Display comprehensive help information
+# Example:
+#   rclone-help
+#
+rclone-help() {
+    cat <<EOF
+_rclone - Rclone Remote Storage Management
+
+Version: $RCLONE_VERSION
+
+INTEGRATION STATUS:
+  _common:    yes (required)
+  _log:       $(typeset -f log-info >/dev/null && echo "yes" || echo "no")
+  _events:    ${RCLONE_EVENTS_AVAILABLE}
+  _cache:     ${RCLONE_CACHE_AVAILABLE}
+  _lifecycle: ${RCLONE_LIFECYCLE_AVAILABLE}
+  _config:    ${RCLONE_CONFIG_AVAILABLE}
+
+USAGE:
+  source "\${DOTLIB}/_rclone"
+
+AVAILABILITY:
+  rclone-check-available        Check if rclone is installed
+  rclone-require-available      Exit if rclone not available
+  rclone-get-version            Get rclone version
+  rclone-get-config             Display configuration
+
+CONFIGURATION:
+  rclone-set-config PATH        Set config file path
+  rclone-set-transfers N        Set parallel transfers
+  rclone-set-checkers N         Set parallel checkers
+  rclone-set-bandwidth LIMIT    Set bandwidth limit
+  rclone-enable-dry-run         Enable dry-run mode
+  rclone-disable-dry-run        Disable dry-run mode
+  rclone-set-verbose LEVEL      Set verbose level (0-2)
+  rclone-set-log-level LEVEL    Set log level
+  rclone-set-exclude-file PATH  Set exclude file
+  rclone-set-filter-file PATH   Set filter file
+
+REMOTE MANAGEMENT:
+  rclone-list-remotes           List configured remotes
+  rclone-list-remotes-long      List remotes with types
+  rclone-get-remote-type NAME   Get remote type
+  rclone-remote-exists NAME     Check if remote exists
+  rclone-create-remote          Interactive remote creation
+  rclone-delete-remote NAME     Delete remote
+  rclone-show-remote NAME       Show remote config
+
+FILE OPERATIONS:
+  rclone-copy SRC DST           Copy files
+  rclone-move SRC DST           Move files
+  rclone-sync SRC DST           Sync source to destination
+  rclone-bisync PATH1 PATH2     Bidirectional sync
+  rclone-check-files SRC DST    Compare files
+  rclone-ls PATH                List files with sizes
+  rclone-lsl PATH               List files (long format)
+  rclone-lsd PATH               List directories
+  rclone-lsjson PATH            List files (JSON)
+  rclone-size PATH              Get path size
+  rclone-delete PATH            Delete files
+  rclone-purge PATH             Delete directory and contents
+  rclone-rmdirs PATH            Remove empty directories
+  rclone-mkdir PATH             Create directory
+  rclone-rmdir PATH             Remove directory
+
+MOUNT OPERATIONS:
+  rclone-mount REMOTE MNT [OPT] Mount remote
+  rclone-unmount MNT            Unmount remote
+  rclone-list-mounts            List active mounts
+  rclone-is-mounted MNT         Check if mounted
+
+SERVER OPERATIONS:
+  rclone-serve-http PATH [ADDR]    Serve over HTTP
+  rclone-serve-webdav PATH [ADDR]  Serve over WebDAV
+  rclone-serve-ftp PATH [ADDR]     Serve over FTP
+  rclone-serve-sftp PATH [ADDR]    Serve over SFTP
+  rclone-serve-restic PATH [ADDR]  Serve Restic repository
+
+RC (REMOTE CONTROL):
+  rclone-rc-start               Start RC server
+  rclone-rc-stop                Stop RC server
+  rclone-rc-is-running          Check RC status
+  rclone-rc-call ENDPOINT [DATA] Call RC endpoint
+  rclone-rc-stats               Get RC stats
+  rclone-rc-version             Get RC version
+
+TRANSFER MANAGEMENT:
+  rclone-stats PATH             Get transfer stats
+  rclone-cleanup PATH           Clean up failed transfers
+  rclone-dedupe PATH [MODE]     Deduplicate files
+  rclone-about REMOTE           Get quota information
+
+UTILITIES:
+  rclone-last-exit-code         Get last exit code
+  rclone-ext-version            Display extension version
+  rclone-help                   Display this help
+  rclone-self-test              Run self-tests
+
+For detailed documentation: cat ~/.local/docs/lib/_rclone.md
+EOF
+}
+
+# Self-test
+#
+# Function: rclone-self-test
+# Description: Run comprehensive self-tests
+# Returns:
+#   0 - All tests passed
+#   1 - Some tests failed
+# Example:
+#   rclone-self-test
+#
+rclone-self-test() {
+    log-info "Running _rclone v$RCLONE_VERSION self-test"
+    local tests_passed=0
+    local tests_failed=0
+
+    # Test 1: rclone availability
+    if rclone-check-available 2>/dev/null; then
+        log-info "✓ rclone is available"
+        ((tests_passed++))
+    else
+        log-warn "✗ rclone is not available (expected if not installed)"
+        ((tests_failed++))
+    fi
+
+    # Test 2: Version retrieval
+    if rclone-check-available 2>/dev/null; then
+        local version=$(rclone-get-version)
+        if [[ -n "$version" ]]; then
+            log-info "✓ rclone version: $version"
+            ((tests_passed++))
+        else
+            log-error "✗ Failed to get rclone version"
+            ((tests_failed++))
+        fi
+    fi
+
+    # Test 3: Argument building
+    local args=$(_rclone-build-args)
+    if [[ -n "$args" ]]; then
+        log-info "✓ Argument building works"
+        ((tests_passed++))
+    else
+        log-error "✗ Argument building failed"
+        ((tests_failed++))
+    fi
+
+    # Test 4: Configuration setters
+    rclone-set-transfers 8
+    if [[ "$RCLONE_TRANSFERS" == "8" ]]; then
+        log-info "✓ Configuration setters work"
+        ((tests_passed++))
+    else
+        log-error "✗ Configuration setters failed"
+        ((tests_failed++))
+    fi
+    rclone-set-transfers 4  # Reset
+
+    # Test 5: Dry-run mode
+    rclone-enable-dry-run
+    if [[ "$RCLONE_DRY_RUN" == "true" ]]; then
+        log-info "✓ Dry-run mode works"
+        ((tests_passed++))
+    else
+        log-error "✗ Dry-run mode failed"
+        ((tests_failed++))
+    fi
+    rclone-disable-dry-run
+
+    # Test 6: Integration detection
+    log-info "Integration status:"
+    log-info "  _events:    $RCLONE_EVENTS_AVAILABLE"
+    log-info "  _cache:     $RCLONE_CACHE_AVAILABLE"
+    log-info "  _lifecycle: $RCLONE_LIFECYCLE_AVAILABLE"
+    log-info "  _config:    $RCLONE_CONFIG_AVAILABLE"
+    ((tests_passed++))
+
+    # Test 7: JSON building
+    local json=$(rclone-build-operation-json "/tmp/src" "remote:dst")
+    if [[ -n "$json" ]] && echo "$json" | grep -q "srcFs"; then
+        log-info "✓ JSON building works"
+        ((tests_passed++))
+    else
+        log-error "✗ JSON building failed"
+        ((tests_failed++))
+    fi
+
+    log-info ""
+    log-info "Self-tests complete: $tests_passed passed, $tests_failed failed"
+
+    if [[ $tests_failed -eq 0 ]]; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+# ------------------------------
+# Initialization
+# ------------------------------
+
+# Initialize directories
+_rclone-init-dirs
+
+# Auto-cleanup integration
+if [[ "$RCLONE_AUTO_CLEANUP" == "true" ]] && [[ "$RCLONE_LIFECYCLE_AVAILABLE" == "true" ]]; then
+    lifecycle-cleanup rclone-cleanup
+fi
+
+# Log module load
+log-debug "_rclone extension loaded" "version=$RCLONE_VERSION" "integrations=events:$RCLONE_EVENTS_AVAILABLE,cache:$RCLONE_CACHE_AVAILABLE,lifecycle:$RCLONE_LIFECYCLE_AVAILABLE,config:$RCLONE_CONFIG_AVAILABLE"

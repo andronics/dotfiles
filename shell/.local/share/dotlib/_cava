@@ -1,0 +1,1171 @@
+#!/usr/bin/env zsh
+
+# _cava - CAVA (Console-based Audio Visualizer) Integration and Management
+# Part of the dotfiles library v2.0
+# Version: 2.1.0
+#
+# Usage:
+#   source "${DOTLIB}/_cava"
+#
+# Provides:
+#   - CAVA process management (start, stop, restart, status)
+#   - Multiple visualizer instance support
+#   - Bar character and color scheme customization
+#   - Audio source configuration
+#   - FIFO pipe management with automatic cleanup
+#   - Integration with infrastructure layer (v2.0)
+#   - Event emission for audio visualization events
+#   - Lifecycle-based cleanup guarantees
+#   - Cached dependency checks
+#
+# Dependencies:
+#   Required:
+#     - _common v2.0: Core utilities and path management
+#     - cava: Console-based Audio Visualizer
+#     - mkfifo: Named pipe creation
+#     - sed: Stream editor for bar transformation
+#   Optional (gracefully degraded):
+#     - _log v2.0: Structured logging
+#     - _lifecycle v2.0: Automatic cleanup and process tracking
+#     - _events v2.0: Event emission
+#     - _cache v2.0: Performance caching
+
+# ------------------------------
+# Source Guard
+# ------------------------------
+
+[[ -n "${CAVA_LOADED:-}" ]] && return 0
+declare -g CAVA_LOADED=1
+
+# ------------------------------
+# Version
+# ------------------------------
+
+declare -r CAVA_VERSION="2.1.0"
+
+# ------------------------------
+# Dependency Loading
+# ------------------------------
+
+# Load foundation (required)
+if ! source "${DOTLIB}/_common" 2>/dev/null; then
+    echo "[ERROR] _cava requires _common - cannot load" >&2
+    return 1
+fi
+
+# Load infrastructure (optional with fallbacks)
+if ! source "${DOTLIB}/_log" 2>/dev/null; then
+    log-info() { echo "[INFO] $*"; }
+    log-error() { echo "[ERROR] $*" >&2; }
+    log-warn() { echo "[WARN] $*" >&2; }
+    log-warning() { echo "[WARN] $*" >&2; }
+    log-debug() { [[ "${CAVA_DEBUG:-false}" == "true" ]] && echo "[DEBUG] $*" >&2 || true; }
+    log-trace() { [[ "${CAVA_DEBUG:-false}" == "true" ]] && echo "[TRACE] $*" >&2 || true; }
+    log-success() { echo "[SUCCESS] $*"; }
+fi
+
+# Load _lifecycle (optional)
+if source "${DOTLIB}/_lifecycle" 2>/dev/null; then
+    declare -g CAVA_LIFECYCLE_AVAILABLE=true
+else
+    declare -g CAVA_LIFECYCLE_AVAILABLE=false
+fi
+
+# Load _events (optional)
+if source "${DOTLIB}/_events" 2>/dev/null; then
+    declare -g CAVA_EVENTS_AVAILABLE=true
+else
+    declare -g CAVA_EVENTS_AVAILABLE=false
+fi
+
+# Load _cache (optional)
+if source "${DOTLIB}/_cache" 2>/dev/null; then
+    declare -g CAVA_CACHE_AVAILABLE=true
+else
+    declare -g CAVA_CACHE_AVAILABLE=false
+fi
+
+# ------------------------------
+# Configuration
+# ------------------------------
+
+# Paths (XDG-compliant via _common) - initialized lazily in _cava-init
+declare -g CAVA_CACHE_DIR=""
+declare -g CAVA_STATE_DIR=""
+declare -g CAVA_CONFIG_DIR=""
+
+# Behavior configuration
+declare -g CAVA_DEBUG="${CAVA_DEBUG:-false}"                    # Enable debug logging
+declare -g CAVA_AUTO_CLEANUP="${CAVA_AUTO_CLEANUP:-true}"      # Auto-cleanup on exit via lifecycle
+declare -g CAVA_EMIT_EVENTS="${CAVA_EMIT_EVENTS:-true}"        # Emit events via _events
+
+# Default visualizer settings
+declare -g CAVA_DEFAULT_BARS="${CAVA_DEFAULT_BARS:-32}"        # Default number of bars
+declare -g CAVA_DEFAULT_BAR_STYLE="${CAVA_DEFAULT_BAR_STYLE:-▁▂▃▄▅▆▇█}"  # Bar characters
+declare -g CAVA_DEFAULT_INPUT_METHOD="${CAVA_DEFAULT_INPUT_METHOD:-pulse}"  # Input method
+declare -g CAVA_DEFAULT_INPUT_SOURCE="${CAVA_DEFAULT_INPUT_SOURCE:-auto}"  # Input source
+declare -g CAVA_DEFAULT_ASCII_MAX_RANGE="${CAVA_DEFAULT_ASCII_MAX_RANGE:-7}"  # Max ASCII range
+declare -g CAVA_DEFAULT_FRAMERATE="${CAVA_DEFAULT_FRAMERATE:-60}"  # Framerate
+
+# Event names (if _events is available)
+declare -r CAVA_EVENT_STARTED="cava.started"
+declare -r CAVA_EVENT_STOPPED="cava.stopped"
+declare -r CAVA_EVENT_RESTARTED="cava.restarted"
+declare -r CAVA_EVENT_ERROR="cava.error"
+
+# ------------------------------
+# Internal State
+# ------------------------------
+
+# Process tracking (instance_id -> PID)
+declare -g -A _CAVA_PROCESSES=()
+
+# FIFO tracking (instance_id -> fifo_path)
+declare -g -A _CAVA_FIFOS=()
+
+# Config tracking (instance_id -> config_path)
+declare -g -A _CAVA_CONFIGS=()
+
+# Spectrum processor PIDs (instance_id -> PID)
+declare -g -A _CAVA_SPECTRUM_PIDS=()
+
+# Default instance ID
+declare -g CAVA_DEFAULT_INSTANCE="default"
+
+# Initialization flag
+declare -g _CAVA_INITIALIZED="false"
+
+# ------------------------------
+# Initialization
+# ------------------------------
+
+# Initialize directories
+#
+# Function: _cava-init-dirs
+# Description: Create necessary XDG-compliant directories
+# Internal use only
+#
+_cava-init-dirs() {
+    mkdir -p "$CAVA_CACHE_DIR" 2>/dev/null || true
+    mkdir -p "$CAVA_STATE_DIR" 2>/dev/null || true
+    mkdir -p "$CAVA_CONFIG_DIR" 2>/dev/null || true
+}
+
+# Initialize extension
+#
+# Function: _cava-init
+# Description: Lazy initialization of _cava extension
+# Internal use only
+#
+_cava-init() {
+    [[ "$_CAVA_INITIALIZED" == "true" ]] && return 0
+
+    log-debug "Initializing _cava v$CAVA_VERSION"
+
+    # Initialize XDG paths (requires _common to be loaded)
+    CAVA_CACHE_DIR="$(common-lib-cache-dir)/cava"
+    CAVA_STATE_DIR="$(common-lib-state-dir)/cava"
+    CAVA_CONFIG_DIR="$(common-lib-config-dir)/cava"
+
+    # Initialize directories
+    _cava-init-dirs
+
+    # Register cleanup if lifecycle available
+    if [[ "$CAVA_AUTO_CLEANUP" == "true" ]] && [[ "$CAVA_LIFECYCLE_AVAILABLE" == "true" ]]; then
+        if typeset -f lifecycle-cleanup >/dev/null 2>&1; then
+            lifecycle-cleanup cava-cleanup
+            log-debug "Registered cava-cleanup with lifecycle"
+        fi
+    fi
+
+    _CAVA_INITIALIZED="true"
+
+    # Emit initialization event
+    _cava-emit "cava.initialized" "version=$CAVA_VERSION"
+
+    return 0
+}
+
+# ------------------------------
+# Internal Helpers
+# ------------------------------
+
+# Emit an event (uses _events if available)
+#
+# Function: _cava-emit
+# Description: Emit event via _events extension if available and enabled
+# Parameters:
+#   $1 - Event name (required)
+#   $@ - Event data (optional)
+# Internal use only
+#
+_cava-emit() {
+    [[ "$CAVA_EMIT_EVENTS" != "true" ]] && return 0
+    [[ "$CAVA_EVENTS_AVAILABLE" != "true" ]] && return 0
+
+    events-emit "$@"
+}
+
+# Check if cava command is available (with caching)
+#
+# Function: _cava-check-dependency
+# Description: Verify cava binary is installed and accessible
+# Returns:
+#   0 - cava is available
+#   1 - cava not found
+# Internal use only
+#
+_cava-check-dependency() {
+    # Check cache first if available
+    if [[ "$CAVA_CACHE_AVAILABLE" == "true" ]]; then
+        local cached=$(cache-get "cava:command-exists")
+        if [[ "$cached" == "true" ]]; then
+            return 0
+        elif [[ "$cached" == "false" ]]; then
+            log-error "CAVA is not installed. Please install it first."
+            _cava-show-install-help
+            return 1
+        fi
+    fi
+
+    # Check using _common utility
+    local result
+    if common-command-exists "cava"; then
+        result="true"
+        # Cache success
+        [[ "$CAVA_CACHE_AVAILABLE" == "true" ]] && cache-set "cava:command-exists" "true" 3600
+        return 0
+    else
+        result="false"
+        # Cache failure
+        [[ "$CAVA_CACHE_AVAILABLE" == "true" ]] && cache-set "cava:command-exists" "false" 300
+        log-error "CAVA is not installed. Please install it first."
+        _cava-show-install-help
+        return 1
+    fi
+}
+
+# Show installation help
+#
+# Function: _cava-show-install-help
+# Description: Display OS-specific installation instructions
+# Internal use only
+#
+_cava-show-install-help() {
+    log-info "Installation instructions:"
+    log-info "  - Arch Linux: pacman -S cava"
+    log-info "  - Ubuntu/Debian: apt install cava"
+    log-info "  - Fedora: dnf install cava"
+    log-info "  - macOS: brew install cava"
+}
+
+# Get instance root directory
+#
+# Function: _cava-get-instance-root
+# Description: Get XDG-compliant directory for instance data
+# Parameters:
+#   $1 - Instance ID (optional, default: CAVA_DEFAULT_INSTANCE)
+# Output: Directory path
+# Internal use only
+#
+_cava-get-instance-root() {
+    local instance_id="${1:-$CAVA_DEFAULT_INSTANCE}"
+    echo "${CAVA_STATE_DIR}/${instance_id}"
+}
+
+# Get FIFO path for instance
+#
+# Function: _cava-get-fifo-path
+# Description: Get path to FIFO pipe for instance
+# Parameters:
+#   $1 - Instance ID (optional, default: CAVA_DEFAULT_INSTANCE)
+# Output: FIFO path
+# Internal use only
+#
+_cava-get-fifo-path() {
+    local instance_id="${1:-$CAVA_DEFAULT_INSTANCE}"
+    echo "${CAVA_STATE_DIR}/${instance_id}.fifo"
+}
+
+# Get config path for instance
+#
+# Function: _cava-get-config-path
+# Description: Get path to configuration file for instance
+# Parameters:
+#   $1 - Instance ID (optional, default: CAVA_DEFAULT_INSTANCE)
+# Output: Config file path
+# Internal use only
+#
+_cava-get-config-path() {
+    local instance_id="${1:-$CAVA_DEFAULT_INSTANCE}"
+    echo "${CAVA_CONFIG_DIR}/${instance_id}.cfg"
+}
+
+# Check if instance is running
+#
+# Function: _cava-is-running
+# Description: Check if CAVA instance is currently running
+# Parameters:
+#   $1 - Instance ID (optional, default: CAVA_DEFAULT_INSTANCE)
+# Returns:
+#   0 - Instance is running
+#   1 - Instance is not running
+# Internal use only
+#
+_cava-is-running() {
+    local instance_id="${1:-$CAVA_DEFAULT_INSTANCE}"
+    local pid="${_CAVA_PROCESSES[$instance_id]}"
+
+    if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+# ------------------------------
+# Bar Character Transformation
+# ------------------------------
+
+# Convert numeric data to bar characters
+#
+# Function: cava-spectrum
+# Description: Transform numeric CAVA output to bar character visualization
+# Parameters:
+#   $1 - Bar style (optional, default: CAVA_DEFAULT_BAR_STYLE)
+# Input: Numeric data from stdin
+# Output: Bar character visualization to stdout
+# Example:
+#   cava-spectrum "▁▂▃▄▅▆▇█"
+#   echo "01234567" | cava-spectrum
+#
+cava-spectrum() {
+    local bar="${1:-$CAVA_DEFAULT_BAR_STYLE}"
+    local dict="s/\;//g;"
+    local idx=0
+
+    # Build sed substitution dictionary
+    while [[ $idx -lt ${#bar} ]]; do
+        dict="${dict}s/${idx}/${bar:${idx}:1}/g;"
+        ((idx++))
+    done
+
+    # Process input data from stdin
+    while read -r data; do
+        echo "$data" | sed "$dict"
+    done
+}
+
+# Set custom bar style for spectrum
+#
+# Function: cava-set-bar-style
+# Description: Set default bar character style for future instances
+# Parameters:
+#   $1 - Bar style string (required)
+# Returns:
+#   0 - Success
+#   2 - Invalid argument (style missing)
+# Example:
+#   cava-set-bar-style "_.-^*"
+#
+cava-set-bar-style() {
+    local style="$1"
+
+    # Validation
+    if [[ -z "$style" ]]; then
+        log-error "Bar style required"
+        return 2
+    fi
+
+    CAVA_DEFAULT_BAR_STYLE="$style"
+    log-debug "Bar style set" "style=$style"
+    return 0
+}
+
+# Get current default bar style
+#
+# Function: cava-get-bar-style
+# Description: Get currently configured default bar style
+# Output: Bar style string
+# Example:
+#   current_style=$(cava-get-bar-style)
+#
+cava-get-bar-style() {
+    echo "$CAVA_DEFAULT_BAR_STYLE"
+}
+
+# List available bar styles
+#
+# Function: cava-list-bar-styles
+# Description: Display all available predefined bar styles with examples
+# Output: List of bar styles to stdout
+# Example:
+#   cava-list-bar-styles
+#
+cava-list-bar-styles() {
+    cat <<EOF
+Available bar styles:
+
+Standard:
+  default    ▁▂▃▄▅▆▇█
+  simple     _.-^*
+  blocks     ░▒▓█
+  arrows     ▖▘▝▗▚▞▙▟
+  dots       ⠀⠁⠂⠃⠄⠅⠆⠇
+
+Unicode:
+  fancy      ▁▂▃▄▅▆▇█▉▊▋▌▍▎▏
+  rounded    🭨🭩🭪🭫🭬🭭🭮🭯
+  circles    ○◔◑◕●
+  squares    □▫▪■
+
+Usage:
+  cava-set-bar-style "▁▂▃▄▅▆▇█"
+  cava-start --bar-style "_.-^*"
+EOF
+}
+
+# ------------------------------
+# Configuration Management
+# ------------------------------
+
+# Generate CAVA configuration file
+#
+# Function: cava-generate-config
+# Description: Create CAVA configuration file for instance
+# Parameters:
+#   $1 - Instance ID (optional, default: CAVA_DEFAULT_INSTANCE)
+#   Options:
+#     --bars N - Number of bars (default: CAVA_DEFAULT_BARS)
+#     --input-method METHOD - Input method (default: CAVA_DEFAULT_INPUT_METHOD)
+#     --input-source SOURCE - Input source (default: CAVA_DEFAULT_INPUT_SOURCE)
+#     --ascii-max-range N - ASCII max range (default: CAVA_DEFAULT_ASCII_MAX_RANGE)
+#     --framerate N - Framerate (default: CAVA_DEFAULT_FRAMERATE)
+# Returns:
+#   0 - Success
+#   1 - Failed to create config
+# Example:
+#   cava-generate-config "myvis" --bars 64 --framerate 120
+#
+cava-generate-config() {
+    # Lazy initialization
+    _cava-init
+
+    local instance_id="${1:-$CAVA_DEFAULT_INSTANCE}"
+    [[ "$1" != --* ]] && shift || instance_id="$CAVA_DEFAULT_INSTANCE"
+
+    # Parse options
+    local bars="${CAVA_DEFAULT_BARS}"
+    local input_method="${CAVA_DEFAULT_INPUT_METHOD}"
+    local input_source="${CAVA_DEFAULT_INPUT_SOURCE}"
+    local ascii_max_range="${CAVA_DEFAULT_ASCII_MAX_RANGE}"
+    local framerate="${CAVA_DEFAULT_FRAMERATE}"
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --bars)
+                bars="$2"
+                shift 2
+                ;;
+            --input-method)
+                input_method="$2"
+                shift 2
+                ;;
+            --input-source)
+                input_source="$2"
+                shift 2
+                ;;
+            --ascii-max-range)
+                ascii_max_range="$2"
+                shift 2
+                ;;
+            --framerate)
+                framerate="$2"
+                shift 2
+                ;;
+            *)
+                log-warn "Unknown option: $1"
+                shift
+                ;;
+        esac
+    done
+
+    local config_path="$(_cava-get-config-path "$instance_id")"
+    local fifo_path="$(_cava-get-fifo-path "$instance_id")"
+
+    # Ensure config directory exists
+    mkdir -p "${CAVA_CONFIG_DIR}" 2>/dev/null || {
+        log-error "Failed to create config directory" "path=$CAVA_CONFIG_DIR"
+        return 1
+    }
+
+    # Generate configuration file
+    cat > "$config_path" <<EOF
+[general]
+bars = ${bars}
+framerate = ${framerate}
+
+[input]
+method = ${input_method}
+source = ${input_source}
+
+[output]
+method = raw
+raw_target = ${fifo_path}
+data_format = ascii
+ascii_max_range = ${ascii_max_range}
+bit_format = 8bit
+EOF
+
+    local result=$?
+    if [[ $result -ne 0 ]]; then
+        log-error "Failed to create config file" "path=$config_path"
+        return 1
+    fi
+
+    _CAVA_CONFIGS[$instance_id]="$config_path"
+    log-debug "Generated config" "instance=$instance_id" "path=$config_path"
+
+    return 0
+}
+
+# Display configuration for an instance
+#
+# Function: cava-show-config
+# Description: Output configuration file contents for instance
+# Parameters:
+#   $1 - Instance ID (optional, default: CAVA_DEFAULT_INSTANCE)
+# Returns:
+#   0 - Success
+#   1 - Config not found
+# Output: Configuration file contents
+# Example:
+#   cava-show-config myvis
+#
+cava-show-config() {
+    local instance_id="${1:-$CAVA_DEFAULT_INSTANCE}"
+    local config_path="$(_cava-get-config-path "$instance_id")"
+
+    if [[ ! -f "$config_path" ]]; then
+        log-error "No configuration found" "instance=$instance_id"
+        return 1
+    fi
+
+    cat "$config_path"
+}
+
+# ------------------------------
+# Process Management
+# ------------------------------
+
+# Start a CAVA visualizer instance
+#
+# Function: cava-start
+# Description: Start CAVA visualizer instance with spectrum processing
+# Parameters:
+#   $1 - Instance ID (optional, default: CAVA_DEFAULT_INSTANCE)
+#   Options:
+#     --bars N - Number of bars
+#     --bar-style STYLE - Bar character style
+#     --input-method METHOD - Input method (pulse, alsa, fifo, etc.)
+#     --input-source SOURCE - Input source (auto, device name)
+#     --ascii-max-range N - Max ASCII range
+#     --framerate N - Framerate
+#     --no-spectrum - Don't process spectrum (raw output only)
+# Returns:
+#   0 - Success
+#   1 - Failed to start
+#   2 - Invalid arguments
+#   6 - Dependency missing
+# Example:
+#   cava-start myvis --bars 64 --bar-style "▁▂▃▄▅▆▇█"
+#
+cava-start() {
+    # Lazy initialization
+    _cava-init
+
+    # Dependency check
+    _cava-check-dependency || return 6
+
+    local instance_id="${1:-$CAVA_DEFAULT_INSTANCE}"
+    [[ "$1" != --* ]] && shift || instance_id="$CAVA_DEFAULT_INSTANCE"
+
+    # Check if already running
+    if _cava-is-running "$instance_id"; then
+        log-warn "CAVA instance already running" "instance=$instance_id"
+        return 1
+    fi
+
+    # Parse options
+    local bar_style=""
+    local no_spectrum=false
+    local config_opts=()
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --bar-style)
+                bar_style="$2"
+                shift 2
+                ;;
+            --no-spectrum)
+                no_spectrum=true
+                shift
+                ;;
+            --bars|--input-method|--input-source|--ascii-max-range|--framerate)
+                config_opts+=("$1" "$2")
+                shift 2
+                ;;
+            *)
+                log-warn "Unknown option" "option=$1"
+                shift
+                ;;
+        esac
+    done
+
+    # Generate configuration
+    cava-generate-config "$instance_id" "${config_opts[@]}" || return 1
+
+    local config_path="$(_cava-get-config-path "$instance_id")"
+    local fifo_path="$(_cava-get-fifo-path "$instance_id")"
+
+    # Ensure state directory exists
+    mkdir -p "${CAVA_STATE_DIR}" 2>/dev/null || {
+        log-error "Failed to create state directory" "path=$CAVA_STATE_DIR"
+        return 1
+    }
+
+    # Create FIFO
+    if [[ -p "$fifo_path" ]]; then
+        log-debug "Removing existing FIFO" "path=$fifo_path"
+        rm -f "$fifo_path"
+    fi
+
+    mkfifo "$fifo_path" 2>/dev/null || {
+        log-error "Failed to create FIFO" "path=$fifo_path"
+        return 1
+    }
+
+    _CAVA_FIFOS[$instance_id]="$fifo_path"
+    log-debug "Created FIFO" "path=$fifo_path"
+
+    # Register FIFO cleanup with lifecycle if available
+    if [[ "$CAVA_LIFECYCLE_AVAILABLE" == "true" ]]; then
+        lifecycle-cleanup "rm -f '$fifo_path'"
+    fi
+
+    # Start CAVA in background
+    cava -p "$config_path" >/dev/null 2>&1 &
+    local cava_pid=$!
+
+    _CAVA_PROCESSES[$instance_id]=$cava_pid
+    log-info "Started CAVA instance" "instance=$instance_id" "pid=$cava_pid"
+
+    # Track with lifecycle if available
+    if [[ "$CAVA_LIFECYCLE_AVAILABLE" == "true" ]]; then
+        lifecycle-track-job $cava_pid
+        log-debug "Tracked CAVA process with lifecycle" "pid=$cava_pid"
+    fi
+
+    # Emit start event
+    _cava-emit "$CAVA_EVENT_STARTED" "instance=$instance_id" "pid=$cava_pid"
+
+    # Start spectrum processor unless disabled
+    if [[ "$no_spectrum" != "true" ]]; then
+        local spectrum_bar="${bar_style:-$CAVA_DEFAULT_BAR_STYLE}"
+        cava-spectrum "$spectrum_bar" < "$fifo_path" &
+        local spectrum_pid=$!
+
+        _CAVA_SPECTRUM_PIDS[$instance_id]=$spectrum_pid
+        log-debug "Started spectrum processor" "pid=$spectrum_pid"
+
+        # Track spectrum processor with lifecycle if available
+        if [[ "$CAVA_LIFECYCLE_AVAILABLE" == "true" ]]; then
+            lifecycle-track-job $spectrum_pid
+        fi
+    fi
+
+    return 0
+}
+
+# Stop a CAVA visualizer instance
+#
+# Function: cava-stop
+# Description: Stop running CAVA instance and cleanup resources
+# Parameters:
+#   $1 - Instance ID (optional, default: CAVA_DEFAULT_INSTANCE)
+# Returns:
+#   0 - Success
+#   1 - Instance not running or stop failed
+# Example:
+#   cava-stop myvis
+#
+cava-stop() {
+    local instance_id="${1:-$CAVA_DEFAULT_INSTANCE}"
+
+    if ! _cava-is-running "$instance_id"; then
+        log-warn "CAVA instance not running" "instance=$instance_id"
+        return 1
+    fi
+
+    local pid="${_CAVA_PROCESSES[$instance_id]}"
+    log-info "Stopping CAVA instance" "instance=$instance_id" "pid=$pid"
+
+    # Kill the CAVA process
+    kill -TERM "$pid" 2>/dev/null
+    sleep 0.5
+
+    # Force kill if still running
+    if kill -0 "$pid" 2>/dev/null; then
+        log-debug "Force killing CAVA process" "pid=$pid"
+        kill -9 "$pid" 2>/dev/null
+    fi
+
+    # Stop spectrum processor if running
+    local spectrum_pid="${_CAVA_SPECTRUM_PIDS[$instance_id]}"
+    if [[ -n "$spectrum_pid" ]] && kill -0 "$spectrum_pid" 2>/dev/null; then
+        log-debug "Stopping spectrum processor" "pid=$spectrum_pid"
+        kill -TERM "$spectrum_pid" 2>/dev/null
+        sleep 0.2
+        kill -0 "$spectrum_pid" 2>/dev/null && kill -9 "$spectrum_pid" 2>/dev/null || true
+    fi
+
+    # Cleanup FIFO
+    local fifo_path="${_CAVA_FIFOS[$instance_id]}"
+    if [[ -p "$fifo_path" ]]; then
+        log-debug "Removing FIFO" "path=$fifo_path"
+        rm -f "$fifo_path"
+    fi
+
+    # Remove from tracking
+    unset "_CAVA_PROCESSES[$instance_id]"
+    unset "_CAVA_FIFOS[$instance_id]"
+    unset "_CAVA_SPECTRUM_PIDS[$instance_id]"
+
+    # Emit stop event
+    _cava-emit "$CAVA_EVENT_STOPPED" "instance=$instance_id" "pid=$pid"
+
+    log-success "Stopped CAVA instance" "instance=$instance_id"
+    return 0
+}
+
+# Restart a CAVA visualizer instance
+#
+# Function: cava-restart
+# Description: Restart CAVA instance with same or new options
+# Parameters:
+#   $1 - Instance ID (optional, default: CAVA_DEFAULT_INSTANCE)
+#   Options: Same as cava-start
+# Returns:
+#   0 - Success
+#   1 - Failed to restart
+# Example:
+#   cava-restart myvis --framerate 120
+#
+cava-restart() {
+    local instance_id="${1:-$CAVA_DEFAULT_INSTANCE}"
+    [[ "$1" != --* ]] && shift || instance_id="$CAVA_DEFAULT_INSTANCE"
+
+    log-info "Restarting CAVA instance" "instance=$instance_id"
+
+    # Stop if running
+    cava-stop "$instance_id" 2>/dev/null || true
+    sleep 0.5
+
+    # Start with new options
+    cava-start "$instance_id" "$@"
+    local result=$?
+
+    # Emit restart event
+    if [[ $result -eq 0 ]]; then
+        _cava-emit "$CAVA_EVENT_RESTARTED" "instance=$instance_id"
+    fi
+
+    return $result
+}
+
+# Get status of CAVA instances
+#
+# Function: cava-status
+# Description: Display status information for CAVA instance(s)
+# Parameters:
+#   $1 - Instance ID (optional, if omitted shows all instances)
+# Returns:
+#   0 - Instance(s) running
+#   1 - Instance(s) not running
+# Output: Status information
+# Example:
+#   cava-status           # All instances
+#   cava-status myvis     # Specific instance
+#
+cava-status() {
+    local instance_id="${1:-}"
+
+    if [[ -n "$instance_id" ]]; then
+        # Status for specific instance
+        if _cava-is-running "$instance_id"; then
+            local pid="${_CAVA_PROCESSES[$instance_id]}"
+            local spectrum_pid="${_CAVA_SPECTRUM_PIDS[$instance_id]:-none}"
+            echo "Instance: $instance_id"
+            echo "Status:   Running"
+            echo "PID:      $pid"
+            echo "Spectrum: $spectrum_pid"
+            echo "FIFO:     ${_CAVA_FIFOS[$instance_id]}"
+            echo "Config:   ${_CAVA_CONFIGS[$instance_id]}"
+            return 0
+        else
+            echo "Instance: $instance_id"
+            echo "Status:   Stopped"
+            return 1
+        fi
+    else
+        # Status for all instances
+        if [[ ${#_CAVA_PROCESSES[@]} -eq 0 ]]; then
+            echo "No CAVA instances running"
+            return 1
+        fi
+
+        # Display table header
+        echo "Instance|Status|PID|Spectrum PID|FIFO"
+        echo "-|-|-|-|-"
+
+        local any_running=false
+        for id in "${(@k)_CAVA_PROCESSES}"; do
+            local pid="${_CAVA_PROCESSES[$id]}"
+            local status="Stopped"
+            if kill -0 "$pid" 2>/dev/null; then
+                status="Running"
+                any_running=true
+            fi
+            local spectrum_pid="${_CAVA_SPECTRUM_PIDS[$id]:-none}"
+            local fifo="${_CAVA_FIFOS[$id]}"
+            echo "$id|$status|$pid|$spectrum_pid|$fifo"
+        done | column -t -s '|'
+
+        [[ "$any_running" == "true" ]] && return 0 || return 1
+    fi
+}
+
+# List all CAVA instances
+#
+# Function: cava-list
+# Description: Alias for cava-status (lists all instances)
+# Returns: Same as cava-status
+# Example:
+#   cava-list
+#
+cava-list() {
+    cava-status
+}
+
+# Stop all CAVA instances
+#
+# Function: cava-stop-all
+# Description: Stop all running CAVA instances
+# Returns:
+#   0 - Success
+# Example:
+#   cava-stop-all
+#
+cava-stop-all() {
+    if [[ ${#_CAVA_PROCESSES[@]} -eq 0 ]]; then
+        log-info "No CAVA instances to stop"
+        return 0
+    fi
+
+    log-info "Stopping all CAVA instances..."
+    for instance_id in "${(@k)_CAVA_PROCESSES}"; do
+        cava-stop "$instance_id"
+    done
+    log-success "All CAVA instances stopped"
+}
+
+# Get FIFO path for instance
+#
+# Function: cava-get-fifo
+# Description: Get FIFO path for instance (for external consumption)
+# Parameters:
+#   $1 - Instance ID (optional, default: CAVA_DEFAULT_INSTANCE)
+# Output: FIFO path
+# Returns:
+#   0 - Success
+#   1 - Instance not found
+# Example:
+#   fifo=$(cava-get-fifo myvis)
+#
+cava-get-fifo() {
+    local instance_id="${1:-$CAVA_DEFAULT_INSTANCE}"
+    local fifo="${_CAVA_FIFOS[$instance_id]}"
+
+    if [[ -z "$fifo" ]]; then
+        log-error "No FIFO for instance" "instance=$instance_id"
+        return 1
+    fi
+
+    echo "$fifo"
+}
+
+# ------------------------------
+# Cleanup Management
+# ------------------------------
+
+# Cleanup all CAVA resources
+#
+# Function: cava-cleanup
+# Description: Stop all instances and remove all resources (FIFO, configs)
+# Returns:
+#   0 - Success
+# Example:
+#   cava-cleanup
+# Note: Automatically called on exit if CAVA_AUTO_CLEANUP=true and lifecycle available
+#
+cava-cleanup() {
+    log-debug "Cleaning up CAVA resources..."
+
+    # Stop all instances
+    cava-stop-all 2>/dev/null || true
+
+    # Remove all FIFOs
+    for fifo in "${(@v)_CAVA_FIFOS}"; do
+        if [[ -p "$fifo" ]]; then
+            log-debug "Removing FIFO" "path=$fifo"
+            rm -f "$fifo"
+        fi
+    done
+
+    # Clear tracking arrays
+    _CAVA_PROCESSES=()
+    _CAVA_FIFOS=()
+    _CAVA_CONFIGS=()
+    _CAVA_SPECTRUM_PIDS=()
+
+    log-debug "CAVA cleanup complete"
+}
+
+# ------------------------------
+# Utility Functions
+# ------------------------------
+
+# Display version
+#
+# Function: cava-version
+# Description: Display extension version
+# Output: Version string
+# Example:
+#   cava-version
+#
+cava-version() {
+    echo "$CAVA_VERSION"
+}
+
+# Display extension information
+#
+# Function: cava-info
+# Description: Display comprehensive extension information
+# Output: Extension details
+# Example:
+#   cava-info
+#
+cava-info() {
+    # Lazy initialization
+    _cava-init
+
+    cat <<EOF
+_cava Extension Information
+
+Version:          $CAVA_VERSION
+Cache Directory:  $CAVA_CACHE_DIR
+State Directory:  $CAVA_STATE_DIR
+Config Directory: $CAVA_CONFIG_DIR
+
+Configuration:
+  Debug Mode:       $CAVA_DEBUG
+  Auto Cleanup:     $CAVA_AUTO_CLEANUP
+  Emit Events:      $CAVA_EMIT_EVENTS
+  Default Bars:     $CAVA_DEFAULT_BARS
+  Default Style:    $CAVA_DEFAULT_BAR_STYLE
+  Input Method:     $CAVA_DEFAULT_INPUT_METHOD
+  Input Source:     $CAVA_DEFAULT_INPUT_SOURCE
+
+Integration Status:
+  _common:          yes (required)
+  _log:             ${LOG_LOADED:-no}
+  _lifecycle:       $CAVA_LIFECYCLE_AVAILABLE
+  _events:          $CAVA_EVENTS_AVAILABLE
+  _cache:           $CAVA_CACHE_AVAILABLE
+
+Active Instances:
+  Running:          ${#_CAVA_PROCESSES[@]}
+  FIFOs:            ${#_CAVA_FIFOS[@]}
+  Configs:          ${#_CAVA_CONFIGS[@]}
+EOF
+}
+
+# Display help
+#
+# Function: cava-help
+# Description: Display comprehensive help information
+# Output: Help text
+# Example:
+#   cava-help
+#
+cava-help() {
+    cat <<EOF
+_cava - CAVA (Console-based Audio Visualizer) Integration
+
+Version: $CAVA_VERSION
+
+USAGE:
+  source "\${DOTLIB}/_cava"
+
+CONFIGURATION:
+  CAVA_DEBUG                    Enable debug logging (default: false)
+  CAVA_AUTO_CLEANUP             Auto-cleanup on exit (default: true)
+  CAVA_EMIT_EVENTS              Emit events via _events (default: true)
+  CAVA_DEFAULT_BARS             Default number of bars (default: 32)
+  CAVA_DEFAULT_BAR_STYLE        Default bar characters (default: ▁▂▃▄▅▆▇█)
+  CAVA_DEFAULT_INPUT_METHOD     Default input method (default: pulse)
+  CAVA_DEFAULT_INPUT_SOURCE     Default input source (default: auto)
+  CAVA_DEFAULT_ASCII_MAX_RANGE  Max ASCII range (default: 7)
+  CAVA_DEFAULT_FRAMERATE        Framerate (default: 60)
+
+PROCESS MANAGEMENT:
+  cava-start [ID] [OPTIONS]     Start CAVA visualizer instance
+  cava-stop [ID]                Stop CAVA instance
+  cava-restart [ID] [OPTIONS]   Restart CAVA instance
+  cava-status [ID]              Get status of instance(s)
+  cava-list                     List all instances
+  cava-stop-all                 Stop all instances
+
+CONFIGURATION:
+  cava-generate-config ID [OPTS] Generate configuration file
+  cava-show-config [ID]         Display configuration
+  cava-get-fifo [ID]            Get FIFO path for instance
+
+BAR STYLES:
+  cava-spectrum [STYLE]         Convert data to bar characters
+  cava-set-bar-style STYLE      Set default bar style
+  cava-get-bar-style            Get current bar style
+  cava-list-bar-styles          List available bar styles
+
+CLEANUP:
+  cava-cleanup                  Cleanup all resources
+
+UTILITIES:
+  cava-version                  Display version
+  cava-help                     Display this help
+  cava-info                     Display system information
+  cava-self-test                Run self-tests
+
+INTEGRATION STATUS:
+  _common:    yes (required)
+  _log:       ${LOG_LOADED:-no}
+  _lifecycle: $CAVA_LIFECYCLE_AVAILABLE
+  _events:    $CAVA_EVENTS_AVAILABLE
+  _cache:     $CAVA_CACHE_AVAILABLE
+
+For detailed documentation: cat ~/.local/docs/lib/_cava.md
+EOF
+}
+
+# Run self-tests
+#
+# Function: cava-self-test
+# Description: Run comprehensive self-tests to validate functionality
+# Returns:
+#   0 - All tests passed
+#   1 - Some tests failed
+# Example:
+#   cava-self-test
+#
+cava-self-test() {
+    # Lazy initialization
+    _cava-init
+
+    log-info "Running _cava v$CAVA_VERSION self-tests..."
+    local tests_passed=0
+    local tests_failed=0
+
+    # Test 1: Dependency check
+    if _cava-check-dependency; then
+        log-info "✓ CAVA dependency available"
+        ((tests_passed++))
+    else
+        log-error "✗ CAVA dependency not available (expected if not installed)"
+        ((tests_failed++))
+    fi
+
+    # Test 2: Directory creation
+    if mkdir -p "$CAVA_STATE_DIR" 2>/dev/null; then
+        log-info "✓ Directory creation works"
+        ((tests_passed++))
+    else
+        log-error "✗ Directory creation failed"
+        ((tests_failed++))
+    fi
+
+    # Test 3: FIFO path generation
+    local test_fifo="$(_cava-get-fifo-path "test")"
+    if [[ -n "$test_fifo" ]]; then
+        log-info "✓ FIFO path generation works"
+        ((tests_passed++))
+    else
+        log-error "✗ FIFO path generation failed"
+        ((tests_failed++))
+    fi
+
+    # Test 4: Config generation
+    if cava-generate-config "test" >/dev/null 2>&1; then
+        log-info "✓ Config generation works"
+        rm -f "$(_cava-get-config-path "test")"
+        ((tests_passed++))
+    else
+        log-error "✗ Config generation failed"
+        ((tests_failed++))
+    fi
+
+    # Test 5: Bar style transformation
+    local test_output=$(echo "01234567" | cava-spectrum)
+    if [[ -n "$test_output" ]]; then
+        log-info "✓ Bar style transformation works"
+        ((tests_passed++))
+    else
+        log-error "✗ Bar style transformation failed"
+        ((tests_failed++))
+    fi
+
+    # Test 6: Bar style get/set
+    local orig_style="$(cava-get-bar-style)"
+    cava-set-bar-style "test" >/dev/null 2>&1
+    local new_style="$(cava-get-bar-style)"
+    if [[ "$new_style" == "test" ]]; then
+        log-info "✓ Bar style get/set works"
+        ((tests_passed++))
+    else
+        log-error "✗ Bar style get/set failed"
+        ((tests_failed++))
+    fi
+    cava-set-bar-style "$orig_style" >/dev/null 2>&1
+
+    # Test 7: Integration detection
+    log-info "Integration availability:"
+    log-info "  _lifecycle: $CAVA_LIFECYCLE_AVAILABLE"
+    log-info "  _events:    $CAVA_EVENTS_AVAILABLE"
+    log-info "  _cache:     $CAVA_CACHE_AVAILABLE"
+    ((tests_passed++))
+
+    log-info ""
+    log-info "Self-tests complete: $tests_passed passed, $tests_failed failed"
+
+    if [[ $tests_failed -eq 0 ]]; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+# ------------------------------
+# Module Load
+# ------------------------------
+
+# Log module load
+log-debug "_cava extension loaded" "version=$CAVA_VERSION" "integrations=lifecycle:$CAVA_LIFECYCLE_AVAILABLE,events:$CAVA_EVENTS_AVAILABLE,cache:$CAVA_CACHE_AVAILABLE"

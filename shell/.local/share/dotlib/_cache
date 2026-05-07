@@ -1,0 +1,618 @@
+#!/usr/bin/env zsh
+
+# _cache - Caching layer with TTL support and namespace management
+# Part of the dotfiles library v2.0
+# Version: 1.0.0
+#
+# Usage:
+#   source "${DOTLIB}/_cache"
+#
+# Provides:
+#   - In-memory caching with TTL support
+#   - Namespace management
+#   - Cache statistics and cleanup
+#   - Optional persistence
+#   - XDG-compliant storage
+#
+# Dependencies:
+#   - _common (required)
+
+# ------------------------------
+# Source Guard
+# ------------------------------
+
+[[ -n "${CACHE_LOADED:-}" ]] && return 0
+
+# ------------------------------
+# Version
+# ------------------------------
+
+declare -gr CACHE_VERSION="1.0.0"
+declare -g CACHE_LOADED=1
+
+# ------------------------------
+# Load Dependencies
+# ------------------------------
+
+# Load _common (required)
+if ! source "${DOTLIB}/_common" 2>/dev/null; then
+    echo "[ERROR] _cache requires _common - cannot load" >&2
+    return 1
+fi
+
+# ------------------------------
+# Configuration Variables
+# ------------------------------
+
+# XDG-compliant paths
+declare -g CACHE_DATA_DIR="$(common-lib-data-dir)/cache"
+declare -g CACHE_STATE_DIR="$(common-lib-state-dir)/cache"
+
+# Cache configuration
+declare -g CACHE_DEFAULT_TTL="${CACHE_DEFAULT_TTL:-3600}"  # 1 hour default
+declare -g CACHE_MAX_SIZE="${CACHE_MAX_SIZE:-10000}"        # Max entries
+declare -g CACHE_VERBOSE="${CACHE_VERBOSE:-false}"
+declare -g CACHE_DEBUG="${CACHE_DEBUG:-false}"
+
+# Persistence
+declare -g CACHE_PERSIST_FILE="${CACHE_STATE_DIR}/cache.dat"
+declare -g CACHE_AUTO_PERSIST="${CACHE_AUTO_PERSIST:-false}"
+
+# ------------------------------
+# Cache Storage
+# ------------------------------
+
+# In-memory cache storage
+# Key format: "namespace:key" or just "key"
+declare -gA _CACHE_DATA=()      # key => value
+declare -gA _CACHE_EXPIRY=()    # key => expiry_timestamp
+declare -gA _CACHE_HITS=()      # key => hit_count
+declare -gA _CACHE_MISSES=()    # key => miss_count
+
+# Statistics
+declare -g _CACHE_TOTAL_HITS=0
+declare -g _CACHE_TOTAL_MISSES=0
+declare -g _CACHE_TOTAL_SETS=0
+declare -g _CACHE_TOTAL_CLEARS=0
+
+# ------------------------------
+# Internal Helper Functions
+# ------------------------------
+
+_cache-log-debug() {
+    [[ "$CACHE_DEBUG" == "true" ]] || return 0
+    echo "[DEBUG] cache: $*" >&2
+}
+
+_cache-log-verbose() {
+    [[ "$CACHE_VERBOSE" == "true" ]] || return 0
+    echo "[INFO] cache: $*" >&2
+}
+
+_cache-log-error() {
+    echo "${COLOR_RED}[ERROR] cache: $*${COLOR_RESET}" >&2
+}
+
+_cache-log-warning() {
+    echo "${COLOR_YELLOW}[WARNING] cache: $*${COLOR_RESET}" >&2
+}
+
+# Check if key has expired
+_cache-is-expired() {
+    local key="$1"
+
+    # No expiry set = never expires
+    [[ -z "${_CACHE_EXPIRY[$key]}" ]] && return 1
+
+    local now=$(common-timestamp)
+    local expiry="${_CACHE_EXPIRY[$key]}"
+
+    if [[ $now -ge $expiry ]]; then
+        _cache-log-debug "Key expired: $key (now=$now, expiry=$expiry)"
+        return 0  # Expired
+    fi
+
+    return 1  # Not expired
+}
+
+# Remove expired key
+_cache-remove-expired() {
+    local key="$1"
+
+    unset "_CACHE_DATA[$key]"
+    unset "_CACHE_EXPIRY[$key]"
+    unset "_CACHE_HITS[$key]"
+    unset "_CACHE_MISSES[$key]"
+}
+
+# Auto-persist if enabled
+_cache-auto-persist() {
+    [[ "$CACHE_AUTO_PERSIST" == "true" ]] || return 0
+    cache-save "$CACHE_PERSIST_FILE" 2>/dev/null
+}
+
+# ------------------------------
+# Core Cache Operations
+# ------------------------------
+
+cache-set() {
+    local key="$1"
+    local value="$2"
+    local ttl="${3:-$CACHE_DEFAULT_TTL}"
+
+    # Validate inputs
+    common-validate-required "$key" "key" || return 2
+    common-validate-required "$value" "value" || return 2
+
+    if [[ -n "$ttl" ]]; then
+        common-validate-numeric "$ttl" || {
+            _cache-log-error "TTL must be numeric: $ttl"
+            return 2
+        }
+    fi
+
+    # Check size limit
+    if [[ ${#_CACHE_DATA} -ge $CACHE_MAX_SIZE ]]; then
+        _cache-log-warning "Cache size limit reached ($CACHE_MAX_SIZE), clearing oldest entries"
+        cache-cleanup-expired
+    fi
+
+    # Set value
+    _CACHE_DATA[$key]="$value"
+
+    # Set expiry if TTL provided
+    if [[ -n "$ttl" && "$ttl" -gt 0 ]]; then
+        local now=$(common-timestamp)
+        _CACHE_EXPIRY[$key]=$((now + ttl))
+        _cache-log-debug "Set $key with TTL=${ttl}s (expires at ${_CACHE_EXPIRY[$key]})"
+    else
+        unset "_CACHE_EXPIRY[$key]"
+        _cache-log-debug "Set $key (no expiry)"
+    fi
+
+    # Initialize statistics
+    [[ -z "${_CACHE_HITS[$key]}" ]] && _CACHE_HITS[$key]=0
+    [[ -z "${_CACHE_MISSES[$key]}" ]] && _CACHE_MISSES[$key]=0
+
+    ((_CACHE_TOTAL_SETS++))
+    _cache-auto-persist
+
+    return 0
+}
+
+cache-get() {
+    local key="$1"
+
+    common-validate-required "$key" "key" || return 2
+
+    # Check if key exists
+    if [[ -z "${_CACHE_DATA[$key]+exists}" ]]; then
+        _cache-log-debug "Cache miss: $key"
+        [[ -n "${_CACHE_MISSES[$key]}" ]] && ((_CACHE_MISSES[$key]++)) || _CACHE_MISSES[$key]=1
+        ((_CACHE_TOTAL_MISSES++))
+        return 1
+    fi
+
+    # Check if expired
+    if _cache-is-expired "$key"; then
+        _cache-log-debug "Cache expired: $key"
+        _cache-remove-expired "$key"
+        ((_CACHE_TOTAL_MISSES++))
+        return 1
+    fi
+
+    # Cache hit
+    _cache-log-debug "Cache hit: $key"
+    ((_CACHE_HITS[$key]++))
+    ((_CACHE_TOTAL_HITS++))
+
+    echo "${_CACHE_DATA[$key]}"
+    return 0
+}
+
+cache-has() {
+    local key="$1"
+
+    common-validate-required "$key" "key" || return 2
+
+    # Check if key exists
+    [[ -z "${_CACHE_DATA[$key]+exists}" ]] && return 1
+
+    # Check if expired
+    if _cache-is-expired "$key"; then
+        _cache-remove-expired "$key"
+        return 1
+    fi
+
+    return 0
+}
+
+cache-clear() {
+    local key="$1"
+
+    common-validate-required "$key" "key" || return 2
+
+    if [[ -n "${_CACHE_DATA[$key]+exists}" ]]; then
+        unset "_CACHE_DATA[$key]"
+        unset "_CACHE_EXPIRY[$key]"
+        unset "_CACHE_HITS[$key]"
+        unset "_CACHE_MISSES[$key]"
+        _cache-log-debug "Cleared: $key"
+        ((_CACHE_TOTAL_CLEARS++))
+        _cache-auto-persist
+        return 0
+    fi
+
+    return 1
+}
+
+# ------------------------------
+# Namespace Support
+# ------------------------------
+
+cache-clear-namespace() {
+    local namespace="$1"
+
+    common-validate-required "$namespace" "namespace" || return 2
+
+    local count=0
+    local prefix="${namespace}:"
+
+    # Find all keys with this namespace prefix
+    for key in "${(@k)_CACHE_DATA}"; do
+        if [[ "$key" == ${prefix}* ]]; then
+            cache-clear "$key"
+            ((count++))
+        fi
+    done
+
+    _cache-log-verbose "Cleared $count keys from namespace: $namespace"
+    return 0
+}
+
+cache-list-namespaces() {
+    local -a namespaces
+
+    for key in "${(@k)_CACHE_DATA}"; do
+        if [[ "$key" == *:* ]]; then
+            local ns="${key%%:*}"
+            namespaces+=("$ns")
+        fi
+    done
+
+    # Print unique namespaces
+    printf '%s\n' "${namespaces[@]}" | sort -u
+}
+
+# ------------------------------
+# Cache Management
+# ------------------------------
+
+cache-clear-all() {
+    _CACHE_DATA=()
+    _CACHE_EXPIRY=()
+    _CACHE_HITS=()
+    _CACHE_MISSES=()
+
+    _cache-log-verbose "Cleared all cache entries"
+    _cache-auto-persist
+
+    return 0
+}
+
+cache-stats() {
+    local total_entries=${#_CACHE_DATA}
+    local hit_rate=0
+
+    if [[ $_CACHE_TOTAL_HITS -gt 0 || $_CACHE_TOTAL_MISSES -gt 0 ]]; then
+        hit_rate=$(( (_CACHE_TOTAL_HITS * 100) / (_CACHE_TOTAL_HITS + $_CACHE_TOTAL_MISSES) ))
+    fi
+
+    echo "Cache Statistics:"
+    echo "  Entries:     $total_entries / $CACHE_MAX_SIZE"
+    echo "  Total Sets:  $_CACHE_TOTAL_SETS"
+    echo "  Total Hits:  $_CACHE_TOTAL_HITS"
+    echo "  Total Misses: $_CACHE_TOTAL_MISSES"
+    echo "  Hit Rate:    ${hit_rate}%"
+    echo "  Total Clears: $_CACHE_TOTAL_CLEARS"
+}
+
+cache-size() {
+    echo "${#_CACHE_DATA}"
+}
+
+cache-cleanup-expired() {
+    local count=0
+    local now=$(common-timestamp)
+
+    for key in "${(@k)_CACHE_DATA}"; do
+        if _cache-is-expired "$key"; then
+            _cache-remove-expired "$key"
+            ((count++))
+        fi
+    done
+
+    _cache-log-verbose "Cleaned up $count expired entries"
+    _cache-auto-persist
+
+    return 0
+}
+
+cache-list() {
+    local pattern="${1:-*}"
+
+    for key in "${(@k)_CACHE_DATA}"; do
+        # Match pattern
+        if [[ "$key" == ${~pattern} ]]; then
+            local value="${_CACHE_DATA[$key]}"
+            local expiry="${_CACHE_EXPIRY[$key]:-never}"
+            local hits="${_CACHE_HITS[$key]:-0}"
+
+            if [[ "$expiry" != "never" ]]; then
+                local now=$(common-timestamp)
+                local ttl=$((expiry - now))
+                echo "$key: ${value:0:50}... (ttl=${ttl}s, hits=$hits)"
+            else
+                echo "$key: ${value:0:50}... (no expiry, hits=$hits)"
+            fi
+        fi
+    done
+}
+
+# ------------------------------
+# Persistence
+# ------------------------------
+
+cache-save() {
+    local file="${1:-$CACHE_PERSIST_FILE}"
+
+    common-ensure-dir "$(dirname "$file")"
+
+    # Create temporary file
+    local tmpfile=$(common-temp-file)
+
+    # Write cache data in format: key|value|expiry|hits|misses
+    for key in "${(@k)_CACHE_DATA}"; do
+        local value="${_CACHE_DATA[$key]}"
+        local expiry="${_CACHE_EXPIRY[$key]:-0}"
+        local hits="${_CACHE_HITS[$key]:-0}"
+        local misses="${_CACHE_MISSES[$key]:-0}"
+
+        # Base64 encode to handle special characters
+        local encoded_key=$(echo -n "$key" | base64)
+        local encoded_value=$(echo -n "$value" | base64)
+
+        echo "${encoded_key}|${encoded_value}|${expiry}|${hits}|${misses}" >> "$tmpfile"
+    done
+
+    # Move to final location
+    mv "$tmpfile" "$file"
+
+    _cache-log-verbose "Saved cache to: $file"
+    return 0
+}
+
+cache-load() {
+    local file="${1:-$CACHE_PERSIST_FILE}"
+
+    if [[ ! -f "$file" ]]; then
+        _cache-log-warning "Cache file not found: $file"
+        return 1
+    fi
+
+    local count=0
+    local now=$(common-timestamp)
+
+    while IFS='|' read -r encoded_key encoded_value expiry hits misses; do
+        # Decode
+        local key=$(echo -n "$encoded_key" | base64 -d)
+        local value=$(echo -n "$encoded_value" | base64 -d)
+
+        # Skip expired entries
+        if [[ $expiry -gt 0 && $now -ge $expiry ]]; then
+            _cache-log-debug "Skipping expired entry: $key"
+            continue
+        fi
+
+        # Restore entry
+        _CACHE_DATA[$key]="$value"
+        [[ $expiry -gt 0 ]] && _CACHE_EXPIRY[$key]=$expiry
+        _CACHE_HITS[$key]=$hits
+        _CACHE_MISSES[$key]=$misses
+
+        ((count++))
+    done < "$file"
+
+    _cache-log-verbose "Loaded $count entries from: $file"
+    return 0
+}
+
+# ------------------------------
+# Initialization
+# ------------------------------
+
+cache-init() {
+    common-ensure-dir "$CACHE_DATA_DIR"
+    common-ensure-dir "$CACHE_STATE_DIR"
+
+    # Load persisted cache if it exists and auto-persist is enabled
+    if [[ "$CACHE_AUTO_PERSIST" == "true" && -f "$CACHE_PERSIST_FILE" ]]; then
+        cache-load "$CACHE_PERSIST_FILE"
+    fi
+
+    _cache-log-verbose "Cache initialized"
+    return 0
+}
+
+# ------------------------------
+# Help
+# ------------------------------
+
+cache-help() {
+    cat <<'EOF'
+cache - Caching layer with TTL support and namespace management
+Version: 1.0.0
+
+Usage:
+  source "${DOTLIB}/_cache"
+  cache-<command> [options]
+
+Core Commands:
+  cache-set <key> <value> [ttl]   Set cache entry with optional TTL (seconds)
+  cache-get <key>                 Get cache entry (exit 1 if not found)
+  cache-has <key>                 Check if key exists (exit 0 if exists)
+  cache-clear <key>               Remove cache entry
+
+Namespace Commands:
+  cache-clear-namespace <ns>      Clear all entries in namespace
+  cache-list-namespaces           List all namespaces
+
+Management Commands:
+  cache-clear-all                 Clear all cache entries
+  cache-stats                     Show cache statistics
+  cache-size                      Show number of entries
+  cache-cleanup-expired           Remove expired entries
+  cache-list [pattern]            List cache entries (glob pattern)
+
+Persistence Commands:
+  cache-save [file]               Save cache to file
+  cache-load [file]               Load cache from file
+  cache-init                      Initialize cache directories
+
+Environment Variables:
+  CACHE_DEFAULT_TTL      Default TTL in seconds (default: 3600)
+  CACHE_MAX_SIZE         Maximum cache entries (default: 10000)
+  CACHE_VERBOSE          Enable verbose output (true/false)
+  CACHE_DEBUG            Enable debug output (true/false)
+  CACHE_AUTO_PERSIST     Auto-save on changes (true/false)
+
+Examples:
+  # Basic usage
+  cache-set "user:123" "John Doe" 300    # Cache for 5 minutes
+  cache-get "user:123"                    # Retrieve value
+
+  # Namespaces
+  cache-set "db:query1" "result1"
+  cache-set "db:query2" "result2"
+  cache-clear-namespace "db"              # Clear all db: keys
+
+  # Management
+  cache-stats                             # Show statistics
+  cache-cleanup-expired                   # Remove expired entries
+
+  # Persistence
+  export CACHE_AUTO_PERSIST=true
+  cache-init                              # Auto-loads persisted cache
+  cache-set "key" "value"                 # Auto-saves
+
+For complete documentation:
+  cat $(common-lib-docs-dir)/extensions/_cache.md
+
+EOF
+}
+
+# ------------------------------
+# Self-Test
+# ------------------------------
+
+cache-self-test() {
+    # Load _test from same directory
+    local test_dir="${${(%):-%x}:A:h}"
+    if ! source "$test_dir/_test" 2>/dev/null; then
+        echo "[ERROR] cache-self-test requires _test framework (expected at $test_dir/_test)" >&2
+        return 1
+    fi
+
+    echo "=== Testing cache v$CACHE_VERSION ==="
+    test-reset
+
+    echo "## Basic Tests"
+    test-assert-not-empty "$CACHE_VERSION" "version should be set"
+
+    echo ""
+    echo "## Core Operations"
+
+    # Set and get
+    cache-set "test_key" "test_value" 3600
+    result=$(cache-get "test_key")
+    test-assert-equals "$result" "test_value" "should set and get value"
+
+    # Has
+    cache-has "test_key"
+    test-assert-true "should detect existing key" test $? -eq 0
+
+    cache-has "nonexistent"
+    test-assert-false "should detect missing key" test $? -eq 0
+
+    # Clear
+    cache-clear "test_key"
+    cache-has "test_key"
+    test-assert-false "should clear key" test $? -eq 0
+
+    echo ""
+    echo "## TTL Tests"
+
+    # Set with 1 second TTL
+    cache-set "expire_test" "value" 1
+    sleep 2
+    cache-get "expire_test" &>/dev/null
+    test-assert-exit-code 1 cache-get "expire_test"
+
+    echo ""
+    echo "## Namespace Tests"
+
+    cache-set "ns1:key1" "val1"
+    cache-set "ns1:key2" "val2"
+    cache-set "ns2:key1" "val3"
+
+    cache-clear-namespace "ns1"
+    cache-has "ns1:key1"
+    test-assert-false "namespace should be cleared" test $? -eq 0
+
+    cache-has "ns2:key1"
+    test-assert-true "other namespace should remain" test $? -eq 0
+
+    echo ""
+
+    # Cleanup
+    cache-clear-all
+
+    test-summary
+    return $?
+}
+
+# ------------------------------
+# Script Execution Detection
+# ------------------------------
+
+# Use ZSH_EVAL_CONTEXT to reliably detect if sourced vs executed
+# When sourced: contains 'file' or 'toplevel'
+# When executed directly: contains 'cmdsubst' or just the script
+if [[ "${ZSH_EVAL_CONTEXT}" == *:file || "${ZSH_EVAL_CONTEXT}" == "file" ]]; then
+    # Sourced, don't run anything
+    :
+elif [[ "${ZSH_EVAL_CONTEXT}" == "" || "${(%):-%x}" == "$0" ]]; then
+    # Executed directly
+    case "${1:-help}" in
+        self-test)
+            cache-self-test
+            exit $?
+            ;;
+        help|--help|-h)
+            cache-help
+            exit 0
+            ;;
+        *)
+            echo "Error: Extension must be sourced, not executed directly" >&2
+            echo "Usage: source \"\${DOTLIB}/_cache\"" >&2
+            echo "For help: $0 help" >&2
+            exit 1
+            ;;
+    esac
+fi
+
+# ------------------------------
+# Extension Loaded
+# ------------------------------
+
+_cache-log-debug "Extension loaded successfully"

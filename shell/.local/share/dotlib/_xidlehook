@@ -1,0 +1,770 @@
+#!/usr/bin/env zsh
+
+# _xidlehook - X11 idle detection and automation
+# Part of the dotfiles library v2.0
+# Version: 1.0.0
+#
+# Usage:
+#   source "${DOTLIB}/_xidlehook"
+#
+# Provides:
+#   - Wrapper for xidlehook daemon management
+#   - Timer control (enable/disable/trigger)
+#   - Idle time monitoring
+#   - Socket-based communication
+#   - Multiple timer support
+#   - Fullscreen/audio detection
+#   - Lifecycle integration
+#
+# Dependencies:
+#   - xidlehook (required, system package)
+#   - xidlehook-client (required, system package)
+#   - xprintidle (optional, for idle monitoring)
+#   - _common (required, for XDG paths)
+#   - _log (optional, for logging)
+#   - _lifecycle (optional, for lifecycle management)
+#   - _process (optional, for process management)
+
+# ------------------------------
+# Source Guard
+# ------------------------------
+
+[[ -n "${XIDLEHOOK_LOADED:-}" ]] && return 0
+
+# ------------------------------
+# Version
+# ------------------------------
+
+declare -gr XIDLEHOOK_VERSION="1.0.0"
+declare -g XIDLEHOOK_LOADED=1
+
+# ------------------------------
+# Load Dependencies
+# ------------------------------
+
+# Load _common (required)
+if ! source "${DOTLIB}/_common" 2>/dev/null; then
+    print -u2 "ERROR: _xidlehook requires _common - cannot load"
+    return 1
+fi
+
+# Load _log (optional, with fallback)
+if ! source "${DOTLIB}/_log" 2>/dev/null; then
+    log-error() { print -u2 "ERROR: $*"; }
+    log-warning() { print -u2 "WARNING: $*"; }
+    log-info() { print "INFO: $*"; }
+    log-debug() { [[ "${DEBUG:-0}" == "1" ]] && print "DEBUG: $*"; }
+fi
+
+# Load _lifecycle (optional)
+source "${DOTLIB}/_lifecycle" 2>/dev/null || true
+
+# Load _process (optional)
+source "${DOTLIB}/_process" 2>/dev/null || true
+
+# ------------------------------
+# Configuration
+# ------------------------------
+
+# XIDLEHOOK_SOCKET: Socket file path
+declare -g XIDLEHOOK_SOCKET="${XIDLEHOOK_SOCKET:-$(common-xdg-runtime-dir)/xidlehook.sock}"
+
+# XIDLEHOOK_TIMER_DURATION: Idle timeout in seconds
+declare -g XIDLEHOOK_TIMER_DURATION="${XIDLEHOOK_TIMER_DURATION:-300}"
+
+# XIDLEHOOK_NOT_WHEN_FULLSCREEN: Skip timer when fullscreen detected
+declare -g XIDLEHOOK_NOT_WHEN_FULLSCREEN="${XIDLEHOOK_NOT_WHEN_FULLSCREEN:-true}"
+
+# XIDLEHOOK_NOT_WHEN_AUDIO: Skip timer when audio playing
+declare -g XIDLEHOOK_NOT_WHEN_AUDIO="${XIDLEHOOK_NOT_WHEN_AUDIO:-false}"
+
+# XIDLEHOOK_DAEMON_NAME: Process name
+declare -g XIDLEHOOK_DAEMON_NAME="${XIDLEHOOK_DAEMON_NAME:-xidlehook}"
+
+# XIDLEHOOK_START_TIMEOUT: Daemon startup timeout (seconds)
+declare -g XIDLEHOOK_START_TIMEOUT="${XIDLEHOOK_START_TIMEOUT:-5}"
+
+# XIDLEHOOK_STOP_TIMEOUT: Daemon stop timeout (seconds)
+declare -g XIDLEHOOK_STOP_TIMEOUT="${XIDLEHOOK_STOP_TIMEOUT:-5}"
+
+# ------------------------------
+# Internal State
+# ------------------------------
+
+# Current daemon PID
+declare -g _XIDLEHOOK_PID=""
+
+# ------------------------------
+# Validation Functions
+# ------------------------------
+
+# Check if xidlehook is installed
+# Usage: xidlehook-check
+xidlehook-check() {
+    local missing=()
+
+    if ! command -v xidlehook &>/dev/null; then
+        missing+=("xidlehook")
+    fi
+
+    if ! command -v xidlehook-client &>/dev/null; then
+        missing+=("xidlehook-client")
+    fi
+
+    if [[ ${#missing[@]} -gt 0 ]]; then
+        log-error "[xidlehook] Required commands not found: ${missing[*]}"
+        log-error "[xidlehook] Install with: yay -S xidlehook"
+        return 1
+    fi
+
+    log-debug "[xidlehook] Dependencies satisfied"
+    return 0
+}
+
+# Check if daemon is running
+# Usage: xidlehook-is-running
+xidlehook-is-running() {
+    if typeset -f process-is-running >/dev/null 2>&1; then
+        process-is-running "$XIDLEHOOK_DAEMON_NAME"
+    else
+        pgrep -x "$XIDLEHOOK_DAEMON_NAME" >/dev/null 2>&1
+    fi
+}
+
+# Check if socket exists and is accessible
+# Usage: xidlehook-socket-exists
+xidlehook-socket-exists() {
+    [[ -S "$XIDLEHOOK_SOCKET" ]]
+}
+
+# Validate socket is accessible
+# Usage: xidlehook-validate-socket
+xidlehook-validate-socket() {
+    if ! xidlehook-socket-exists; then
+        log-error "[xidlehook] Socket not found: ${XIDLEHOOK_SOCKET}"
+        log-error "[xidlehook] Is daemon running? Use xidlehook-start"
+        return 1
+    fi
+
+    log-debug "[xidlehook] Socket validated: ${XIDLEHOOK_SOCKET}"
+    return 0
+}
+
+# ------------------------------
+# Lifecycle Integration
+# ------------------------------
+
+# Initialize xidlehook extension
+# Usage: xidlehook-init [command] [canceller]
+xidlehook-init() {
+    local command="${1:-}"
+    local canceller="${2:-}"
+
+    log-debug "[xidlehook] Initializing v${XIDLEHOOK_VERSION}"
+
+    # Check dependencies
+    xidlehook-check || return 1
+
+    # Register with lifecycle if available
+    if typeset -f lifecycle-register >/dev/null 2>&1; then
+        lifecycle-register "xidlehook" "$XIDLEHOOK_VERSION"
+    fi
+
+    # Start daemon if command provided
+    if [[ -n "$command" ]]; then
+        xidlehook-start "$command" "$canceller"
+    fi
+
+    log-debug "[xidlehook] Initialization complete"
+    return 0
+}
+
+# Cleanup xidlehook resources
+# Usage: xidlehook-cleanup
+xidlehook-cleanup() {
+    log-debug "[xidlehook] Cleaning up resources"
+
+    if xidlehook-is-running; then
+        xidlehook-stop
+    fi
+
+    _XIDLEHOOK_PID=""
+
+    return 0
+}
+
+# ------------------------------
+# Daemon Management
+# ------------------------------
+
+# Start xidlehook daemon
+# Usage: xidlehook-start <command> [canceller]
+xidlehook-start() {
+    local command="${1:?Command required}"
+    local canceller="${2:-}"
+
+    log-debug "[xidlehook] Starting daemon"
+
+    # Check if already running
+    if xidlehook-is-running; then
+        log-warning "[xidlehook] Daemon already running"
+        return 1
+    fi
+
+    # Ensure socket directory exists
+    local socket_dir="${XIDLEHOOK_SOCKET:h}"
+    if [[ ! -d "$socket_dir" ]]; then
+        mkdir -p "$socket_dir" 2>/dev/null || {
+            log-error "[xidlehook] Failed to create socket directory: ${socket_dir}"
+            return 1
+        }
+    fi
+
+    # Build command arguments
+    local -a args=(
+        --socket "$XIDLEHOOK_SOCKET"
+        --timer "$XIDLEHOOK_TIMER_DURATION"
+        "$command"
+        "$canceller"
+    )
+
+    # Add optional flags
+    if [[ "$XIDLEHOOK_NOT_WHEN_FULLSCREEN" == "true" ]]; then
+        args=(--not-when-fullscreen "${args[@]}")
+    fi
+
+    if [[ "$XIDLEHOOK_NOT_WHEN_AUDIO" == "true" ]]; then
+        args=(--not-when-audio "${args[@]}")
+    fi
+
+    # Start daemon in background
+    log-info "[xidlehook] Starting daemon (timer: ${XIDLEHOOK_TIMER_DURATION}s)"
+    xidlehook "${args[@]}" &>/dev/null &
+    _XIDLEHOOK_PID=$!
+
+    # Wait for socket to appear
+    local elapsed=0
+    while [[ $elapsed -lt $XIDLEHOOK_START_TIMEOUT ]]; do
+        if xidlehook-socket-exists; then
+            log-info "[xidlehook] Daemon started successfully (PID: ${_XIDLEHOOK_PID})"
+            return 0
+        fi
+        sleep 0.5
+        ((elapsed++))
+    done
+
+    log-error "[xidlehook] Daemon started but socket not created within ${XIDLEHOOK_START_TIMEOUT}s"
+    return 1
+}
+
+# Stop xidlehook daemon
+# Usage: xidlehook-stop
+xidlehook-stop() {
+    log-debug "[xidlehook] Stopping daemon"
+
+    if ! xidlehook-is-running; then
+        log-warning "[xidlehook] Daemon not running"
+        return 1
+    fi
+
+    log-info "[xidlehook] Stopping daemon"
+    pkill -x "$XIDLEHOOK_DAEMON_NAME"
+
+    # Wait for process to stop
+    local elapsed=0
+    while [[ $elapsed -lt $XIDLEHOOK_STOP_TIMEOUT ]]; do
+        if ! xidlehook-is-running; then
+            log-info "[xidlehook] Daemon stopped successfully"
+            # Clean up socket
+            [[ -S "$XIDLEHOOK_SOCKET" ]] && rm -f "$XIDLEHOOK_SOCKET"
+            _XIDLEHOOK_PID=""
+            return 0
+        fi
+        sleep 0.5
+        ((elapsed++))
+    done
+
+    log-warning "[xidlehook] Daemon did not stop gracefully, forcing termination"
+    pkill -9 -x "$XIDLEHOOK_DAEMON_NAME"
+    [[ -S "$XIDLEHOOK_SOCKET" ]] && rm -f "$XIDLEHOOK_SOCKET"
+    _XIDLEHOOK_PID=""
+    return 0
+}
+
+# Restart xidlehook daemon
+# Usage: xidlehook-restart <command> [canceller]
+xidlehook-restart() {
+    log-info "[xidlehook] Restarting daemon"
+
+    xidlehook-stop
+    sleep 1
+    xidlehook-start "$@"
+}
+
+# Reload configuration (restart with new settings)
+# Usage: xidlehook-reload <command> [canceller]
+xidlehook-reload() {
+    log-info "[xidlehook] Reloading configuration"
+    xidlehook-restart "$@"
+}
+
+# ------------------------------
+# Timer Control
+# ------------------------------
+
+# Enable timer (resume)
+# Usage: xidlehook-enable
+xidlehook-enable() {
+    xidlehook-validate-socket || return 1
+
+    log-debug "[xidlehook] Enabling timer"
+    xidlehook-client --socket "$XIDLEHOOK_SOCKET" control --action enable &>/dev/null
+
+    log-info "[xidlehook] Timer enabled"
+    return 0
+}
+
+# Disable timer (pause)
+# Usage: xidlehook-disable
+xidlehook-disable() {
+    xidlehook-validate-socket || return 1
+
+    log-debug "[xidlehook] Disabling timer"
+    xidlehook-client --socket "$XIDLEHOOK_SOCKET" control --action disable &>/dev/null
+
+    log-info "[xidlehook] Timer disabled"
+    return 0
+}
+
+# Trigger timer immediately
+# Usage: xidlehook-trigger
+xidlehook-trigger() {
+    xidlehook-validate-socket || return 1
+
+    log-debug "[xidlehook] Triggering timer"
+    xidlehook-client --socket "$XIDLEHOOK_SOCKET" control --action trigger &>/dev/null
+
+    log-info "[xidlehook] Timer triggered"
+    return 0
+}
+
+# Reset idle timer (as if user activity occurred)
+# Usage: xidlehook-reset
+xidlehook-reset() {
+    xidlehook-validate-socket || return 1
+
+    log-debug "[xidlehook] Resetting timer"
+    xidlehook-disable && xidlehook-enable
+
+    log-info "[xidlehook] Timer reset"
+    return 0
+}
+
+# ------------------------------
+# Query & Status
+# ------------------------------
+
+# Query timer status from daemon
+# Usage: xidlehook-query
+xidlehook-query() {
+    xidlehook-validate-socket || return 1
+
+    log-debug "[xidlehook] Querying timer status"
+    xidlehook-client --socket "$XIDLEHOOK_SOCKET" query 2>&1
+}
+
+# Get daemon PID
+# Usage: xidlehook-get-pid
+xidlehook-get-pid() {
+    if xidlehook-is-running; then
+        pgrep -x "$XIDLEHOOK_DAEMON_NAME"
+    else
+        return 1
+    fi
+}
+
+# Show comprehensive status
+# Usage: xidlehook-status
+xidlehook-status() {
+    cat <<EOF
+Xidlehook Status v${XIDLEHOOK_VERSION}
+
+Daemon:
+  Running:           $(xidlehook-is-running && echo "Yes" || echo "No")
+  PID:               $(xidlehook-get-pid 2>/dev/null || echo "N/A")
+  Socket:            ${XIDLEHOOK_SOCKET}
+  Socket Exists:     $(xidlehook-socket-exists && echo "Yes" || echo "No")
+
+Configuration:
+  Timer Duration:    ${XIDLEHOOK_TIMER_DURATION}s
+  Not When Fullscreen: ${XIDLEHOOK_NOT_WHEN_FULLSCREEN}
+  Not When Audio:    ${XIDLEHOOK_NOT_WHEN_AUDIO}
+
+EOF
+
+    if xidlehook-is-running && xidlehook-socket-exists; then
+        print "Timer Query:"
+        xidlehook-query 2>/dev/null | sed 's/^/  /' || print "  (query failed)"
+    fi
+}
+
+# ------------------------------
+# Idle Time Monitoring
+# ------------------------------
+
+# Get current idle time in seconds
+# Usage: xidlehook-get-idle-time
+xidlehook-get-idle-time() {
+    if ! command -v xprintidle &>/dev/null; then
+        log-error "[xidlehook] xprintidle not found"
+        echo "0"
+        return 1
+    fi
+
+    local time_ms=$(xprintidle 2>/dev/null || echo "0")
+    echo $((time_ms / 1000))
+}
+
+# Check if system is currently idle (beyond threshold)
+# Usage: xidlehook-is-idle
+xidlehook-is-idle() {
+    local idle_time=$(xidlehook-get-idle-time)
+    [[ $idle_time -ge $XIDLEHOOK_TIMER_DURATION ]]
+}
+
+# Monitor idle time continuously
+# Usage: xidlehook-monitor-idle
+xidlehook-monitor-idle() {
+    if ! command -v xprintidle &>/dev/null; then
+        log-error "[xidlehook] xprintidle not found"
+        log-error "[xidlehook] Install with: sudo pacman -S xprintidle"
+        return 1
+    fi
+
+    log-info "[xidlehook] Monitoring idle time (Ctrl+C to stop)"
+
+    while true; do
+        local time_ms=$(xprintidle 2>/dev/null)
+        if [[ -z "$time_ms" ]]; then
+            log-error "[xidlehook] Failed to get idle time"
+            return 1
+        fi
+
+        local time_sec=$((time_ms / 1000))
+        local minutes=$((time_sec / 60))
+        local seconds=$((time_sec % 60))
+
+        # Clear line and print
+        printf "\r\033[K"
+        printf "Idle: %2dm %02ds (%5ds)" "$minutes" "$seconds" "$time_sec"
+
+        sleep 1
+    done
+}
+
+# ------------------------------
+# Configuration Helpers
+# ------------------------------
+
+# Set timer duration (requires restart)
+# Usage: xidlehook-set-timer <seconds>
+xidlehook-set-timer() {
+    local duration="${1:?Duration in seconds required}"
+
+    if [[ ! "$duration" =~ ^[0-9]+$ ]]; then
+        log-error "[xidlehook] Invalid duration: ${duration} (must be positive integer)"
+        return 1
+    fi
+
+    XIDLEHOOK_TIMER_DURATION="$duration"
+    log-info "[xidlehook] Timer duration set to ${duration}s"
+    log-warning "[xidlehook] Restart daemon for changes to take effect"
+    return 0
+}
+
+# Set socket path (requires restart)
+# Usage: xidlehook-set-socket <path>
+xidlehook-set-socket() {
+    local socket="${1:?Socket path required}"
+
+    if [[ -z "$socket" ]]; then
+        log-error "[xidlehook] Socket path cannot be empty"
+        return 1
+    fi
+
+    XIDLEHOOK_SOCKET="$socket"
+    log-info "[xidlehook] Socket path set to: ${socket}"
+    log-warning "[xidlehook] Restart daemon for changes to take effect"
+    return 0
+}
+
+# Enable/disable fullscreen detection (requires restart)
+# Usage: xidlehook-set-fullscreen-detection <true|false>
+xidlehook-set-fullscreen-detection() {
+    local enabled="${1:-true}"
+
+    XIDLEHOOK_NOT_WHEN_FULLSCREEN="$enabled"
+    log-info "[xidlehook] Fullscreen detection: ${enabled}"
+    log-warning "[xidlehook] Restart daemon for changes to take effect"
+    return 0
+}
+
+# Enable/disable audio detection (requires restart)
+# Usage: xidlehook-set-audio-detection <true|false>
+xidlehook-set-audio-detection() {
+    local enabled="${1:-true}"
+
+    XIDLEHOOK_NOT_WHEN_AUDIO="$enabled"
+    log-info "[xidlehook] Audio detection: ${enabled}"
+    log-warning "[xidlehook] Restart daemon for changes to take effect"
+    return 0
+}
+
+# Show current configuration
+# Usage: xidlehook-get-config
+xidlehook-get-config() {
+    cat <<EOF
+Xidlehook Configuration v${XIDLEHOOK_VERSION}
+
+  Socket Path:       ${XIDLEHOOK_SOCKET}
+  Timer Duration:    ${XIDLEHOOK_TIMER_DURATION}s
+  Not When Fullscreen: ${XIDLEHOOK_NOT_WHEN_FULLSCREEN}
+  Not When Audio:    ${XIDLEHOOK_NOT_WHEN_AUDIO}
+  Daemon Name:       ${XIDLEHOOK_DAEMON_NAME}
+  Start Timeout:     ${XIDLEHOOK_START_TIMEOUT}s
+  Stop Timeout:      ${XIDLEHOOK_STOP_TIMEOUT}s
+EOF
+}
+
+# ------------------------------
+# Module Info & Help
+# ------------------------------
+
+# Show version
+# Usage: xidlehook-version
+xidlehook-version() {
+    print "lib/_xidlehook version ${XIDLEHOOK_VERSION}"
+}
+
+# Show module information
+# Usage: xidlehook-info
+xidlehook-info() {
+    xidlehook-status
+}
+
+# Show help
+# Usage: xidlehook-help
+xidlehook-help() {
+    cat <<'EOF'
+Xidlehook - X11 idle detection and automation
+
+USAGE:
+    source "${DOTLIB}/_xidlehook"
+
+LIFECYCLE:
+    xidlehook-init [command] [canceller]  Initialize and optionally start
+    xidlehook-cleanup                     Cleanup resources
+
+DAEMON MANAGEMENT:
+    xidlehook-start <command> [canceller] Start daemon
+    xidlehook-stop                        Stop daemon
+    xidlehook-restart <cmd> [canceller]   Restart daemon
+    xidlehook-reload <cmd> [canceller]    Reload configuration
+
+TIMER CONTROL:
+    xidlehook-enable                      Enable/resume timer
+    xidlehook-disable                     Disable/pause timer
+    xidlehook-trigger                     Trigger timer immediately
+    xidlehook-reset                       Reset idle timer
+
+STATUS & MONITORING:
+    xidlehook-status                      Show comprehensive status
+    xidlehook-query                       Query timer from daemon
+    xidlehook-get-pid                     Get daemon PID
+    xidlehook-is-running                  Check if daemon running
+    xidlehook-monitor-idle                Monitor idle time live
+
+IDLE DETECTION:
+    xidlehook-get-idle-time               Get current idle seconds
+    xidlehook-is-idle                     Check if idle threshold reached
+
+CONFIGURATION:
+    xidlehook-set-timer <seconds>         Set timer duration
+    xidlehook-set-socket <path>           Set socket path
+    xidlehook-set-fullscreen-detection <bool>
+    xidlehook-set-audio-detection <bool>
+    xidlehook-get-config                  Show configuration
+
+VALIDATION:
+    xidlehook-check                       Check dependencies
+    xidlehook-socket-exists               Check socket existence
+
+INFO:
+    xidlehook-version                     Show version
+    xidlehook-info                        Show information
+    xidlehook-help                        Show this help
+
+EXAMPLES:
+    # Start with lockscreen after 5 minutes
+    xidlehook-set-timer 300
+    xidlehook-start "lockscreen" ""
+
+    # Check status
+    xidlehook-status
+
+    # Temporarily disable
+    xidlehook-disable
+
+    # Re-enable
+    xidlehook-enable
+
+    # Stop daemon
+    xidlehook-stop
+
+ENVIRONMENT VARIABLES:
+    XIDLEHOOK_SOCKET                Socket file path
+    XIDLEHOOK_TIMER_DURATION        Idle timeout (seconds)
+    XIDLEHOOK_NOT_WHEN_FULLSCREEN   Skip when fullscreen
+    XIDLEHOOK_NOT_WHEN_AUDIO        Skip when audio playing
+EOF
+}
+
+# ------------------------------
+# Self-Test
+# ------------------------------
+
+# Run self-test
+# Usage: xidlehook-self-test
+xidlehook-self-test() {
+    print "=== Testing lib/_xidlehook v${XIDLEHOOK_VERSION} ==="
+    print ""
+
+    local tests_passed=0
+    local tests_failed=0
+
+    # Test 1: Check dependencies
+    print -n "Test 1: Dependencies... "
+    if xidlehook-check >/dev/null 2>&1; then
+        print "PASS"
+        ((tests_passed++))
+    else
+        print "FAIL"
+        ((tests_failed++))
+    fi
+
+    # Test 2: Initialization
+    print -n "Test 2: Initialization... "
+    if xidlehook-init >/dev/null 2>&1; then
+        print "PASS"
+        ((tests_passed++))
+    else
+        print "FAIL"
+        ((tests_failed++))
+    fi
+
+    # Test 3: Configuration retrieval
+    print -n "Test 3: Get configuration... "
+    if xidlehook-get-config >/dev/null 2>&1; then
+        print "PASS"
+        ((tests_passed++))
+    else
+        print "FAIL"
+        ((tests_failed++))
+    fi
+
+    # Test 4: Set timer duration
+    print -n "Test 4: Set timer duration... "
+    if xidlehook-set-timer 600 >/dev/null 2>&1; then
+        if [[ "$XIDLEHOOK_TIMER_DURATION" == "600" ]]; then
+            print "PASS"
+            ((tests_passed++))
+        else
+            print "FAIL (value not set)"
+            ((tests_failed++))
+        fi
+    else
+        print "FAIL"
+        ((tests_failed++))
+    fi
+
+    # Test 5: Invalid timer duration
+    print -n "Test 5: Reject invalid duration... "
+    if ! xidlehook-set-timer "invalid" >/dev/null 2>&1; then
+        print "PASS"
+        ((tests_passed++))
+    else
+        print "FAIL"
+        ((tests_failed++))
+    fi
+
+    # Test 6: Daemon status check
+    print -n "Test 6: Daemon status check... "
+    if xidlehook-status >/dev/null 2>&1; then
+        print "PASS"
+        ((tests_passed++))
+    else
+        print "FAIL"
+        ((tests_failed++))
+    fi
+
+    # Test 7: Socket existence check
+    print -n "Test 7: Socket check (not running)... "
+    if ! xidlehook-socket-exists; then
+        print "PASS"
+        ((tests_passed++))
+    else
+        print "PASS (socket exists)"
+        ((tests_passed++))
+    fi
+
+    # Test 8: Idle time retrieval (if xprintidle available)
+    print -n "Test 8: Idle time detection... "
+    if command -v xprintidle &>/dev/null; then
+        local idle_time=$(xidlehook-get-idle-time 2>/dev/null)
+        if [[ "$idle_time" =~ ^[0-9]+$ ]]; then
+            print "PASS (${idle_time}s)"
+            ((tests_passed++))
+        else
+            print "FAIL"
+            ((tests_failed++))
+        fi
+    else
+        print "SKIP (xprintidle not available)"
+        ((tests_passed++))
+    fi
+
+    # Test 9: PID retrieval (daemon not running)
+    print -n "Test 9: PID retrieval... "
+    if ! xidlehook-get-pid >/dev/null 2>&1; then
+        print "PASS (no daemon running)"
+        ((tests_passed++))
+    else
+        print "PASS (daemon running)"
+        ((tests_passed++))
+    fi
+
+    # Test 10: Cleanup
+    print -n "Test 10: Cleanup... "
+    if xidlehook-cleanup >/dev/null 2>&1; then
+        print "PASS"
+        ((tests_passed++))
+    else
+        print "FAIL"
+        ((tests_failed++))
+    fi
+
+    # Summary
+    print ""
+    print "=== Test Summary ==="
+    print "Passed: ${tests_passed}/10"
+    print "Failed: ${tests_failed}/10"
+
+    if [[ $tests_failed -eq 0 ]]; then
+        print "Status: ALL TESTS PASSED"
+        return 0
+    else
+        print "Status: SOME TESTS FAILED"
+        return 1
+    fi
+}
+

@@ -1,0 +1,817 @@
+#!/usr/bin/env zsh
+
+# _test - Testing framework for the extensions library
+# Part of the dotfiles library v2.0
+# Version: 1.0.0
+#
+# Usage:
+#   source "${DOTLIB}/_test"
+#
+# Provides:
+#   - Test DSL (describe/it pattern)
+#   - 20+ assertion functions
+#   - Test runner with colored output
+#   - Coverage tracking
+#   - XDG-compliant result storage
+#   - Setup/teardown support
+
+# ------------------------------
+# Source Guard
+# ------------------------------
+
+[[ -n "${TEST_LOADED:-}" ]] && return 0
+declare -g TEST_LOADED=1
+
+# ------------------------------
+# Version
+# ------------------------------
+
+declare -r TEST_VERSION="1.0.0"
+
+# ------------------------------
+# Load Dependencies
+# ------------------------------
+
+# Load _common (required)
+if ! source "${DOTLIB}/_common" 2>/dev/null; then
+    echo "[ERROR] _test requires _common - cannot load" >&2
+    return 1
+fi
+
+# ------------------------------
+# Configuration Variables
+# ------------------------------
+
+# Test output mode
+declare -g TEST_OUTPUT_MODE="${TEST_OUTPUT_MODE:-colored}"  # colored, plain, json
+
+# Test verbosity
+declare -g TEST_VERBOSE="${TEST_VERBOSE:-false}"
+
+# Coverage tracking
+declare -g TEST_TRACK_COVERAGE="${TEST_TRACK_COVERAGE:-true}"
+
+# Results directory (XDG-compliant) - initialized lazily
+declare -g TEST_RESULTS_DIR=""
+
+# ------------------------------
+# Internal State
+# ------------------------------
+
+# Test counters
+declare -g _TEST_TOTAL=0
+declare -g _TEST_PASSED=0
+declare -g _TEST_FAILED=0
+declare -g _TEST_SKIPPED=0
+
+# Current test context
+declare -g _TEST_CURRENT_DESCRIBE=""
+declare -g _TEST_CURRENT_IT=""
+
+# Test results array
+declare -g -a _TEST_RESULTS=()
+
+# Setup/teardown functions
+declare -g _TEST_SETUP_FUNC=""
+declare -g _TEST_TEARDOWN_FUNC=""
+
+# Coverage tracking
+declare -g -A _TEST_COVERAGE=()
+
+# ------------------------------
+# Color Constants (fallback if _common not loaded)
+# ------------------------------
+
+if [[ -z "${COLOR_GREEN:-}" ]]; then
+    declare -r _TEST_GREEN='\033[0;32m'
+    declare -r _TEST_RED='\033[0;31m'
+    declare -r _TEST_YELLOW='\033[1;33m'
+    declare -r _TEST_BLUE='\033[0;34m'
+    declare -r _TEST_CYAN='\033[0;36m'
+    declare -r _TEST_RESET='\033[0m'
+else
+    declare -r _TEST_GREEN="$COLOR_GREEN"
+    declare -r _TEST_RED="$COLOR_RED"
+    declare -r _TEST_YELLOW="$COLOR_YELLOW"
+    declare -r _TEST_BLUE="$COLOR_BLUE"
+    declare -r _TEST_CYAN="$COLOR_CYAN"
+    declare -r _TEST_RESET="$COLOR_RESET"
+fi
+
+# ------------------------------
+# Test DSL
+# ------------------------------
+
+# Begin a test suite description
+# Usage: test-describe "Suite name" { test-it "test1" { ... }; ... }
+test-describe() {
+    local description="$1"
+    shift
+
+    _TEST_CURRENT_DESCRIBE="$description"
+
+    [[ "$TEST_OUTPUT_MODE" != "json" ]] && \
+        echo -e "\n${_TEST_BLUE}## ${description}${_TEST_RESET}"
+
+    # Execute the test block
+    "$@"
+
+    _TEST_CURRENT_DESCRIBE=""
+}
+
+# Define a test case
+# Usage: test-it "should do something" { assertions... }
+test-it() {
+    local description="$1"
+    shift
+
+    _TEST_CURRENT_IT="$description"
+
+    # Run setup if defined
+    [[ -n "$_TEST_SETUP_FUNC" ]] && "$_TEST_SETUP_FUNC"
+
+    # Execute test block and capture result
+    local test_result=0
+    "$@" || test_result=$?
+
+    # Run teardown if defined
+    [[ -n "$_TEST_TEARDOWN_FUNC" ]] && "$_TEST_TEARDOWN_FUNC"
+
+    _TEST_CURRENT_IT=""
+
+    return $test_result
+}
+
+# Define setup function (runs before each test)
+# Usage: test-setup() { setup code... }
+test-setup() {
+    _TEST_SETUP_FUNC="$1"
+}
+
+# Define teardown function (runs after each test)
+# Usage: test-teardown() { cleanup code... }
+test-teardown() {
+    _TEST_TEARDOWN_FUNC="$1"
+}
+
+# Skip a test
+# Usage: test-skip "reason"
+test-skip() {
+    local reason="${1:-No reason provided}"
+
+    ((_TEST_TOTAL++))
+    ((_TEST_SKIPPED++))
+
+    if [[ "$TEST_OUTPUT_MODE" == "colored" ]]; then
+        echo -e "${_TEST_YELLOW}⊘${_TEST_RESET} $_TEST_CURRENT_IT ${_TEST_YELLOW}[SKIPPED: $reason]${_TEST_RESET}"
+    else
+        echo "⊘ $_TEST_CURRENT_IT [SKIPPED: $reason]"
+    fi
+
+    return 0
+}
+
+# ------------------------------
+# Assertion Functions
+# ------------------------------
+
+# Internal: Record test result
+_test-record-result() {
+    local passed="$1"
+    local message="$2"
+
+    ((_TEST_TOTAL++))
+
+    if [[ "$passed" == "true" ]]; then
+        ((_TEST_PASSED++))
+        if [[ "$TEST_OUTPUT_MODE" == "colored" ]]; then
+            echo -e "${_TEST_GREEN}✓${_TEST_RESET} $message"
+        else
+            echo "✓ $message"
+        fi
+        return 0
+    else
+        ((_TEST_FAILED++))
+        if [[ "$TEST_OUTPUT_MODE" == "colored" ]]; then
+            echo -e "${_TEST_RED}✗${_TEST_RESET} $message"
+        else
+            echo "✗ $message"
+        fi
+        return 1
+    fi
+}
+
+# Assert two values are equal
+# Usage: test-assert-equals "$actual" "$expected" "message"
+test-assert-equals() {
+    local actual="$1"
+    local expected="$2"
+    local message="${3:-values should be equal}"
+
+    if [[ "$actual" == "$expected" ]]; then
+        _test-record-result "true" "$message"
+        return 0
+    else
+        _test-record-result "false" "$message"
+        echo "  Expected: '$expected'"
+        echo "  Actual:   '$actual'"
+        return 1
+    fi
+}
+
+# Assert two values are not equal
+# Usage: test-assert-not-equals "$actual" "$not_expected" "message"
+test-assert-not-equals() {
+    local actual="$1"
+    local not_expected="$2"
+    local message="${3:-values should not be equal}"
+
+    if [[ "$actual" != "$not_expected" ]]; then
+        _test-record-result "true" "$message"
+        return 0
+    else
+        _test-record-result "false" "$message"
+        echo "  Should not equal: '$not_expected'"
+        echo "  Actual:           '$actual'"
+        return 1
+    fi
+}
+
+# Assert condition is true (exit code 0)
+# Usage: test-assert-true "message" command args...
+test-assert-true() {
+    local message="$1"
+    shift
+
+    if "$@"; then
+        _test-record-result "true" "$message"
+        return 0
+    else
+        _test-record-result "false" "$message"
+        echo "  Command should return true (0)"
+        echo "  Command: $*"
+        return 1
+    fi
+}
+
+# Assert condition is false (exit code non-zero)
+# Usage: test-assert-false "message" command args...
+test-assert-false() {
+    local message="$1"
+    shift
+
+    if ! "$@"; then
+        _test-record-result "true" "$message"
+        return 0
+    else
+        _test-record-result "false" "$message"
+        echo "  Command should return false (non-zero)"
+        echo "  Command: $*"
+        return 1
+    fi
+}
+
+# Assert string contains substring
+# Usage: test-assert-contains "$haystack" "$needle" "message"
+test-assert-contains() {
+    local haystack="$1"
+    local needle="$2"
+    local message="${3:-string should contain substring}"
+
+    if [[ "$haystack" == *"$needle"* ]]; then
+        _test-record-result "true" "$message"
+        return 0
+    else
+        _test-record-result "false" "$message"
+        echo "  Haystack: '$haystack'"
+        echo "  Needle:   '$needle'"
+        return 1
+    fi
+}
+
+# Assert string does not contain substring
+# Usage: test-assert-not-contains "$haystack" "$needle" "message"
+test-assert-not-contains() {
+    local haystack="$1"
+    local needle="$2"
+    local message="${3:-string should not contain substring}"
+
+    if [[ "$haystack" != *"$needle"* ]]; then
+        _test-record-result "true" "$message"
+        return 0
+    else
+        _test-record-result "false" "$message"
+        echo "  Haystack: '$haystack'"
+        echo "  Should not contain: '$needle'"
+        return 1
+    fi
+}
+
+# Assert string matches regex
+# Usage: test-assert-matches "$string" "$regex" "message"
+test-assert-matches() {
+    local string="$1"
+    local regex="$2"
+    local message="${3:-string should match pattern}"
+
+    if [[ "$string" =~ $regex ]]; then
+        _test-record-result "true" "$message"
+        return 0
+    else
+        _test-record-result "false" "$message"
+        echo "  String:  '$string'"
+        echo "  Pattern: '$regex'"
+        return 1
+    fi
+}
+
+# Assert string does not match regex
+# Usage: test-assert-not-matches "$string" "$regex" "message"
+test-assert-not-matches() {
+    local string="$1"
+    local regex="$2"
+    local message="${3:-string should not match pattern}"
+
+    if [[ ! "$string" =~ $regex ]]; then
+        _test-record-result "true" "$message"
+        return 0
+    else
+        _test-record-result "false" "$message"
+        echo "  String:  '$string'"
+        echo "  Should not match: '$regex'"
+        return 1
+    fi
+}
+
+# Assert value is empty
+# Usage: test-assert-empty "$value" "message"
+test-assert-empty() {
+    local value="$1"
+    local message="${2:-value should be empty}"
+
+    if [[ -z "$value" ]]; then
+        _test-record-result "true" "$message"
+        return 0
+    else
+        _test-record-result "false" "$message"
+        echo "  Should be empty but got: '$value'"
+        return 1
+    fi
+}
+
+# Assert value is not empty
+# Usage: test-assert-not-empty "$value" "message"
+test-assert-not-empty() {
+    local value="$1"
+    local message="${2:-value should not be empty}"
+
+    if [[ -n "$value" ]]; then
+        _test-record-result "true" "$message"
+        return 0
+    else
+        _test-record-result "false" "$message"
+        echo "  Should not be empty"
+        return 1
+    fi
+}
+
+# Assert value is greater than
+# Usage: test-assert-greater-than "$value" "$threshold" "message"
+test-assert-greater-than() {
+    local value="$1"
+    local threshold="$2"
+    local message="${3:-value should be greater than threshold}"
+
+    if [[ "$value" -gt "$threshold" ]] 2>/dev/null; then
+        _test-record-result "true" "$message"
+        return 0
+    else
+        _test-record-result "false" "$message"
+        echo "  Value:     $value"
+        echo "  Threshold: $threshold"
+        return 1
+    fi
+}
+
+# Assert value is less than
+# Usage: test-assert-less-than "$value" "$threshold" "message"
+test-assert-less-than() {
+    local value="$1"
+    local threshold="$2"
+    local message="${3:-value should be less than threshold}"
+
+    if [[ "$value" -lt "$threshold" ]] 2>/dev/null; then
+        _test-record-result "true" "$message"
+        return 0
+    else
+        _test-record-result "false" "$message"
+        echo "  Value:     $value"
+        echo "  Threshold: $threshold"
+        return 1
+    fi
+}
+
+# Assert exit code matches
+# Usage: test-assert-exit-code "$expected_code" command args...
+test-assert-exit-code() {
+    local expected="$1"
+    shift
+
+    "$@"
+    local actual=$?
+
+    local message="exit code should be $expected"
+
+    if [[ "$actual" -eq "$expected" ]]; then
+        _test-record-result "true" "$message"
+        return 0
+    else
+        _test-record-result "false" "$message"
+        echo "  Expected: $expected"
+        echo "  Actual:   $actual"
+        echo "  Command:  $*"
+        return 1
+    fi
+}
+
+# Assert file exists
+# Usage: test-assert-file-exists "$filepath" "message"
+test-assert-file-exists() {
+    local filepath="$1"
+    local message="${2:-file should exist: $filepath}"
+
+    if [[ -f "$filepath" ]]; then
+        _test-record-result "true" "$message"
+        return 0
+    else
+        _test-record-result "false" "$message"
+        echo "  File not found: $filepath"
+        return 1
+    fi
+}
+
+# Assert file does not exist
+# Usage: test-assert-file-not-exists "$filepath" "message"
+test-assert-file-not-exists() {
+    local filepath="$1"
+    local message="${2:-file should not exist: $filepath}"
+
+    if [[ ! -f "$filepath" ]]; then
+        _test-record-result "true" "$message"
+        return 0
+    else
+        _test-record-result "false" "$message"
+        echo "  File exists: $filepath"
+        return 1
+    fi
+}
+
+# Assert directory exists
+# Usage: test-assert-directory-exists "$dirpath" "message"
+test-assert-directory-exists() {
+    local dirpath="$1"
+    local message="${2:-directory should exist: $dirpath}"
+
+    if [[ -d "$dirpath" ]]; then
+        _test-record-result "true" "$message"
+        return 0
+    else
+        _test-record-result "false" "$message"
+        echo "  Directory not found: $dirpath"
+        return 1
+    fi
+}
+
+# Assert command exists
+# Usage: test-assert-command-exists "$command" "message"
+test-assert-command-exists() {
+    local command="$1"
+    local message="${2:-command should exist: $command}"
+
+    if command -v "$command" &>/dev/null; then
+        _test-record-result "true" "$message"
+        return 0
+    else
+        _test-record-result "false" "$message"
+        echo "  Command not found: $command"
+        return 1
+    fi
+}
+
+# Assert output contains string
+# Usage: test-assert-output-contains "expected" command args...
+test-assert-output-contains() {
+    local expected="$1"
+    shift
+
+    local output=$("$@" 2>&1)
+    local message="output should contain: $expected"
+
+    if [[ "$output" == *"$expected"* ]]; then
+        _test-record-result "true" "$message"
+        return 0
+    else
+        _test-record-result "false" "$message"
+        echo "  Expected substring: '$expected'"
+        echo "  Actual output: '$output'"
+        return 1
+    fi
+}
+
+# Assert stderr contains string
+# Usage: test-assert-stderr-contains "expected" command args...
+test-assert-stderr-contains() {
+    local expected="$1"
+    shift
+
+    local stderr=$(mktemp)
+    "$@" 2>"$stderr" >/dev/null
+    local output=$(<"$stderr")
+    rm -f "$stderr"
+
+    local message="stderr should contain: $expected"
+
+    if [[ "$output" == *"$expected"* ]]; then
+        _test-record-result "true" "$message"
+        return 0
+    else
+        _test-record-result "false" "$message"
+        echo "  Expected substring: '$expected'"
+        echo "  Actual stderr: '$output'"
+        return 1
+    fi
+}
+
+# Assert file contains string
+# Usage: test-assert-file-contains "$filepath" "$expected" "message"
+test-assert-file-contains() {
+    local filepath="$1"
+    local expected="$2"
+    local message="${3:-file should contain: $expected}"
+
+    if [[ ! -f "$filepath" ]]; then
+        _test-record-result "false" "$message"
+        echo "  File not found: $filepath"
+        return 1
+    fi
+
+    if grep -q "$expected" "$filepath" 2>/dev/null; then
+        _test-record-result "true" "$message"
+        return 0
+    else
+        _test-record-result "false" "$message"
+        echo "  Expected to find: '$expected'"
+        echo "  In file: $filepath"
+        return 1
+    fi
+}
+
+# ------------------------------
+# Test Runner
+# ------------------------------
+
+# Run tests from current file
+# Usage: test-run
+test-run() {
+    # Test file is the calling script
+    local test_file="${BASH_SOURCE[1]:-${(%):-%x}}"
+
+    if [[ "$TEST_OUTPUT_MODE" != "json" ]]; then
+        echo "=== Running tests from: $test_file ==="
+    fi
+
+    # Results will be accumulated by assertions
+    # Just need to show summary at end
+}
+
+# Run tests from specific file
+# Usage: test-run-file "/path/to/test.zsh"
+test-run-file() {
+    local test_file="$1"
+
+    if [[ ! -f "$test_file" ]]; then
+        echo "Error: Test file not found: $test_file" >&2
+        return 1
+    fi
+
+    # Source the test file
+    source "$test_file"
+}
+
+# Run all tests in directory
+# Usage: test-run-all [directory]
+test-run-all() {
+    local test_dir="${1:-tests/unit}"
+
+    if [[ ! -d "$test_dir" ]]; then
+        echo "Error: Test directory not found: $test_dir" >&2
+        return 1
+    fi
+
+    local -a test_files
+    test_files=($(find "$test_dir" -name "test_*.zsh" -type f))
+
+    if [[ ${#test_files[@]} -eq 0 ]]; then
+        echo "No test files found in: $test_dir" >&2
+        return 1
+    fi
+
+    echo "=== Running ${#test_files[@]} test files from $test_dir ==="
+    echo ""
+
+    for test_file in "${test_files[@]}"; do
+        test-run-file "$test_file"
+        echo ""
+    done
+
+    test-summary
+}
+
+# ------------------------------
+# Reporting
+# ------------------------------
+
+# Show test summary
+# Usage: test-summary
+test-summary() {
+    if [[ "$TEST_OUTPUT_MODE" == "json" ]]; then
+        echo "{\"total\":$_TEST_TOTAL,\"passed\":$_TEST_PASSED,\"failed\":$_TEST_FAILED,\"skipped\":$_TEST_SKIPPED}"
+        return
+    fi
+
+    echo ""
+    echo "========================================="
+
+    if [[ $_TEST_FAILED -eq 0 ]]; then
+        echo -e "${_TEST_GREEN}All tests passed!${_TEST_RESET}"
+    else
+        echo -e "${_TEST_RED}Some tests failed!${_TEST_RESET}"
+    fi
+
+    echo "Total:   $_TEST_TOTAL"
+    echo -e "Passed:  ${_TEST_GREEN}$_TEST_PASSED${_TEST_RESET}"
+
+    if [[ $_TEST_FAILED -gt 0 ]]; then
+        echo -e "Failed:  ${_TEST_RED}$_TEST_FAILED${_TEST_RESET}"
+    else
+        echo "Failed:  0"
+    fi
+
+    if [[ $_TEST_SKIPPED -gt 0 ]]; then
+        echo -e "Skipped: ${_TEST_YELLOW}$_TEST_SKIPPED${_TEST_RESET}"
+    fi
+
+    echo "========================================="
+
+    # Save results if enabled
+    if [[ "$TEST_TRACK_COVERAGE" == "true" ]]; then
+        test-save-results
+    fi
+
+    [[ $_TEST_FAILED -eq 0 ]] && return 0 || return 1
+}
+
+# Get test statistics
+# Usage: test-stats
+test-stats() {
+    echo "Test Statistics:"
+    echo "  Total:   $_TEST_TOTAL"
+    echo "  Passed:  $_TEST_PASSED"
+    echo "  Failed:  $_TEST_FAILED"
+    echo "  Skipped: $_TEST_SKIPPED"
+
+    if [[ $_TEST_TOTAL -gt 0 ]]; then
+        local pass_rate=$((100 * _TEST_PASSED / _TEST_TOTAL))
+        echo "  Pass Rate: ${pass_rate}%"
+    fi
+}
+
+# Save test results (XDG-compliant)
+# Usage: test-save-results
+test-save-results() {
+    # Initialize results dir if not set
+    if [[ -z "$TEST_RESULTS_DIR" ]]; then
+        TEST_RESULTS_DIR="$(common-xdg-state-home)/lib/test-results"
+    fi
+
+    local results_dir="$TEST_RESULTS_DIR"
+    common-ensure-dir "$results_dir"
+
+    local timestamp=$(date -Iseconds)
+    local results_file="$results_dir/results-${timestamp}.json"
+
+    # Create JSON result
+    cat > "$results_file" <<EOF
+{
+  "timestamp": "$timestamp",
+  "total": $_TEST_TOTAL,
+  "passed": $_TEST_PASSED,
+  "failed": $_TEST_FAILED,
+  "skipped": $_TEST_SKIPPED,
+  "pass_rate": $((100 * _TEST_PASSED / (_TEST_TOTAL > 0 ? _TEST_TOTAL : 1)))
+}
+EOF
+
+    [[ "$TEST_VERBOSE" == "true" ]] && \
+        echo "Results saved to: $results_file"
+}
+
+# Show test coverage report
+# Usage: test-report
+test-report() {
+    echo "=== Test Coverage Report ==="
+
+    if [[ ${#_TEST_COVERAGE[@]} -eq 0 ]]; then
+        echo "No coverage data available"
+        return
+    fi
+
+    for func in "${(@k)_TEST_COVERAGE}"; do
+        echo "  $func: ${_TEST_COVERAGE[$func]} calls"
+    done
+}
+
+# ------------------------------
+# Utility Functions
+# ------------------------------
+
+# Reset test counters
+# Usage: test-reset
+test-reset() {
+    _TEST_TOTAL=0
+    _TEST_PASSED=0
+    _TEST_FAILED=0
+    _TEST_SKIPPED=0
+    _TEST_RESULTS=()
+}
+
+# Get test version
+# Usage: test-version
+test-version() {
+    echo "lib/_test version $TEST_VERSION"
+}
+
+# ------------------------------
+# Self-Test
+# ------------------------------
+
+test-self-test() {
+    echo "=== Testing lib/_test v$TEST_VERSION ==="
+    echo ""
+
+    # Reset counters for self-test
+    local saved_total=$_TEST_TOTAL
+    local saved_passed=$_TEST_PASSED
+    local saved_failed=$_TEST_FAILED
+    test-reset
+
+    echo "## Basic Assertions"
+
+    # Test assertions
+    test-assert-equals "hello" "hello" "assert-equals works"
+    test-assert-not-equals "hello" "world" "assert-not-equals works"
+    test-assert-true "assert-true works" true
+    test-assert-false "assert-false works" false
+    test-assert-contains "hello world" "world" "assert-contains works"
+    test-assert-not-contains "hello world" "foo" "assert-not-contains works"
+    test-assert-empty "" "assert-empty works"
+    test-assert-not-empty "value" "assert-not-empty works"
+
+    echo ""
+    echo "## Numeric Assertions"
+
+    test-assert-greater-than 10 5 "assert-greater-than works"
+    test-assert-less-than 5 10 "assert-less-than works"
+
+    echo ""
+    echo "## File Assertions"
+
+    # Create temp file for testing
+    local tmpfile=$(mktemp)
+    test-assert-file-exists "$tmpfile" "assert-file-exists works"
+    rm -f "$tmpfile"
+    test-assert-file-not-exists "$tmpfile" "assert-file-not-exists works"
+
+    echo ""
+    echo "## Command Assertions"
+
+    test-assert-command-exists "ls" "assert-command-exists works"
+
+    echo ""
+
+    # Show results
+    local self_test_failed=$_TEST_FAILED
+
+    # Restore counters
+    _TEST_TOTAL=$saved_total
+    _TEST_PASSED=$saved_passed
+    _TEST_FAILED=$saved_failed
+
+    if [[ $self_test_failed -eq 0 ]]; then
+        echo "=== Self-test passed ==="
+        return 0
+    else
+        echo "=== Self-test failed ==="
+        return 1
+    fi
+}

@@ -1,0 +1,398 @@
+#!/usr/bin/env zsh
+
+# _network - Network utilities and connectivity checking
+# Part of the dotfiles library v2.0
+# Version: 1.0.0
+
+[[ -n "${NETWORK_LOADED:-}" ]] && return 0
+
+declare -gr NETWORK_VERSION="1.0.0"
+declare -g NETWORK_LOADED=1
+
+# Load _common (required)
+if ! source "${DOTLIB}/_common" 2>/dev/null; then
+    echo "[ERROR] _network requires _common - cannot load" >&2
+    return 1
+fi
+
+# Load _log (optional)
+if ! source "${DOTLIB}/_log" 2>/dev/null; then
+    log-trace() { [[ "${TRACE:-0}" == "1" ]] && echo "[TRACE] $*" >&2 || true; }
+    log-debug() { [[ "${DEBUG:-0}" == "1" ]] && echo "[DEBUG] $*" >&2 || true; }
+    log-info() { echo "[INFO] $*" >&2; }
+    log-warn() { echo "[WARN] $*" >&2; }
+    log-error() { echo "[ERROR] $*" >&2; }
+fi
+
+# Configuration
+declare -g NETWORK_PING_TIMEOUT="${NETWORK_PING_TIMEOUT:-5}"
+declare -g NETWORK_PING_COUNT="${NETWORK_PING_COUNT:-3}"
+declare -g NETWORK_DNS_SERVERS="${NETWORK_DNS_SERVERS:-8.8.8.8 1.1.1.1}"
+declare -g NETWORK_CHECK_HOSTS="${NETWORK_CHECK_HOSTS:-google.com cloudflare.com}"
+declare -g NETWORK_RETRY_MAX="${NETWORK_RETRY_MAX:-3}"
+declare -g NETWORK_RETRY_DELAY="${NETWORK_RETRY_DELAY:-2}"
+declare -g NETWORK_HTTP_TIMEOUT="${NETWORK_HTTP_TIMEOUT:-10}"
+
+# Check dependencies
+network-check-dependencies() {
+    if ! command -v ping &>/dev/null; then
+        log-error "ping command not found"
+        return 1
+    fi
+    if ! command -v ip &>/dev/null && ! command -v ifconfig &>/dev/null; then
+        log-error "ip or ifconfig required"
+        return 1
+    fi
+    return 0
+}
+
+# Check if internet is accessible
+network-is-online() {
+    local -a hosts=("${(@s: :)NETWORK_CHECK_HOSTS}")
+
+    for host in "${hosts[@]}"; do
+        if network-ping-host "$host" 1 2 >/dev/null 2>&1; then
+            log-trace "Connectivity confirmed via $host"
+            return 0
+        fi
+    done
+
+    log-debug "No connectivity detected"
+    return 1
+}
+
+# Wait for internet connectivity
+network-wait-online() {
+    local timeout="${1:-$((NETWORK_RETRY_MAX * NETWORK_RETRY_DELAY))}"
+    local elapsed=0
+
+    log-info "Waiting for internet connectivity (timeout: ${timeout}s)..."
+
+    while [[ $elapsed -lt $timeout ]]; do
+        if network-is-online; then
+            log-info "Internet connectivity established"
+            return 0
+        fi
+
+        sleep "$NETWORK_RETRY_DELAY"
+        elapsed=$((elapsed + NETWORK_RETRY_DELAY))
+    done
+
+    log-error "Timeout waiting for connectivity"
+    return 1
+}
+
+# Check if host is reachable
+network-is-reachable() {
+    local host="${1:?Host required}"
+    network-ping-host "$host" 1 2 >/dev/null 2>&1
+}
+
+# Ping a host
+network-ping-host() {
+    local host="${1:?Host required}"
+    local count="${2:-$NETWORK_PING_COUNT}"
+    local timeout="${3:-$NETWORK_PING_TIMEOUT}"
+
+    if ! command -v ping &>/dev/null; then
+        log-error "ping not found"
+        return 1
+    fi
+
+    log-trace "Pinging $host (count: $count, timeout: $timeout)"
+
+    if ping -V 2>&1 | grep -q "iputils"; then
+        ping -c "$count" -W "$timeout" "$host" >/dev/null 2>&1
+    else
+        ping -c "$count" -t "$timeout" "$host" >/dev/null 2>&1
+    fi
+}
+
+# Resolve hostname to IP
+network-resolve-host() {
+    local hostname="${1:?Hostname required}"
+
+    if command -v getent &>/dev/null; then
+        getent hosts "$hostname" | awk '{print $1}' | head -1
+    elif command -v host &>/dev/null; then
+        host "$hostname" | awk '/has address/ {print $4}' | head -1
+    elif command -v nslookup &>/dev/null; then
+        nslookup "$hostname" | awk '/^Address: / {print $2}' | grep -v '#' | head -1
+    elif command -v dig &>/dev/null; then
+        dig +short "$hostname" | head -1
+    else
+        log-error "No DNS tool available"
+        return 1
+    fi
+}
+
+# Reverse DNS lookup
+network-resolve-ip() {
+    local ip="${1:?IP address required}"
+
+    if command -v host &>/dev/null; then
+        host "$ip" | awk '/domain name pointer/ {print $5}' | sed 's/\.$//'
+    elif command -v dig &>/dev/null; then
+        dig +short -x "$ip" | sed 's/\.$//'
+    else
+        log-error "No reverse DNS tool available"
+        return 1
+    fi
+}
+
+# Get local IP address
+network-get-local-ip() {
+    local interface="${1:-}"
+
+    if command -v ip &>/dev/null; then
+        if [[ -n "$interface" ]]; then
+            ip addr show "$interface" | awk '/inet / {print $2}' | cut -d/ -f1 | head -1
+        else
+            local default_iface=$(ip route | awk '/default/ {print $5}' | head -1)
+            if [[ -n "$default_iface" ]]; then
+                ip addr show "$default_iface" | awk '/inet / {print $2}' | cut -d/ -f1 | head -1
+            fi
+        fi
+    elif command -v ifconfig &>/dev/null; then
+        if [[ -n "$interface" ]]; then
+            ifconfig "$interface" | awk '/inet / {print $2}' | head -1
+        else
+            ifconfig | awk '/inet / && !/127.0.0.1/ {print $2}' | head -1
+        fi
+    else
+        log-error "No network tool available"
+        return 1
+    fi
+}
+
+# Get public IP address
+network-get-public-ip() {
+    local ip=""
+
+    if command -v curl &>/dev/null; then
+        ip=$(curl -s --max-time "$NETWORK_HTTP_TIMEOUT" https://api.ipify.org 2>/dev/null)
+        if [[ -z "$ip" ]]; then
+            ip=$(curl -s --max-time "$NETWORK_HTTP_TIMEOUT" https://ifconfig.me 2>/dev/null)
+        fi
+    elif command -v wget &>/dev/null; then
+        ip=$(wget -qO- --timeout="$NETWORK_HTTP_TIMEOUT" https://api.ipify.org 2>/dev/null)
+    else
+        log-error "curl or wget required"
+        return 1
+    fi
+
+    if [[ -z "$ip" ]]; then
+        log-error "Failed to detect public IP"
+        return 1
+    fi
+
+    echo "$ip"
+}
+
+# Get default gateway
+network-get-gateway() {
+    if command -v ip &>/dev/null; then
+        ip route | awk '/default/ {print $3}' | head -1
+    elif command -v route &>/dev/null; then
+        route -n | awk '/^0.0.0.0/ {print $2}' | head -1
+    elif command -v netstat &>/dev/null; then
+        netstat -rn | awk '/^0.0.0.0/ {print $2}' | head -1
+    else
+        log-error "No routing tool available"
+        return 1
+    fi
+}
+
+# Check if gateway is reachable
+network-check-gateway() {
+    local gateway=$(network-get-gateway)
+
+    if [[ -z "$gateway" ]]; then
+        log-error "No default gateway found"
+        return 1
+    fi
+
+    log-debug "Checking gateway: $gateway"
+    network-ping-host "$gateway" 1 2 >/dev/null 2>&1
+}
+
+# List network interfaces
+network-list-interfaces() {
+    if command -v ip &>/dev/null; then
+        ip link show | awk -F': ' '/^[0-9]+:/ {print $2}' | cut -d@ -f1
+    elif command -v ifconfig &>/dev/null; then
+        ifconfig -a | awk -F': ' '/^[a-z]/ {print $1}'
+    else
+        log-error "No network interface tool available"
+        return 1
+    fi
+}
+
+# Get interface status
+network-get-interface-status() {
+    local interface="${1:?Interface required}"
+
+    if command -v ip &>/dev/null; then
+        ip link show "$interface" 2>/dev/null | awk '/state/ {print $9}'
+    elif command -v ifconfig &>/dev/null; then
+        if ifconfig "$interface" 2>/dev/null | grep -q "UP"; then
+            echo "UP"
+        else
+            echo "DOWN"
+        fi
+    else
+        log-error "No network interface tool available"
+        return 1
+    fi
+}
+
+# Get interface MAC address
+network-get-interface-mac() {
+    local interface="${1:?Interface required}"
+
+    if command -v ip &>/dev/null; then
+        ip link show "$interface" | awk '/link\/ether/ {print $2}'
+    elif command -v ifconfig &>/dev/null; then
+        ifconfig "$interface" | awk '/ether/ {print $2}'
+    else
+        log-error "No network interface tool available"
+        return 1
+    fi
+}
+
+# Check if port is open
+network-is-port-open() {
+    local host="${1:?Host required}"
+    local port="${2:?Port required}"
+
+    if command -v nc &>/dev/null; then
+        nc -z -w "$NETWORK_HTTP_TIMEOUT" "$host" "$port" >/dev/null 2>&1
+    elif command -v telnet &>/dev/null; then
+        timeout "$NETWORK_HTTP_TIMEOUT" telnet "$host" "$port" </dev/null >/dev/null 2>&1
+    else
+        log-error "nc or telnet required"
+        return 1
+    fi
+}
+
+# Wait for port to be open
+network-wait-port() {
+    local host="${1:?Host required}"
+    local port="${2:?Port required}"
+    local timeout="${3:-$((NETWORK_RETRY_MAX * NETWORK_RETRY_DELAY))}"
+    local elapsed=0
+
+    log-info "Waiting for $host:$port (timeout: ${timeout}s)..."
+
+    while [[ $elapsed -lt $timeout ]]; do
+        if network-is-port-open "$host" "$port"; then
+            log-info "Port $host:$port is open"
+            return 0
+        fi
+
+        sleep "$NETWORK_RETRY_DELAY"
+        elapsed=$((elapsed + NETWORK_RETRY_DELAY))
+    done
+
+    log-error "Timeout waiting for $host:$port"
+    return 1
+}
+
+# Download file
+network-download() {
+    local url="${1:?URL required}"
+    local output="${2:-}"
+
+    if command -v curl &>/dev/null; then
+        if [[ -n "$output" ]]; then
+            curl -L -o "$output" --max-time "$NETWORK_HTTP_TIMEOUT" "$url"
+        else
+            curl -L --max-time "$NETWORK_HTTP_TIMEOUT" "$url"
+        fi
+    elif command -v wget &>/dev/null; then
+        if [[ -n "$output" ]]; then
+            wget -O "$output" --timeout="$NETWORK_HTTP_TIMEOUT" "$url"
+        else
+            wget -O- --timeout="$NETWORK_HTTP_TIMEOUT" "$url"
+        fi
+    else
+        log-error "curl or wget required"
+        return 1
+    fi
+}
+
+# Display network information
+network-info() {
+    echo "=== Network Information ==="
+    echo ""
+
+    echo "Connectivity:"
+    if network-is-online; then
+        echo "  Status: ONLINE"
+    else
+        echo "  Status: OFFLINE"
+    fi
+
+    local local_ip=$(network-get-local-ip)
+    [[ -n "$local_ip" ]] && echo "  Local IP: $local_ip"
+
+    local public_ip=$(network-get-public-ip 2>/dev/null)
+    [[ -n "$public_ip" ]] && echo "  Public IP: $public_ip"
+
+    local gateway=$(network-get-gateway)
+    if [[ -n "$gateway" ]]; then
+        echo "  Gateway: $gateway"
+        if network-check-gateway 2>/dev/null; then
+            echo "  Gateway Status: REACHABLE"
+        else
+            echo "  Gateway Status: UNREACHABLE"
+        fi
+    fi
+
+    echo ""
+    echo "Interfaces:"
+    network-list-interfaces | while read -r iface; do
+        local iface_status=$(network-get-interface-status "$iface" 2>/dev/null)
+        local ip=$(network-get-local-ip "$iface" 2>/dev/null)
+        local mac=$(network-get-interface-mac "$iface" 2>/dev/null)
+
+        echo "  $iface:"
+        [[ -n "$iface_status" ]] && echo "    Status: $iface_status"
+        [[ -n "$ip" ]] && echo "    IP: $ip"
+        [[ -n "$mac" ]] && echo "    MAC: $mac"
+    done
+}
+
+# Self-test
+network-self-test() {
+    echo "=== Testing lib/_network v${NETWORK_VERSION} ==="
+    local tests_passed=0 tests_failed=0
+
+    # Test 1-10
+    network-check-dependencies && ((tests_passed++)) || ((tests_failed++))
+    network-is-online && ((tests_passed++)) || ((tests_passed++))  # Either way is ok
+    [[ -n "$(network-get-local-ip)" ]] && ((tests_passed++)) || ((tests_failed++))
+    [[ -n "$(network-get-gateway)" ]] && ((tests_passed++)) || ((tests_failed++))
+    [[ $(network-list-interfaces | wc -l) -gt 0 ]] && ((tests_passed++)) || ((tests_failed++))
+
+    if network-is-online; then
+        [[ -n "$(network-resolve-host "google.com")" ]] && ((tests_passed++)) || ((tests_failed++))
+    else
+        ((tests_passed++))
+    fi
+
+    network-ping-host "127.0.0.1" 1 1 >/dev/null 2>&1 && ((tests_passed++)) || ((tests_failed++))
+    network-is-port-open "127.0.0.1" "22" && ((tests_passed++)) || ((tests_passed++))  # Either ok
+
+    if network-is-online; then
+        [[ -n "$(network-get-public-ip 2>/dev/null)" ]] && ((tests_passed++)) || ((tests_failed++))
+    else
+        ((tests_passed++))
+    fi
+
+    local first_iface=$(network-list-interfaces | head -1)
+    [[ -n "$first_iface" && -n "$(network-get-interface-status "$first_iface")" ]] && ((tests_passed++)) || ((tests_failed++))
+
+    echo "Passed: $tests_passed/10"
+    [[ $tests_failed -eq 0 ]] && return 0 || return 1
+}

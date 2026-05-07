@@ -1,0 +1,680 @@
+#!/usr/bin/env zsh
+
+# _notify - Desktop notification system with multi-backend support
+# Part of the dotfiles library v2.0
+# Version: 1.0.0
+#
+# Purpose:
+#   Provides unified desktop notification API with multiple backend support
+#   (notify-send, libnotify via D-Bus). Supports urgency levels, icons,
+#   progress notifications, notification history, and optional sound.
+#
+# Usage:
+#   source "${DOTLIB}/_notify" || return 6
+#
+#   notify "Build Complete" "All 42 tests passed" --urgency low --icon dialog-ok
+#   notify-progress "backup" 75 "Backing up files..."
+#   notify-error "Connection Failed" "Could not reach server"
+#
+# Provides:
+#   - Desktop notifications (notify-send, libnotify/D-Bus)
+#   - Urgency levels (low, normal, critical)
+#   - Custom icons and timeouts
+#   - Progress notifications with auto-update
+#   - Notification history
+#   - Sound support (optional)
+#   - Action callbacks (backend-dependent)
+#
+# Dependencies:
+#   - _common v2.0 (required)
+#   - _log v2.0 (optional, for structured logging)
+#   - _events v2.0 (optional, for event emission)
+#   - _lifecycle v3.0 (optional, for cleanup registration)
+#   - notify-send or gdbus (required for actual notifications)
+
+# ------------------------------
+# Source Guard
+# ------------------------------
+
+[[ -n "${_NOTIFY_LOADED}" ]] && return 0
+declare -gr _NOTIFY_LOADED=1
+
+# ------------------------------
+# Version
+# ------------------------------
+
+declare -gr NOTIFY_VERSION="1.0.0"
+
+# ------------------------------
+# Load Dependencies
+# ------------------------------
+
+# Required: _common
+if ! source "${DOTLIB}/_common" 2>/dev/null; then
+    echo "[ERROR] _notify requires _common - cannot load" >&2
+    return 6
+fi
+
+# Optional: _log (use fallbacks if unavailable)
+if ! source "${DOTLIB}/_log" 2>/dev/null; then
+    log-debug() { : ; }
+    log-info() { echo "[INFO] $*" >&2; }
+    log-warning() { echo "[WARNING] $*" >&2; }
+    log-error() { echo "[ERROR] $*" >&2; }
+fi
+
+# Optional: _events (graceful degradation)
+source "${DOTLIB}/_events" 2>/dev/null || true
+
+# Optional: _lifecycle (for cleanup)
+source "${DOTLIB}/_lifecycle" 2>/dev/null || true
+
+# ------------------------------
+# Configuration
+# ------------------------------
+
+# Backend selection (auto, notify-send, dbus)
+declare -g NOTIFY_BACKEND="${NOTIFY_BACKEND:-auto}"
+
+# Default urgency level (low, normal, critical)
+declare -g NOTIFY_DEFAULT_URGENCY="${NOTIFY_DEFAULT_URGENCY:-normal}"
+
+# Default timeout in milliseconds (0=default, -1=never expire)
+declare -g NOTIFY_DEFAULT_TIMEOUT="${NOTIFY_DEFAULT_TIMEOUT:-5000}"
+
+# Default icon
+declare -g NOTIFY_DEFAULT_ICON="${NOTIFY_DEFAULT_ICON:-}"
+
+# Sound settings
+declare -g NOTIFY_SOUND_ENABLED="${NOTIFY_SOUND_ENABLED:-false}"
+declare -g NOTIFY_SOUND_COMMAND="${NOTIFY_SOUND_COMMAND:-paplay}"
+declare -g NOTIFY_SOUND_FILE="${NOTIFY_SOUND_FILE:-/usr/share/sounds/freedesktop/stereo/message.oga}"
+
+# History settings
+declare -g NOTIFY_HISTORY_ENABLED="${NOTIFY_HISTORY_ENABLED:-true}"
+declare -g NOTIFY_HISTORY_SIZE="${NOTIFY_HISTORY_SIZE:-100}"
+
+# Application name
+declare -g NOTIFY_APP_NAME="${NOTIFY_APP_NAME:-Shell}"
+
+# State directory for notification data
+declare -g NOTIFY_STATE_DIR="$(common-xdg-state-home)/notify"
+
+# ------------------------------
+# Event Constants
+# ------------------------------
+
+declare -gr NOTIFY_EVENT_SENT="notify.sent"
+declare -gr NOTIFY_EVENT_PROGRESS="notify.progress"
+declare -gr NOTIFY_EVENT_CLOSED="notify.closed"
+
+# ------------------------------
+# Return Codes
+# ------------------------------
+
+declare -gr NOTIFY_SUCCESS=0
+declare -gr NOTIFY_ERROR=1
+declare -gr NOTIFY_ERROR_NO_BACKEND=2
+declare -gr NOTIFY_ERROR_INVALID_ARGS=3
+
+# ------------------------------
+# Internal State
+# ------------------------------
+
+# Notification history (array of "timestamp|urgency|summary|body")
+declare -g -a _NOTIFY_HISTORY=()
+
+# Progress notification IDs (associative array: name -> id)
+declare -g -A _NOTIFY_PROGRESS=()
+
+# Notification ID counter
+declare -g _NOTIFY_ID_COUNTER=1000
+
+# Detected backend cache
+declare -g _NOTIFY_BACKEND_CACHE=""
+
+# ------------------------------
+# Initialization
+# ------------------------------
+
+# Ensure state directory exists
+mkdir -p "$NOTIFY_STATE_DIR" 2>/dev/null
+
+# Register cleanup if lifecycle available
+if [[ -n "${_LIFECYCLE_LOADED}" ]]; then
+    lifecycle-register-cleanup notify-cleanup
+fi
+
+# ------------------------------
+# Helper Functions
+# ------------------------------
+
+# Emit event if events are available
+# Args: event_name, [args...]
+_notify-emit() {
+    [[ -n "${_EVENTS_LOADED}" ]] && events-emit "$@"
+}
+
+# Get next notification ID
+# Returns: unique notification ID
+_notify-next-id() {
+    echo $((_NOTIFY_ID_COUNTER++))
+}
+
+# Detect available notification backend
+# Returns: backend name (notify-send, dbus) or empty if none found
+_notify-detect-backend() {
+    # Use cached result if available
+    [[ -n "$_NOTIFY_BACKEND_CACHE" ]] && echo "$_NOTIFY_BACKEND_CACHE" && return 0
+
+    if command -v notify-send &>/dev/null; then
+        _NOTIFY_BACKEND_CACHE="notify-send"
+        echo "notify-send"
+        return 0
+    elif command -v gdbus &>/dev/null; then
+        _NOTIFY_BACKEND_CACHE="dbus"
+        echo "dbus"
+        return 0
+    else
+        log-error "No notification backend found (need notify-send or gdbus)"
+        return $NOTIFY_ERROR_NO_BACKEND
+    fi
+}
+
+# Add notification to history
+# Args: timestamp, urgency, summary, body
+_notify-add-history() {
+    [[ "$NOTIFY_HISTORY_ENABLED" != "true" ]] && return 0
+
+    local entry="$1|$2|$3|$4"
+    _NOTIFY_HISTORY+=("$entry")
+
+    # Trim history if too large
+    if (( ${#_NOTIFY_HISTORY[@]} > NOTIFY_HISTORY_SIZE )); then
+        _NOTIFY_HISTORY=("${_NOTIFY_HISTORY[@]: -$NOTIFY_HISTORY_SIZE}")
+    fi
+}
+
+# ------------------------------
+# Backend Implementations
+# ------------------------------
+
+# Send notification via notify-send
+# Args: summary, body, urgency, timeout, icon, replace_id
+# Returns: notification ID (or generated ID)
+_notify-via-notify-send() {
+    local summary="$1"
+    local body="$2"
+    local urgency="$3"
+    local timeout="$4"
+    local icon="$5"
+    local replace_id="$6"
+
+    local -a cmd=(notify-send)
+
+    # Build command
+    [[ -n "$urgency" ]] && cmd+=(--urgency="$urgency")
+    [[ -n "$timeout" && "$timeout" != "0" ]] && cmd+=(--expire-time="$timeout")
+    [[ -n "$icon" ]] && cmd+=(--icon="$icon")
+    [[ -n "$replace_id" ]] && cmd+=(--replace-id="$replace_id")
+    [[ -n "$NOTIFY_APP_NAME" ]] && cmd+=(--app-name="$NOTIFY_APP_NAME")
+
+    cmd+=("$summary")
+    [[ -n "$body" ]] && cmd+=("$body")
+
+    # Execute notification
+    "${cmd[@]}" 2>/dev/null
+
+    # Return ID (notify-send doesn't return ID, so generate one)
+    local id="${replace_id:-$(_notify-next-id)}"
+    echo "$id"
+}
+
+# Send notification via D-Bus (gdbus)
+# Args: summary, body, urgency, timeout, icon, replace_id
+# Returns: notification ID
+_notify-via-dbus() {
+    local summary="$1"
+    local body="$2"
+    local urgency="$3"
+    local timeout="$4"
+    local icon="$5"
+    local replace_id="$6"
+
+    # Convert urgency to numeric (0=low, 1=normal, 2=critical)
+    local urgency_num=1
+    case "$urgency" in
+        low) urgency_num=0 ;;
+        normal) urgency_num=1 ;;
+        critical) urgency_num=2 ;;
+    esac
+
+    # Use provided ID or generate new one
+    local id="${replace_id:-$(_notify-next-id)}"
+
+    # Send via D-Bus
+    gdbus call --session \
+        --dest org.freedesktop.Notifications \
+        --object-path /org/freedesktop/Notifications \
+        --method org.freedesktop.Notifications.Notify \
+        "$NOTIFY_APP_NAME" \
+        "$id" \
+        "$icon" \
+        "$summary" \
+        "$body" \
+        "[]" \
+        "{\"urgency\": <byte $urgency_num>}" \
+        "$timeout" 2>/dev/null | grep -oP '\(\K[0-9]+' || echo "$id"
+}
+
+# ------------------------------
+# Core Notification Functions
+# ------------------------------
+
+# Send desktop notification
+# Args: summary, [body], [--urgency LEVEL], [--timeout MS], [--icon ICON], [--replace ID], [--sound], [--no-sound]
+# Usage: notify "Build Complete" "All tests passed" --urgency low --icon dialog-ok
+# Returns: notification ID
+notify() {
+    local summary="${1:?Summary required}"
+    local body="${2:-}"
+    shift 2 2>/dev/null || shift 1
+
+    local urgency="$NOTIFY_DEFAULT_URGENCY"
+    local timeout="$NOTIFY_DEFAULT_TIMEOUT"
+    local icon="$NOTIFY_DEFAULT_ICON"
+    local replace_id=""
+    local sound="$NOTIFY_SOUND_ENABLED"
+
+    # Parse options
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --urgency)
+                urgency="$2"
+                shift 2
+                ;;
+            --timeout)
+                timeout="$2"
+                shift 2
+                ;;
+            --icon)
+                icon="$2"
+                shift 2
+                ;;
+            --replace)
+                replace_id="$2"
+                shift 2
+                ;;
+            --sound)
+                sound=true
+                shift
+                ;;
+            --no-sound)
+                sound=false
+                shift
+                ;;
+            *)
+                shift
+                ;;
+        esac
+    done
+
+    # Validate urgency
+    case "$urgency" in
+        low|normal|critical) ;;
+        *)
+            log-error "Invalid urgency level: $urgency (use low/normal/critical)"
+            return $NOTIFY_ERROR_INVALID_ARGS
+            ;;
+    esac
+
+    # Detect backend
+    local backend="$NOTIFY_BACKEND"
+    if [[ "$backend" == "auto" ]]; then
+        backend=$(_notify-detect-backend) || return $NOTIFY_ERROR_NO_BACKEND
+    fi
+
+    # Send notification via appropriate backend
+    local notification_id
+    case "$backend" in
+        notify-send)
+            notification_id=$(_notify-via-notify-send "$summary" "$body" "$urgency" "$timeout" "$icon" "$replace_id")
+            ;;
+        dbus)
+            notification_id=$(_notify-via-dbus "$summary" "$body" "$urgency" "$timeout" "$icon" "$replace_id")
+            ;;
+        *)
+            log-error "Unknown notification backend: $backend"
+            return $NOTIFY_ERROR_NO_BACKEND
+            ;;
+    esac
+
+    # Play sound if enabled
+    if [[ "$sound" == "true" && -f "$NOTIFY_SOUND_FILE" ]] && command -v "$NOTIFY_SOUND_COMMAND" &>/dev/null; then
+        "$NOTIFY_SOUND_COMMAND" "$NOTIFY_SOUND_FILE" &>/dev/null &
+    fi
+
+    # Add to history
+    local timestamp=$(date +"%Y-%m-%d %H:%M:%S")
+    _notify-add-history "$timestamp" "$urgency" "$summary" "$body"
+
+    # Emit event
+    _notify-emit "$NOTIFY_EVENT_SENT" "$notification_id" "$summary" "$urgency"
+
+    log-debug "Sent notification: $summary (ID: $notification_id)"
+    echo "$notification_id"
+}
+
+# ------------------------------
+# Convenience Functions
+# ------------------------------
+
+# Send info notification (low urgency, info icon)
+# Args: summary, [body]
+# Usage: notify-info "File saved" "Saved to /tmp/file.txt"
+notify-info() {
+    notify "${1:?}" "${2:-}" --urgency low --icon dialog-information
+}
+
+# Send warning notification (normal urgency, warning icon, sound)
+# Args: summary, [body]
+# Usage: notify-warning "Disk space low" "Only 10% remaining"
+notify-warning() {
+    notify "${1:?}" "${2:-}" --urgency normal --icon dialog-warning --sound
+}
+
+# Send error notification (critical urgency, error icon, sound)
+# Args: summary, [body]
+# Usage: notify-error "Build failed" "See logs for details"
+notify-error() {
+    notify "${1:?}" "${2:-}" --urgency critical --icon dialog-error --sound
+}
+
+# Send success notification (low urgency, ok icon)
+# Args: summary, [body]
+# Usage: notify-success "Deployment complete" "Version 1.2.3 is live"
+notify-success() {
+    notify "${1:?}" "${2:-}" --urgency low --icon dialog-ok
+}
+
+# ------------------------------
+# Progress Notifications
+# ------------------------------
+
+# Show or update progress notification
+# Args: name, percentage, [summary], [--icon ICON]
+# Usage: notify-progress "backup" 75 "Backing up files..."
+# Returns: notification ID
+notify-progress() {
+    local name="${1:?Name required}"
+    local percentage="${2:?Percentage required}"
+    local summary="${3:-Progress}"
+    shift 3 2>/dev/null || shift 2
+    local icon="$NOTIFY_DEFAULT_ICON"
+
+    # Parse options
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --icon)
+                icon="$2"
+                shift 2
+                ;;
+            *)
+                shift
+                ;;
+        esac
+    done
+
+    # Clamp percentage to 0-100
+    (( percentage < 0 )) && percentage=0
+    (( percentage > 100 )) && percentage=100
+
+    # Get or create notification ID for this progress tracker
+    local id="${_NOTIFY_PROGRESS[$name]}"
+    if [[ -z "$id" ]]; then
+        id=$(_notify-next-id)
+        _NOTIFY_PROGRESS[$name]="$id"
+    fi
+
+    # Create progress bar (20 characters)
+    local bar_length=20
+    local filled=$(( (percentage * bar_length) / 100 ))
+    local empty=$(( bar_length - filled ))
+    local bar="$(printf '█%.0s' $(seq 1 $filled))$(printf '░%.0s' $(seq 1 $empty))"
+
+    local body="$bar ${percentage}%"
+
+    # Send notification (replace previous one)
+    notify "$summary" "$body" --urgency low --timeout 0 ${icon:+--icon "$icon"} --replace "$id" --no-sound
+
+    # Emit progress event
+    _notify-emit "$NOTIFY_EVENT_PROGRESS" "$name" "$percentage"
+
+    log-debug "Progress notification: $name = $percentage%"
+    echo "$id"
+}
+
+# Close progress notification
+# Args: name, [summary]
+# Usage: notify-progress-close "backup" "Backup complete"
+notify-progress-close() {
+    local name="${1:?Name required}"
+    local summary="${2:-Complete}"
+
+    local id="${_NOTIFY_PROGRESS[$name]}"
+    if [[ -n "$id" ]]; then
+        notify "$summary" "100%" --urgency low --replace "$id" --no-sound
+        unset "_NOTIFY_PROGRESS[$name]"
+        log-debug "Closed progress notification: $name"
+    fi
+}
+
+# ------------------------------
+# Notification History
+# ------------------------------
+
+# Show notification history
+# Args: [--limit N]
+# Usage: notify-history --limit 20
+notify-history() {
+    local limit="$NOTIFY_HISTORY_SIZE"
+
+    # Parse options
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --limit)
+                limit="$2"
+                shift 2
+                ;;
+            *)
+                shift
+                ;;
+        esac
+    done
+
+    if (( ${#_NOTIFY_HISTORY[@]} == 0 )); then
+        echo "No notifications in history"
+        return 0
+    fi
+
+    echo "Notification History (last $limit):"
+    echo ""
+
+    local count=0
+    local total=${#_NOTIFY_HISTORY[@]}
+    local start=$((total - limit))
+    (( start < 0 )) && start=0
+
+    for (( i = start; i < total; i++ )); do
+        local entry="${_NOTIFY_HISTORY[$i]}"
+        IFS='|' read -r timestamp urgency summary body <<< "$entry"
+
+        # Color urgency
+        local urgency_colored
+        case "$urgency" in
+            low) urgency_colored="${COLOR_GREEN}LOW${COLOR_NC}" ;;
+            normal) urgency_colored="${COLOR_YELLOW}NORMAL${COLOR_NC}" ;;
+            critical) urgency_colored="${COLOR_RED}CRITICAL${COLOR_NC}" ;;
+            *) urgency_colored="$urgency" ;;
+        esac
+
+        echo "[$timestamp] [$urgency_colored] $summary"
+        [[ -n "$body" ]] && echo "  $body"
+        echo ""
+        ((count++))
+    done
+
+    echo "Total: $count notification(s)"
+}
+
+# Clear notification history
+# Usage: notify-history-clear
+notify-history-clear() {
+    _NOTIFY_HISTORY=()
+    log-info "Notification history cleared"
+}
+
+# ------------------------------
+# System Integration
+# ------------------------------
+
+# Check if notifications are available
+# Usage: notify-is-available && echo "Notifications supported"
+# Returns: 0 if backend available, 1 otherwise
+notify-is-available() {
+    _notify-detect-backend &>/dev/null
+}
+
+# Get notification backend info
+# Usage: notify-backend-info
+notify-backend-info() {
+    local backend=$(_notify-detect-backend 2>/dev/null)
+    if [[ -n "$backend" ]]; then
+        echo "Notification backend: $backend"
+        case "$backend" in
+            notify-send)
+                command -v notify-send | xargs ls -l
+                ;;
+            dbus)
+                echo "Using D-Bus (gdbus)"
+                command -v gdbus | xargs ls -l
+                ;;
+        esac
+    else
+        echo "No notification backend available"
+        return $NOTIFY_ERROR_NO_BACKEND
+    fi
+}
+
+# ------------------------------
+# Cleanup
+# ------------------------------
+
+# Cleanup function (called by lifecycle)
+# Usage: notify-cleanup
+notify-cleanup() {
+    # Close all progress notifications
+    for name in "${(@k)_NOTIFY_PROGRESS}"; do
+        notify-progress-close "$name" &>/dev/null
+    done
+
+    log-debug "Notification cleanup complete"
+}
+
+# ------------------------------
+# Self-Test Function
+# ------------------------------
+
+# Comprehensive self-test for _notify
+# Usage: notify-self-test
+# Returns: 0 if all tests pass, 1 if any fail
+notify-self-test() {
+    echo "=== Testing _notify v$NOTIFY_VERSION ==="
+    echo ""
+
+    local failed=0
+
+    # Test 1: Backend detection
+    echo "[TEST] Backend detection"
+    if notify-is-available; then
+        echo "  PASS: Backend available ($(backend=$(_notify-detect-backend); echo $backend))"
+    else
+        echo "  SKIP: No notification backend found (install notify-send or gdbus)"
+        echo ""
+        echo "=== Tests SKIPPED (no backend) ==="
+        return 0
+    fi
+    echo ""
+
+    # Test 2: Basic notification
+    echo "[TEST] Basic notification"
+    local id=$(notify "Test Notification" "This is a test" --urgency low --timeout 1000 2>/dev/null)
+    [[ -n "$id" ]] || { echo "  FAIL: Notification failed"; failed=1; }
+    echo "  PASS (ID: $id)"
+    sleep 1
+    echo ""
+
+    # Test 3: Convenience functions
+    echo "[TEST] Convenience functions"
+    notify-info "Info test" "Information" --timeout 1000 2>/dev/null || { echo "  FAIL: notify-info failed"; failed=1; }
+    sleep 0.5
+    notify-warning "Warning test" "Warning" --timeout 1000 2>/dev/null || { echo "  FAIL: notify-warning failed"; failed=1; }
+    sleep 0.5
+    notify-error "Error test" "Error" --timeout 1000 2>/dev/null || { echo "  FAIL: notify-error failed"; failed=1; }
+    sleep 0.5
+    notify-success "Success test" "Success" --timeout 1000 2>/dev/null || { echo "  FAIL: notify-success failed"; failed=1; }
+    sleep 0.5
+    echo "  PASS"
+    echo ""
+
+    # Test 4: Progress notifications
+    echo "[TEST] Progress notifications"
+    notify-progress "test-progress" 0 "Starting..." --timeout 1000 2>/dev/null || \
+        { echo "  FAIL: Progress start failed"; failed=1; }
+    sleep 0.5
+    notify-progress "test-progress" 50 "Halfway..." --timeout 1000 2>/dev/null || \
+        { echo "  FAIL: Progress update failed"; failed=1; }
+    sleep 0.5
+    notify-progress-close "test-progress" "Complete" 2>/dev/null || \
+        { echo "  FAIL: Progress close failed"; failed=1; }
+    sleep 0.5
+    echo "  PASS"
+    echo ""
+
+    # Test 5: History
+    echo "[TEST] History management"
+    local history_count=${#_NOTIFY_HISTORY[@]}
+    (( history_count >= 6 )) || { echo "  FAIL: History not populated (count: $history_count)"; failed=1; }
+    echo "  PASS ($history_count entries)"
+    echo ""
+
+    # Test 6: History display
+    echo "[TEST] History display"
+    notify-history --limit 3 >/dev/null || { echo "  FAIL: History display failed"; failed=1; }
+    echo "  PASS"
+    echo ""
+
+    # Test 7: History clear
+    echo "[TEST] History clear"
+    notify-history-clear
+    [[ ${#_NOTIFY_HISTORY[@]} -eq 0 ]] || { echo "  FAIL: History not cleared"; failed=1; }
+    echo "  PASS"
+    echo ""
+
+    # Test 8: Backend info
+    echo "[TEST] Backend info"
+    notify-backend-info >/dev/null || { echo "  FAIL: Backend info failed"; failed=1; }
+    echo "  PASS"
+    echo ""
+
+    # Summary
+    if [[ $failed -eq 0 ]]; then
+        echo "=== All tests PASSED ==="
+        echo "_notify v$NOTIFY_VERSION"
+        return $NOTIFY_SUCCESS
+    else
+        echo "=== Some tests FAILED ==="
+        return $NOTIFY_ERROR
+    fi
+}
+

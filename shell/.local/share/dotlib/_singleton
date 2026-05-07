@@ -1,0 +1,1043 @@
+#!/usr/bin/env zsh
+
+# _singleton - Process singleton management with comprehensive lock operations
+# Part of the dotfiles library v2.0
+# Version: 1.0.0
+#
+# Usage:
+#   source "${DOTLIB}/_singleton"
+#
+# Provides:
+#   - Single-instance enforcement (prevent multiple script instances)
+#   - File-based and PID-based locking mechanisms
+#   - Lock file management with timeout support
+#   - Process detection and termination
+#   - Multiple singleton strategies
+#   - Lock status checking and cleanup
+#   - Graceful handling of stale locks
+#   - Automatic cleanup on exit
+#
+# Dependencies:
+#   Layer 1: _common v2.0 (required)
+#   Layer 2: _log v2.0 (optional), _lifecycle v3.0 (optional)
+#   External: flock (required)
+
+# ------------------------------
+# Source Guard
+# ------------------------------
+
+[[ -n "${SINGLETON_LOADED:-}" ]] && return 0
+
+# ------------------------------
+# Version
+# ------------------------------
+
+declare -gr SINGLETON_VERSION="1.0.0"
+declare -g SINGLETON_LOADED=1
+
+# ------------------------------
+# Layer 1: Load Foundation
+# ------------------------------
+
+# Load _common (required)
+if ! source "${DOTLIB}/_common" 2>/dev/null; then
+    echo "[ERROR] _singleton requires _common - cannot load" >&2
+    return 1
+fi
+
+# ------------------------------
+# Layer 2: Load Infrastructure (Optional)
+# ------------------------------
+
+# Load _log (optional, with fallback)
+if ! source "${DOTLIB}/_log" 2>/dev/null; then
+    log-trace() { [[ "${TRACE:-0}" == "1" ]] && echo "[TRACE] $*" >&2 || true; }
+    log-debug() { [[ "${DEBUG:-0}" == "1" ]] && echo "[DEBUG] $*" >&2 || true; }
+    log-info() { echo "[INFO] $*" >&2; }
+    log-warn() { echo "[WARN] $*" >&2; }
+    log-error() { echo "[ERROR] $*" >&2; }
+fi
+
+# Load _lifecycle (optional, for cleanup)
+source "${DOTLIB}/_lifecycle" 2>/dev/null || true
+
+# ------------------------------
+# Configuration Variables
+# ------------------------------
+
+# SINGLETON_LOCK_DIR: Directory for lock files
+declare -g SINGLETON_LOCK_DIR="${SINGLETON_LOCK_DIR:-$(common-xdg-runtime-dir)/locks}"
+
+# SINGLETON_LOCK_TIMEOUT: Timeout for acquiring lock (seconds, 0 = no wait)
+declare -g SINGLETON_LOCK_TIMEOUT="${SINGLETON_LOCK_TIMEOUT:-0}"
+
+# SINGLETON_STALE_TIMEOUT: Age after which lock is considered stale (seconds)
+declare -g SINGLETON_STALE_TIMEOUT="${SINGLETON_STALE_TIMEOUT:-300}"
+
+# SINGLETON_ACTION_ON_CONFLICT: What to do when instance exists (exit, wait, kill, ignore)
+declare -g SINGLETON_ACTION_ON_CONFLICT="${SINGLETON_ACTION_ON_CONFLICT:-exit}"
+
+# SINGLETON_CLEANUP_ON_EXIT: Auto-cleanup lock on exit
+declare -g SINGLETON_CLEANUP_ON_EXIT="${SINGLETON_CLEANUP_ON_EXIT:-true}"
+
+# SINGLETON_NAME: Override process name for lock
+declare -g SINGLETON_NAME="${SINGLETON_NAME:-}"
+
+# ------------------------------
+# Internal State
+# ------------------------------
+
+# Track active locks for cleanup
+declare -g -A _SINGLETON_LOCKS=()
+
+# File descriptor for lock files
+declare -g _SINGLETON_LOCK_FD=200
+
+# ------------------------------
+# Dependency Validation
+# ------------------------------
+
+# singleton-check: Check if flock is available
+# Usage: singleton-check || return 1
+# Returns: 0 if flock is available, 1 otherwise
+singleton-check() {
+    if ! common-command-exists flock; then
+        log-error "flock is not installed"
+        log-error "Install with: sudo pacman -S util-linux (or equivalent)"
+        return 1
+    fi
+    return 0
+}
+
+# singleton-init: Initialize singleton system
+# Usage: singleton-init
+# Returns: 0 on success, 1 on failure
+singleton-init() {
+    log-debug "Initializing singleton system"
+
+    # Check if flock is available
+    singleton-check || return 1
+
+    # Ensure lock directory exists
+    if ! singleton-ensure-lock-dir; then
+        return 1
+    fi
+
+    log-debug "Singleton system initialized successfully"
+    return 0
+}
+
+# ------------------------------
+# Utility Functions
+# ------------------------------
+
+# singleton-get-lock-file: Get lock file path for a name
+# Usage: lock_file=$(singleton-get-lock-file "myapp")
+# Args: name - Lock name
+# Returns: Lock file path
+singleton-get-lock-file() {
+    local name="${1:?Lock name required}"
+    echo "${SINGLETON_LOCK_DIR}/${name}.lock"
+}
+
+# singleton-get-process-name: Get process name
+# Usage: name=$(singleton-get-process-name)
+# Returns: Process name (from SINGLETON_NAME or basename of $0)
+singleton-get-process-name() {
+    if [[ -n "$SINGLETON_NAME" ]]; then
+        echo "$SINGLETON_NAME"
+    else
+        basename "${0}"
+    fi
+}
+
+# singleton-ensure-lock-dir: Ensure lock directory exists
+# Usage: singleton-ensure-lock-dir
+# Returns: 0 on success, 1 on failure
+singleton-ensure-lock-dir() {
+    if [[ ! -d "$SINGLETON_LOCK_DIR" ]]; then
+        if ! mkdir -p "$SINGLETON_LOCK_DIR" 2>/dev/null; then
+            log-error "Failed to create lock directory: $SINGLETON_LOCK_DIR"
+            return 1
+        fi
+        log-debug "Created lock directory: $SINGLETON_LOCK_DIR"
+    fi
+    return 0
+}
+
+# singleton-is-stale-lock: Check if lock file is stale
+# Usage: singleton-is-stale-lock "/path/to/lock"
+# Args: lock_file - Path to lock file
+# Returns: 0 if stale, 1 if active
+singleton-is-stale-lock() {
+    local lock_file="${1:?Lock file required}"
+
+    # Check if lock file exists
+    [[ ! -f "$lock_file" ]] && return 0
+
+    # Check age-based staleness
+    if [[ $SINGLETON_STALE_TIMEOUT -gt 0 ]]; then
+        local current_time=$(date +%s)
+        local lock_mtime=$(stat -c %Y "$lock_file" 2>/dev/null || echo "0")
+        local age=$((current_time - lock_mtime))
+
+        if [[ $age -gt $SINGLETON_STALE_TIMEOUT ]]; then
+            log-debug "Lock file is stale (age: ${age}s, timeout: ${SINGLETON_STALE_TIMEOUT}s)"
+            return 0
+        fi
+    fi
+
+    # Check if PID in lock file still exists
+    if [[ -r "$lock_file" ]]; then
+        local pid=$(cat "$lock_file" 2>/dev/null | head -n 1)
+        if [[ -n "$pid" ]] && [[ "$pid" =~ ^[0-9]+$ ]]; then
+            if ! kill -0 "$pid" 2>/dev/null; then
+                log-debug "Lock file contains dead PID: $pid"
+                return 0
+            fi
+        fi
+    fi
+
+    return 1
+}
+
+# singleton-clean-stale-lock: Clean stale lock
+# Usage: singleton-clean-stale-lock "/path/to/lock"
+# Args: lock_file - Path to lock file
+# Returns: 0 if cleaned, 1 if active
+singleton-clean-stale-lock() {
+    local lock_file="${1:?Lock file required}"
+
+    if singleton-is-stale-lock "$lock_file"; then
+        log-info "Cleaning stale lock: $lock_file"
+        rm -f "$lock_file"
+        return 0
+    fi
+
+    return 1
+}
+
+# ------------------------------
+# Lock Acquisition Functions
+# ------------------------------
+
+# singleton-acquire: Acquire singleton lock (alias for singleton-lock)
+# Usage: singleton-acquire [name]
+# Args: name - Lock name (optional, defaults to process name)
+# Returns: 0 on success, 1 on failure
+singleton-acquire() {
+    singleton-lock "$@"
+}
+
+# singleton-lock: Acquire singleton lock
+# Usage: singleton-lock [name]
+# Args: name - Lock name (optional, defaults to process name)
+# Returns: 0 on success, 1 on failure
+singleton-lock() {
+    local name="${1:-$(singleton-get-process-name)}"
+    local lock_file=$(singleton-get-lock-file "$name")
+
+    # Ensure lock directory exists
+    singleton-ensure-lock-dir || return 1
+
+    # Clean stale lock if exists
+    singleton-clean-stale-lock "$lock_file"
+
+    # Try to acquire lock
+    local lock_fd=$_SINGLETON_LOCK_FD
+
+    # Open lock file
+    eval "exec ${lock_fd}>${lock_file}" 2>/dev/null || {
+        log-error "Failed to open lock file: $lock_file"
+        return 1
+    }
+
+    # Try to acquire lock with timeout
+    local flock_opts="-n"
+    if [[ $SINGLETON_LOCK_TIMEOUT -gt 0 ]]; then
+        flock_opts="-w $SINGLETON_LOCK_TIMEOUT"
+    fi
+
+    if ! flock $flock_opts $lock_fd; then
+        eval "exec ${lock_fd}>&-"  # Close FD
+
+        # Handle conflict based on action
+        case "$SINGLETON_ACTION_ON_CONFLICT" in
+            exit)
+                log-info "Another instance is already running"
+                exit 0
+                ;;
+            wait)
+                log-info "Waiting for lock..."
+                flock -w $SINGLETON_STALE_TIMEOUT $lock_fd || {
+                    log-error "Timeout waiting for lock"
+                    return 1
+                }
+                ;;
+            kill)
+                log-warn "Killing existing instance"
+                singleton-kill-by-lock "$lock_file"
+                sleep 1
+                # Try again
+                flock -n $lock_fd || {
+                    log-error "Failed to acquire lock after kill"
+                    return 1
+                }
+                ;;
+            ignore)
+                log-warn "Lock exists but ignoring"
+                return 0
+                ;;
+            *)
+                log-error "Invalid SINGLETON_ACTION_ON_CONFLICT: $SINGLETON_ACTION_ON_CONFLICT"
+                return 1
+                ;;
+        esac
+    fi
+
+    # Write PID to lock file
+    echo $$ >&$lock_fd
+
+    # Track this lock
+    _SINGLETON_LOCKS[$name]=$lock_file
+
+    # Setup cleanup trap
+    if [[ "$SINGLETON_CLEANUP_ON_EXIT" == "true" ]]; then
+        trap "singleton-unlock '$name'" EXIT INT TERM
+    fi
+
+    log-info "Singleton lock acquired: $name (PID: $$)"
+    return 0
+}
+
+# singleton-lock-wait: Acquire lock with explicit wait
+# Usage: singleton-lock-wait [name] [timeout]
+# Args:
+#   name - Lock name (optional)
+#   timeout - Wait timeout in seconds (optional)
+# Returns: 0 on success, 1 on failure
+singleton-lock-wait() {
+    local name="${1:-$(singleton-get-process-name)}"
+    local timeout="${2:-$SINGLETON_STALE_TIMEOUT}"
+
+    local old_timeout=$SINGLETON_LOCK_TIMEOUT
+    local old_action=$SINGLETON_ACTION_ON_CONFLICT
+
+    SINGLETON_LOCK_TIMEOUT=$timeout
+    SINGLETON_ACTION_ON_CONFLICT="wait"
+
+    singleton-lock "$name"
+    local result=$?
+
+    SINGLETON_LOCK_TIMEOUT=$old_timeout
+    SINGLETON_ACTION_ON_CONFLICT=$old_action
+
+    return $result
+}
+
+# singleton-try-lock: Try to acquire lock (non-blocking)
+# Usage: singleton-try-lock [name]
+# Args: name - Lock name (optional)
+# Returns: 0 on success, 1 if lock exists
+singleton-try-lock() {
+    local name="${1:-$(singleton-get-process-name)}"
+
+    local old_timeout=$SINGLETON_LOCK_TIMEOUT
+    local old_action=$SINGLETON_ACTION_ON_CONFLICT
+
+    SINGLETON_LOCK_TIMEOUT=0
+    SINGLETON_ACTION_ON_CONFLICT="ignore"
+
+    singleton-lock "$name"
+    local result=$?
+
+    SINGLETON_LOCK_TIMEOUT=$old_timeout
+    SINGLETON_ACTION_ON_CONFLICT=$old_action
+
+    return $result
+}
+
+# ------------------------------
+# Lock Release Functions
+# ------------------------------
+
+# singleton-release: Release singleton lock (alias for singleton-unlock)
+# Usage: singleton-release [name]
+# Args: name - Lock name (optional)
+# Returns: 0 on success, 1 on failure
+singleton-release() {
+    singleton-unlock "$@"
+}
+
+# singleton-unlock: Release singleton lock
+# Usage: singleton-unlock [name]
+# Args: name - Lock name (optional)
+# Returns: 0 on success, 1 on failure
+singleton-unlock() {
+    local name="${1:-$(singleton-get-process-name)}"
+    local lock_file="${_SINGLETON_LOCKS[$name]}"
+
+    if [[ -z "$lock_file" ]]; then
+        log-warn "No lock found for: $name"
+        return 1
+    fi
+
+    # Remove lock file
+    rm -f "$lock_file" 2>/dev/null
+
+    # Remove from tracking
+    unset "_SINGLETON_LOCKS[$name]"
+
+    log-info "Singleton lock released: $name"
+    return 0
+}
+
+# singleton-unlock-all: Release all locks held by this process
+# Usage: singleton-unlock-all
+# Returns: 0 on success
+singleton-unlock-all() {
+    local count=0
+
+    for name in "${(@k)_SINGLETON_LOCKS}"; do
+        singleton-unlock "$name" && count=$((count + 1))
+    done
+
+    log-info "Released $count lock(s)"
+    return 0
+}
+
+# ------------------------------
+# Lock Status Functions
+# ------------------------------
+
+# singleton-check-lock: Check if lock exists (alias for singleton-is-locked)
+# Usage: singleton-check-lock [name]
+# Args: name - Lock name (optional)
+# Returns: 0 if locked, 1 otherwise
+singleton-check-lock() {
+    singleton-is-locked "$@"
+}
+
+# singleton-is-locked: Check if lock is held
+# Usage: singleton-is-locked [name]
+# Args: name - Lock name (optional)
+# Returns: 0 if locked, 1 otherwise
+singleton-is-locked() {
+    local name="${1:-$(singleton-get-process-name)}"
+    local lock_file=$(singleton-get-lock-file "$name")
+
+    [[ -f "$lock_file" ]] && ! singleton-is-stale-lock "$lock_file"
+}
+
+# singleton-has-lock: Check if this process holds the lock
+# Usage: singleton-has-lock [name]
+# Args: name - Lock name (optional)
+# Returns: 0 if we hold the lock, 1 otherwise
+singleton-has-lock() {
+    local name="${1:-$(singleton-get-process-name)}"
+    [[ -n "${_SINGLETON_LOCKS[$name]}" ]]
+}
+
+# singleton-get-pid: Get PID from lock file (alias for singleton-get-lock-pid)
+# Usage: pid=$(singleton-get-pid [name])
+# Args: name - Lock name (optional)
+# Returns: PID or empty string
+singleton-get-pid() {
+    singleton-get-lock-pid "$@"
+}
+
+# singleton-get-lock-pid: Get PID from lock file
+# Usage: pid=$(singleton-get-lock-pid [name])
+# Args: name - Lock name (optional)
+# Returns: PID or empty string
+singleton-get-lock-pid() {
+    local name="${1:-$(singleton-get-process-name)}"
+    local lock_file=$(singleton-get-lock-file "$name")
+
+    if [[ -f "$lock_file" ]]; then
+        cat "$lock_file" 2>/dev/null | head -n 1
+    else
+        echo ""
+    fi
+}
+
+# singleton-is-running: Check if process is running
+# Usage: singleton-is-running [name]
+# Args: name - Lock name (optional)
+# Returns: 0 if process is running, 1 otherwise
+singleton-is-running() {
+    local name="${1:-$(singleton-get-process-name)}"
+    local pid=$(singleton-get-lock-pid "$name")
+
+    if [[ -n "$pid" ]] && [[ "$pid" =~ ^[0-9]+$ ]]; then
+        kill -0 "$pid" 2>/dev/null
+        return $?
+    fi
+
+    return 1
+}
+
+# singleton-get-lock-age: Get lock file age in seconds
+# Usage: age=$(singleton-get-lock-age [name])
+# Args: name - Lock name (optional)
+# Returns: Age in seconds, or 0 if lock doesn't exist
+singleton-get-lock-age() {
+    local name="${1:-$(singleton-get-process-name)}"
+    local lock_file=$(singleton-get-lock-file "$name")
+
+    if [[ ! -f "$lock_file" ]]; then
+        echo "0"
+        return 1
+    fi
+
+    local current_time=$(date +%s)
+    local lock_mtime=$(stat -c %Y "$lock_file" 2>/dev/null || echo "$current_time")
+    echo $((current_time - lock_mtime))
+}
+
+# singleton-status: Show lock status
+# Usage: singleton-status [name]
+# Args: name - Lock name (optional)
+# Returns: Status summary
+singleton-status() {
+    local name="${1:-$(singleton-get-process-name)}"
+    local lock_file=$(singleton-get-lock-file "$name")
+
+    echo "Singleton Status: $name"
+    echo "  Lock File:    $lock_file"
+
+    if [[ -f "$lock_file" ]]; then
+        echo "  Locked:       yes"
+        local pid=$(singleton-get-lock-pid "$name")
+        echo "  PID:          $pid"
+
+        if kill -0 "$pid" 2>/dev/null; then
+            echo "  Process:      running"
+        else
+            echo "  Process:      dead (stale lock)"
+        fi
+
+        local age=$(singleton-get-lock-age "$name")
+        echo "  Age:          ${age}s"
+
+        if [[ $age -gt $SINGLETON_STALE_TIMEOUT ]]; then
+            echo "  Status:       STALE"
+        fi
+    else
+        echo "  Locked:       no"
+    fi
+
+    echo "  Held by us:   $(singleton-has-lock "$name" && echo "yes" || echo "no")"
+}
+
+# singleton-list: List all locks (alias for singleton-list-locks)
+# Usage: singleton-list
+# Returns: List of all locks
+singleton-list() {
+    singleton-list-locks
+}
+
+# singleton-list-locks: List all locks in lock directory
+# Usage: singleton-list-locks
+# Returns: List of all locks with details
+singleton-list-locks() {
+    singleton-ensure-lock-dir
+
+    if [[ ! -d "$SINGLETON_LOCK_DIR" ]]; then
+        log-error "Lock directory does not exist: $SINGLETON_LOCK_DIR"
+        return 1
+    fi
+
+    echo "Active Locks in $SINGLETON_LOCK_DIR:"
+    echo ""
+
+    local count=0
+    for lock_file in "$SINGLETON_LOCK_DIR"/*.lock(N); do
+        [[ ! -f "$lock_file" ]] && continue
+
+        local name=$(basename "$lock_file" .lock)
+        local pid=$(cat "$lock_file" 2>/dev/null | head -n 1)
+        local age=$((($(date +%s) - $(stat -c %Y "$lock_file" 2>/dev/null || echo "0"))))
+        local status="active"
+
+        if ! kill -0 "$pid" 2>/dev/null; then
+            status="stale (dead process)"
+        elif [[ $age -gt $SINGLETON_STALE_TIMEOUT ]]; then
+            status="stale (old)"
+        fi
+
+        echo "  $name"
+        echo "    PID: $pid"
+        echo "    Age: ${age}s"
+        echo "    Status: $status"
+        echo ""
+
+        count=$((count + 1))
+    done
+
+    if [[ $count -eq 0 ]]; then
+        echo "  (no locks found)"
+    else
+        echo "Total: $count lock(s)"
+    fi
+}
+
+# ------------------------------
+# Process Management Functions
+# ------------------------------
+
+# singleton-kill-by-lock: Kill process holding lock
+# Usage: singleton-kill-by-lock <lock_file>
+# Args: lock_file - Path to lock file
+# Returns: 0 on success, 1 on failure
+singleton-kill-by-lock() {
+    local lock_file="${1:?Lock file required}"
+
+    if [[ ! -f "$lock_file" ]]; then
+        log-warn "Lock file not found: $lock_file"
+        return 1
+    fi
+
+    local pid=$(cat "$lock_file" 2>/dev/null | head -n 1)
+
+    if [[ -z "$pid" ]] || [[ ! "$pid" =~ ^[0-9]+$ ]]; then
+        log-error "Invalid PID in lock file"
+        return 1
+    fi
+
+    if ! kill -0 "$pid" 2>/dev/null; then
+        log-warn "Process $pid is not running"
+        rm -f "$lock_file"
+        return 1
+    fi
+
+    log-info "Killing process $pid"
+    kill -TERM "$pid" 2>/dev/null
+
+    # Wait for process to die
+    local timeout=5
+    local elapsed=0
+    while [[ $elapsed -lt $timeout ]]; do
+        if ! kill -0 "$pid" 2>/dev/null; then
+            log-info "Process $pid terminated"
+            rm -f "$lock_file"
+            return 0
+        fi
+        sleep 1
+        elapsed=$((elapsed + 1))
+    done
+
+    # Force kill if still alive
+    log-warn "Process $pid did not terminate, forcing..."
+    kill -9 "$pid" 2>/dev/null
+    sleep 1
+    rm -f "$lock_file"
+    return 0
+}
+
+# singleton-kill: Kill process by singleton name
+# Usage: singleton-kill [name]
+# Args: name - Lock name (optional)
+# Returns: 0 on success, 1 on failure
+singleton-kill() {
+    local name="${1:-$(singleton-get-process-name)}"
+    local lock_file=$(singleton-get-lock-file "$name")
+
+    singleton-kill-by-lock "$lock_file"
+}
+
+# singleton-force-release: Force release lock (alias for singleton-kill)
+# Usage: singleton-force-release [name]
+# Args: name - Lock name (optional)
+# Returns: 0 on success, 1 on failure
+singleton-force-release() {
+    singleton-kill "$@"
+}
+
+# singleton-kill-others: Kill all other instances of this process
+# Usage: singleton-kill-others
+# Returns: 0 on success
+singleton-kill-others() {
+    local process_name=$(singleton-get-process-name)
+    local my_pid=$$
+
+    log-info "Looking for other instances of: $process_name"
+
+    # Find all PIDs matching process name
+    local pids=$(pgrep -f "$process_name" 2>/dev/null | grep -v "^${my_pid}$")
+
+    if [[ -z "$pids" ]]; then
+        log-info "No other instances found"
+        return 0
+    fi
+
+    local count=0
+    for pid in $pids; do
+        if kill -0 "$pid" 2>/dev/null; then
+            log-info "Killing process $pid"
+            kill -TERM "$pid" 2>/dev/null
+            count=$((count + 1))
+        fi
+    done
+
+    log-info "Terminated $count other instance(s)"
+    return 0
+}
+
+# ------------------------------
+# Cleanup Functions
+# ------------------------------
+
+# singleton-cleanup: Clean all stale locks (alias for singleton-clean-stale)
+# Usage: singleton-cleanup
+# Returns: Number of locks cleaned
+singleton-cleanup() {
+    singleton-clean-stale
+}
+
+# singleton-clean-stale: Clean all stale locks
+# Usage: singleton-clean-stale
+# Returns: Number of locks cleaned
+singleton-clean-stale() {
+    singleton-ensure-lock-dir
+
+    if [[ ! -d "$SINGLETON_LOCK_DIR" ]]; then
+        log-error "Lock directory does not exist: $SINGLETON_LOCK_DIR"
+        return 1
+    fi
+
+    log-info "Cleaning stale locks in $SINGLETON_LOCK_DIR"
+
+    local count=0
+    for lock_file in "$SINGLETON_LOCK_DIR"/*.lock(N); do
+        [[ ! -f "$lock_file" ]] && continue
+
+        if singleton-clean-stale-lock "$lock_file"; then
+            count=$((count + 1))
+        fi
+    done
+
+    log-info "Cleaned $count stale lock(s)"
+    return 0
+}
+
+# singleton-clean-all: Clean all locks (force)
+# Usage: singleton-clean-all
+# Returns: Number of locks removed
+singleton-clean-all() {
+    singleton-ensure-lock-dir
+
+    if [[ ! -d "$SINGLETON_LOCK_DIR" ]]; then
+        log-error "Lock directory does not exist: $SINGLETON_LOCK_DIR"
+        return 1
+    fi
+
+    log-warn "Removing all locks in $SINGLETON_LOCK_DIR"
+
+    local count=0
+    for lock_file in "$SINGLETON_LOCK_DIR"/*.lock(N); do
+        [[ ! -f "$lock_file" ]] && continue
+        rm -f "$lock_file"
+        count=$((count + 1))
+    done
+
+    log-info "Removed $count lock(s)"
+    return 0
+}
+
+# ------------------------------
+# Configuration Functions
+# ------------------------------
+
+# singleton-set-lock-dir: Set lock directory
+# Usage: singleton-set-lock-dir "/path/to/locks"
+# Args: dir - Lock directory path
+# Returns: 0 on success
+singleton-set-lock-dir() {
+    local dir="${1:?Lock directory required}"
+    SINGLETON_LOCK_DIR="$dir"
+    singleton-ensure-lock-dir
+    log-debug "Set lock directory: $dir"
+}
+
+# singleton-set-timeout: Set lock timeout
+# Usage: singleton-set-timeout 10
+# Args: timeout - Timeout in seconds
+# Returns: 0 on success
+singleton-set-timeout() {
+    local timeout="${1:?Timeout required}"
+    SINGLETON_LOCK_TIMEOUT="$timeout"
+    log-debug "Set lock timeout: ${timeout}s"
+}
+
+# singleton-set-stale-timeout: Set stale timeout
+# Usage: singleton-set-stale-timeout 300
+# Args: timeout - Stale timeout in seconds
+# Returns: 0 on success
+singleton-set-stale-timeout() {
+    local timeout="${1:?Stale timeout required}"
+    SINGLETON_STALE_TIMEOUT="$timeout"
+    log-debug "Set stale timeout: ${timeout}s"
+}
+
+# singleton-set-conflict-action: Set conflict action
+# Usage: singleton-set-conflict-action "wait"
+# Args: action - Action (exit, wait, kill, ignore)
+# Returns: 0 on success, 1 on invalid action
+singleton-set-conflict-action() {
+    local action="${1:?Action required}"
+
+    case "$action" in
+        exit|wait|kill|ignore)
+            SINGLETON_ACTION_ON_CONFLICT="$action"
+            log-debug "Set conflict action: $action"
+            return 0
+            ;;
+        *)
+            log-error "Invalid action: $action (use: exit, wait, kill, ignore)"
+            return 1
+            ;;
+    esac
+}
+
+# singleton-get-config: Show current configuration
+# Usage: singleton-get-config
+# Returns: Configuration summary
+singleton-get-config() {
+    echo "Singleton Configuration:"
+    echo "  Lock Directory:      $SINGLETON_LOCK_DIR"
+    echo "  Lock Timeout:        ${SINGLETON_LOCK_TIMEOUT}s"
+    echo "  Stale Timeout:       ${SINGLETON_STALE_TIMEOUT}s"
+    echo "  Conflict Action:     $SINGLETON_ACTION_ON_CONFLICT"
+    echo "  Cleanup on Exit:     $SINGLETON_CLEANUP_ON_EXIT"
+    echo "  Process Name:        $(singleton-get-process-name)"
+}
+
+# ------------------------------
+# Module Info
+# ------------------------------
+
+# singleton-version: Show module version
+# Usage: singleton-version
+# Returns: Version string
+singleton-version() {
+    echo "lib/_singleton version ${SINGLETON_VERSION}"
+}
+
+# singleton-info: Show module information
+# Usage: singleton-info
+# Returns: Module information
+singleton-info() {
+    cat <<EOF
+lib/_singleton v${SINGLETON_VERSION}
+
+Process singleton management with comprehensive lock operations.
+
+Dependencies:
+  Required: _common v2.0, flock (util-linux)
+  Optional: _log v2.0, _lifecycle v3.0
+
+Features:
+  - Single-instance enforcement
+  - File-based and PID-based locking
+  - Timeout support
+  - Stale lock detection and cleanup
+  - Multiple conflict strategies
+  - Automatic cleanup on exit
+
+Configuration:
+  SINGLETON_LOCK_DIR, SINGLETON_LOCK_TIMEOUT
+  SINGLETON_STALE_TIMEOUT, SINGLETON_ACTION_ON_CONFLICT
+  SINGLETON_CLEANUP_ON_EXIT, SINGLETON_NAME
+
+Functions:
+  Acquire: singleton-lock, singleton-lock-wait, singleton-try-lock
+  Release: singleton-unlock, singleton-unlock-all
+  Status: singleton-is-locked, singleton-has-lock, singleton-status
+  Process: singleton-kill, singleton-kill-others
+  Cleanup: singleton-clean-stale, singleton-clean-all
+  Config: singleton-set-lock-dir, singleton-get-config
+EOF
+}
+
+# singleton-help: Show help
+# Usage: singleton-help
+# Returns: Help text
+singleton-help() {
+    cat <<'EOF'
+lib/_singleton - Process singleton management
+
+USAGE:
+    source "${DOTLIB}/_singleton"
+
+LOCK ACQUISITION:
+    singleton-lock [name]              Acquire singleton lock
+    singleton-lock-wait [name] [sec]   Acquire lock with wait
+    singleton-try-lock [name]          Try to acquire (non-blocking)
+    singleton-acquire [name]           Alias for singleton-lock
+
+LOCK RELEASE:
+    singleton-unlock [name]            Release lock
+    singleton-unlock-all               Release all locks
+    singleton-release [name]           Alias for singleton-unlock
+
+LOCK STATUS:
+    singleton-is-locked [name]         Check if locked
+    singleton-has-lock [name]          Check if we hold lock
+    singleton-is-running [name]        Check if process is running
+    singleton-get-lock-pid [name]      Get PID from lock
+    singleton-get-lock-age [name]      Get lock age in seconds
+    singleton-status [name]            Show detailed status
+    singleton-list-locks               List all locks
+    singleton-check-lock [name]        Alias for singleton-is-locked
+
+PROCESS MANAGEMENT:
+    singleton-kill [name]              Kill process holding lock
+    singleton-kill-others              Kill other instances
+    singleton-force-release [name]     Force release lock
+
+CLEANUP:
+    singleton-clean-stale              Clean stale locks
+    singleton-clean-all                Remove all locks (force)
+    singleton-cleanup                  Alias for singleton-clean-stale
+
+CONFIGURATION:
+    singleton-set-lock-dir <path>      Set lock directory
+    singleton-set-timeout <seconds>    Set lock timeout
+    singleton-set-stale-timeout <sec>  Set stale timeout
+    singleton-set-conflict-action <a>  Set conflict action
+    singleton-get-config               Show configuration
+
+ENVIRONMENT VARIABLES:
+    SINGLETON_LOCK_DIR                 Lock directory
+    SINGLETON_LOCK_TIMEOUT             Lock acquisition timeout
+    SINGLETON_STALE_TIMEOUT            Stale lock age threshold
+    SINGLETON_ACTION_ON_CONFLICT       Action when lock exists
+    SINGLETON_CLEANUP_ON_EXIT          Auto-cleanup on exit
+    SINGLETON_NAME                     Override process name
+
+EXAMPLES:
+    # Basic usage
+    singleton-lock
+    # ... your code ...
+    singleton-unlock
+
+    # With automatic cleanup
+    singleton-lock "myapp"
+    # Lock auto-releases on exit
+
+    # Wait for lock
+    singleton-lock-wait "myapp" 30
+
+    # Kill existing instance
+    SINGLETON_ACTION_ON_CONFLICT=kill singleton-lock
+EOF
+}
+
+# ------------------------------
+# Self-Test
+# ------------------------------
+
+# singleton-self-test: Run self-tests
+# Usage: singleton-self-test
+# Returns: 0 if all tests pass, 1 otherwise
+singleton-self-test() {
+    log-info "Running lib/_singleton self-tests..."
+
+    local tests_passed=0
+    local tests_failed=0
+
+    # Test 1: Check flock availability
+    if singleton-check; then
+        log-info "PASS: flock is available"
+        ((tests_passed++))
+    else
+        log-error "FAIL: flock is not available"
+        ((tests_failed++))
+    fi
+
+    # Test 2: Ensure lock directory
+    if singleton-ensure-lock-dir; then
+        log-info "PASS: Lock directory exists"
+        ((tests_passed++))
+    else
+        log-error "FAIL: Failed to create lock directory"
+        ((tests_failed++))
+    fi
+
+    # Test 3: Get process name
+    local proc_name=$(singleton-get-process-name)
+    if [[ -n "$proc_name" ]]; then
+        log-info "PASS: Process name: $proc_name"
+        ((tests_passed++))
+    else
+        log-error "FAIL: Failed to get process name"
+        ((tests_failed++))
+    fi
+
+    # Test 4: Lock acquisition
+    if singleton-lock "test-lock-$$"; then
+        log-info "PASS: Lock acquired"
+        ((tests_passed++))
+
+        # Test 5: Check if we hold the lock
+        if singleton-has-lock "test-lock-$$"; then
+            log-info "PASS: Lock is held by us"
+            ((tests_passed++))
+        else
+            log-error "FAIL: Lock not held by us"
+            ((tests_failed++))
+        fi
+
+        # Test 6: Check if locked
+        if singleton-is-locked "test-lock-$$"; then
+            log-info "PASS: Lock file exists"
+            ((tests_passed++))
+        else
+            log-error "FAIL: Lock file doesn't exist"
+            ((tests_failed++))
+        fi
+
+        # Test 7: Get PID
+        local pid=$(singleton-get-lock-pid "test-lock-$$")
+        if [[ "$pid" == "$$" ]]; then
+            log-info "PASS: Lock PID: $pid"
+            ((tests_passed++))
+        else
+            log-error "FAIL: Wrong PID: $pid (expected $$)"
+            ((tests_failed++))
+        fi
+
+        # Test 8: Release lock
+        if singleton-unlock "test-lock-$$"; then
+            log-info "PASS: Lock released"
+            ((tests_passed++))
+        else
+            log-error "FAIL: Failed to release lock"
+            ((tests_failed++))
+        fi
+    else
+        log-error "FAIL: Failed to acquire lock"
+        ((tests_failed++))
+    fi
+
+    # Test 9: Configuration
+    singleton-set-timeout 30
+    if [[ "$SINGLETON_LOCK_TIMEOUT" == "30" ]]; then
+        log-info "PASS: Configuration works"
+        ((tests_passed++))
+        singleton-set-timeout 0  # Reset
+    else
+        log-error "FAIL: Configuration failed"
+        ((tests_failed++))
+    fi
+
+    # Summary
+    log-info "Self-tests complete: $tests_passed passed, $tests_failed failed"
+
+    if [[ $tests_failed -eq 0 ]]; then
+        return 0
+    else
+        return 1
+    fi
+}

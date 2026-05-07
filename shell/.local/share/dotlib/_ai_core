@@ -1,0 +1,2089 @@
+#!/usr/bin/env zsh
+
+# _ai_core - Generic AI abstraction layer for tool-agnostic AI definitions
+# Part of the dotfiles library v1.0
+# Version: 1.0.0
+#
+# Usage:
+#   source "${DOTLIB}/_ai_core"
+#
+# Provides:
+#   - Tool-agnostic AI definition loading and validation
+#   - YAML parsing with tiered fallbacks
+#   - Mustache-style template engine
+#   - Smart artifact generation pipeline
+#   - Hash-based cache invalidation
+#   - Multi-stage validation system
+#
+# Dependencies:
+#   Required:
+#     - _common v2.0: Core utilities
+#     - yq: YAML processing (https://github.com/mikefarah/yq)
+#   Optional (gracefully degraded):
+#     - _log v2.0: Structured logging
+#     - _events v2.0: Event system integration
+#     - _cache v2.0: Artifact caching
+#     - _config v2.0: Configuration persistence
+#     - _lifecycle v2.0: Cleanup management
+
+# ------------------------------
+# Source Guard
+# ------------------------------
+
+[[ -n "${AI_CORE_LOADED:-}" ]] && return 0
+declare -g AI_CORE_LOADED=1
+
+# ------------------------------
+# Version
+# ------------------------------
+
+declare -r AI_CORE_VERSION="1.0.0"
+
+# ------------------------------
+# Dependency Loading
+# ------------------------------
+
+# Load foundation (required)
+if ! source "${DOTLIB}/_common" 2>/dev/null; then
+    echo "[ERROR] _ai_core requires _common - cannot load" >&2
+    return 1
+fi
+
+# Load infrastructure (optional with fallbacks)
+if ! source "${DOTLIB}/_log" 2>/dev/null; then
+    log-info() { echo "[INFO] $*"; }
+    log-error() { echo "[ERROR] $*" >&2; }
+    log-warn() { echo "[WARN] $*" >&2; }
+    log-warning() { echo "[WARN] $*" >&2; }
+    log-debug() { [[ "${AI_DEBUG:-false}" == "true" ]] && echo "[DEBUG] $*" >&2 || true; }
+    log-trace() { [[ "${AI_TRACE:-false}" == "true" ]] && echo "[TRACE] $*" >&2 || true; }
+    log-success() { echo "[SUCCESS] $*"; }
+fi
+
+# Check for optional extensions
+if source "${DOTLIB}/_events" 2>/dev/null; then
+    declare -g AI_EVENTS_AVAILABLE=true
+else
+    declare -g AI_EVENTS_AVAILABLE=false
+fi
+
+if source "${DOTLIB}/_cache" 2>/dev/null; then
+    declare -g AI_CACHE_AVAILABLE=true
+else
+    declare -g AI_CACHE_AVAILABLE=false
+fi
+
+if source "${DOTLIB}/_config" 2>/dev/null; then
+    declare -g AI_CONFIG_AVAILABLE=true
+else
+    declare -g AI_CONFIG_AVAILABLE=false
+fi
+
+if source "${DOTLIB}/_lifecycle" 2>/dev/null; then
+    declare -g AI_LIFECYCLE_AVAILABLE=true
+else
+    declare -g AI_LIFECYCLE_AVAILABLE=false
+fi
+
+# Check for required YAML parsing tool
+if ! command -v yq >/dev/null 2>&1; then
+    echo "[ERROR] _ai_core requires yq for YAML parsing" >&2
+    echo "[ERROR] Install: https://github.com/mikefarah/yq" >&2
+    return 1
+fi
+declare -g AI_YQ_AVAILABLE=true
+
+# Python3 as fallback (optional)
+if common-command-exists python3; then
+    declare -g AI_PYTHON_AVAILABLE=true
+else
+    declare -g AI_PYTHON_AVAILABLE=false
+fi
+
+# ------------------------------
+# Configuration Variables
+# ------------------------------
+
+# Core settings
+declare -g AI_ENABLED="${AI_ENABLED:-true}"
+declare -g AI_DEFAULT_TOOL="${AI_DEFAULT_TOOL:-claude}"
+declare -g AI_DEBUG="${AI_DEBUG:-false}"
+declare -g AI_VERBOSE="${AI_VERBOSE:-false}"
+declare -g AI_TRACE="${AI_TRACE:-false}"
+
+# Directory paths (XDG-compliant)
+declare -g AI_DATA_DIR="${AI_DATA_DIR:-$(common-lib-data-dir 2>/dev/null || echo "$HOME/.local/share")/ai}"
+declare -g AI_STATE_DIR="${AI_STATE_DIR:-$(common-lib-state-dir 2>/dev/null || echo "$HOME/.local/state")/ai}"
+declare -g AI_CACHE_DIR="${AI_CACHE_DIR:-$(common-lib-cache-dir 2>/dev/null || echo "$HOME/.cache")/ai}"
+declare -g AI_SHARE_DIR="${AI_SHARE_DIR:-$HOME/.local/share/ai}"
+
+# Definition and template paths
+declare -g AI_DEFINITION_DIR="${AI_DEFINITION_DIR:-$AI_SHARE_DIR/definitions}"
+declare -g AI_TEMPLATE_DIR="${AI_TEMPLATE_DIR:-$AI_SHARE_DIR/templates}"
+declare -g AI_SCHEMA_DIR="${AI_SCHEMA_DIR:-$AI_SHARE_DIR/schemas}"
+
+# Caching
+declare -g AI_CACHE_TTL="${AI_CACHE_TTL:-3600}"  # 1 hour default
+declare -g AI_CACHE_ENABLED="${AI_CACHE_ENABLED:-true}"
+
+# Generation
+declare -g AI_AUTO_SYNC="${AI_AUTO_SYNC:-false}"
+declare -g AI_FORCE_REGENERATE="${AI_FORCE_REGENERATE:-false}"
+
+# Events
+declare -g AI_EMIT_EVENTS="${AI_EMIT_EVENTS:-true}"
+
+# Template engine
+declare -g AI_TEMPLATE_MAX_DEPTH="${AI_TEMPLATE_MAX_DEPTH:-10}"  # Max recursion for partials
+declare -g AI_TEMPLATE_CACHE_ENABLED="${AI_TEMPLATE_CACHE_ENABLED:-true}"
+
+# ------------------------------
+# Event Names
+# ------------------------------
+
+declare -g AI_EVENT_INIT="ai.init"
+declare -g AI_EVENT_CLEANUP="ai.cleanup"
+declare -g AI_EVENT_DEFINITION_LOADED="ai.definition.loaded"
+declare -g AI_EVENT_TEMPLATE_LOADED="ai.template.loaded"
+declare -g AI_EVENT_GENERATE_START="ai.generate.start"
+declare -g AI_EVENT_GENERATE_COMPLETE="ai.generate.complete"
+declare -g AI_EVENT_GENERATE_ERROR="ai.generate.error"
+declare -g AI_EVENT_ARTIFACT_GENERATED="ai.artifact.generated"
+declare -g AI_EVENT_CACHE_HIT="ai.cache.hit"
+declare -g AI_EVENT_CACHE_MISS="ai.cache.miss"
+declare -g AI_EVENT_VALIDATE_ERROR="ai.validate.error"
+declare -g AI_EVENT_SYNC_START="ai.sync.start"
+declare -g AI_EVENT_SYNC_COMPLETE="ai.sync.complete"
+
+# ------------------------------
+# Error Codes
+# ------------------------------
+
+# Success
+declare -r AI_ERR_SUCCESS=0
+
+# General errors
+declare -r AI_ERR_GENERAL=1
+declare -r AI_ERR_INVALID_ARGUMENT=2
+
+# Definition errors (10-19)
+declare -r AI_ERR_DEFINITION_NOT_FOUND=10
+declare -r AI_ERR_DEFINITION_PARSE_FAILED=11
+declare -r AI_ERR_DEFINITION_INVALID_STRUCTURE=12
+declare -r AI_ERR_DEFINITION_INVALID_SEMANTIC=13
+declare -r AI_ERR_DEFINITION_DEPENDENCY_MISSING=14
+declare -r AI_ERR_DEFINITION_CIRCULAR_DEPENDENCY=15
+
+# Template errors (20-29)
+declare -r AI_ERR_TEMPLATE_NOT_FOUND=20
+declare -r AI_ERR_TEMPLATE_PARSE_FAILED=21
+declare -r AI_ERR_TEMPLATE_INVALID_SYNTAX=22
+declare -r AI_ERR_TEMPLATE_UNBALANCED_TAGS=23
+declare -r AI_ERR_TEMPLATE_UNDEFINED_VARIABLE=24
+declare -r AI_ERR_TEMPLATE_PARTIAL_NOT_FOUND=25
+
+# Generation errors (30-39)
+declare -r AI_ERR_GENERATION_FAILED=30
+declare -r AI_ERR_GENERATION_VALIDATION_FAILED=31
+declare -r AI_ERR_GENERATION_TIMEOUT=32
+
+# Installation errors (40-49)
+declare -r AI_ERR_INSTALL_FAILED=40
+declare -r AI_ERR_INSTALL_PERMISSION_DENIED=41
+declare -r AI_ERR_INSTALL_DIRECTORY_NOT_FOUND=42
+
+# Runtime errors (50-59)
+declare -r AI_ERR_RUNTIME_FAILED=50
+
+# Cache errors (60-69)
+declare -r AI_ERR_CACHE_MISS=60
+declare -r AI_ERR_CACHE_EXPIRED=61
+declare -r AI_ERR_CACHE_WRITE_FAILED=62
+declare -r AI_ERR_CACHE_READ_FAILED=63
+declare -r AI_ERR_INVALID_ARGUMENTS=2  # Alias for AI_ERR_INVALID_ARGUMENT
+
+# ------------------------------
+# Internal State
+# ------------------------------
+
+# Cache storage
+declare -g -A _AI_DEFINITION_CACHE=()      # name -> parsed definition (JSON)
+declare -g -A _AI_TEMPLATE_CACHE=()        # template_path -> compiled template
+declare -g -A _AI_ARTIFACT_CACHE=()        # key -> artifact content
+declare -g -A _AI_ARTIFACT_HASH=()         # key -> source hash
+
+# Generation queue
+declare -g -a _AI_GENERATION_QUEUE=()
+
+# Initialization flag
+declare -g _AI_INITIALIZED=false
+
+# Template helper registry
+declare -g -A _AI_TEMPLATE_HELPERS=(
+    [join]="_ai-helper-join"
+    [upper]="_ai-helper-upper"
+    [lower]="_ai-helper-lower"
+    [default]="_ai-helper-default"
+    [length]="_ai-helper-length"
+)
+
+# Statistics
+declare -g _AI_STATS_DEFINITIONS_LOADED=0
+declare -g _AI_STATS_ARTIFACTS_GENERATED=0
+declare -g _AI_STATS_CACHE_HITS=0
+declare -g _AI_STATS_CACHE_MISSES=0
+
+# ------------------------------
+# Utility Functions
+# ------------------------------
+
+# Emit event via _events if available
+_ai-emit() {
+    [[ "$AI_EVENTS_AVAILABLE" == "true" ]] || return 0
+    [[ "$AI_EMIT_EVENTS" == "true" ]] || return 0
+
+    local event="$1"
+    shift
+
+    events-emit "$event" "$@"
+}
+
+# Logging wrapper
+_ai-log() {
+    local level="$1"
+    shift
+
+    case "$level" in
+        debug)
+            log-debug "ai" "$@"
+            ;;
+        trace)
+            log-trace "ai" "$@"
+            ;;
+        info)
+            log-info "ai" "$@"
+            ;;
+        warn|warning)
+            log-warn "ai" "$@"
+            ;;
+        error)
+            log-error "ai" "$@"
+            ;;
+        success)
+            log-success "ai" "$@"
+            ;;
+        *)
+            log-info "ai" "$@"
+            ;;
+    esac
+}
+
+# ------------------------------
+# Initialization
+# ------------------------------
+
+# Initialize AI subsystem
+# Usage: ai-init
+# Returns: 0 on success, 1 on failure
+ai-init() {
+    [[ "$_AI_INITIALIZED" == "true" ]] && return 0
+
+    _ai-log debug "Initializing _ai_core v$AI_CORE_VERSION"
+
+    # Load configuration from _config if available
+    if [[ "$AI_CONFIG_AVAILABLE" == "true" ]]; then
+        AI_ENABLED=$(config-get "ai.enabled" "$AI_ENABLED" 2>/dev/null || echo "$AI_ENABLED")
+        AI_DEFAULT_TOOL=$(config-get "ai.default_tool" "$AI_DEFAULT_TOOL" 2>/dev/null || echo "$AI_DEFAULT_TOOL")
+        AI_CACHE_TTL=$(config-get "ai.cache_ttl" "$AI_CACHE_TTL" 2>/dev/null || echo "$AI_CACHE_TTL")
+        AI_AUTO_SYNC=$(config-get "ai.auto_sync" "$AI_AUTO_SYNC" 2>/dev/null || echo "$AI_AUTO_SYNC")
+        AI_DEBUG=$(config-get "ai.debug" "$AI_DEBUG" 2>/dev/null || echo "$AI_DEBUG")
+    fi
+
+    # Ensure directories exist
+    common-ensure-dir "$AI_DATA_DIR" 2>/dev/null || true
+    common-ensure-dir "$AI_STATE_DIR" 2>/dev/null || true
+    common-ensure-dir "$AI_CACHE_DIR" 2>/dev/null || true
+    common-ensure-dir "$AI_STATE_DIR/temp" 2>/dev/null || true
+
+    # Register cleanup with _lifecycle if available
+    if [[ "$AI_LIFECYCLE_AVAILABLE" == "true" ]]; then
+        lifecycle-register-cleanup "ai-cleanup"
+    fi
+
+    _AI_INITIALIZED=true
+
+    _ai-emit "$AI_EVENT_INIT" "version=$AI_CORE_VERSION"
+    _ai-log info "AI subsystem initialized (version $AI_CORE_VERSION)"
+
+    return 0
+}
+
+# Cleanup function (called by _lifecycle)
+# Usage: ai-cleanup
+ai-cleanup() {
+    _ai-log debug "AI cleanup started"
+
+    # Remove temporary files
+    rm -rf "$AI_STATE_DIR/temp" 2>/dev/null || true
+
+    # Clear in-memory caches
+    _AI_DEFINITION_CACHE=()
+    _AI_TEMPLATE_CACHE=()
+    _AI_ARTIFACT_CACHE=()
+    _AI_ARTIFACT_HASH=()
+
+    _ai-emit "$AI_EVENT_CLEANUP" "complete"
+    _ai-log debug "AI cleanup complete"
+}
+
+# ------------------------------
+# YAML Parsing
+# ------------------------------
+
+# Parse YAML file to JSON
+# Usage: ai-parse-yaml <file>
+# Returns: 0 on success, JSON to stdout; 11 on parse failure
+ai-parse-yaml() {
+    local file="$1"
+
+    if [[ ! -f "$file" ]]; then
+        _ai-log error "YAML file not found: $file"
+        return $AI_ERR_DEFINITION_NOT_FOUND
+    fi
+
+    _ai-log trace "Parsing YAML file: $file"
+
+    local json=""
+
+    # Try python3 first (most reliable for JSON encoding)
+    if [[ "$AI_PYTHON_AVAILABLE" == "true" ]]; then
+        _ai-log trace "Using python3 for YAML parsing"
+        json=$(python3 -c "import yaml, json; print(json.dumps(yaml.safe_load(open('$file'))))" 2>/dev/null)
+        if [[ $? -eq 0 && -n "$json" ]]; then
+            printf '%s\n' "$json"
+            return 0
+        fi
+        _ai-log debug "python3 parsing failed, trying yq"
+    fi
+
+    # Try yq fallback
+    if [[ "$AI_YQ_AVAILABLE" == "true" ]]; then
+        _ai-log trace "Using yq for YAML parsing"
+        # Try newer yq (Go-based) syntax first
+        json=$(yq eval -o=json "$file" 2>/dev/null)
+        if [[ $? -eq 0 && -n "$json" ]]; then
+            printf '%s\n' "$json"
+            return 0
+        fi
+        # Try older yq (Python jq-wrapper) syntax
+        json=$(yq -c '.' "$file" 2>/dev/null)
+        if [[ $? -eq 0 && -n "$json" ]]; then
+            printf '%s\n' "$json"
+            return 0
+        fi
+        _ai-log debug "yq parsing failed"
+    fi
+
+    # No parser available
+    _ai-log error "YAML parsing requires yq or python3"
+    _ai-log error "Install yq: https://github.com/mikefarah/yq"
+    _ai-log error "Or ensure python3 with PyYAML is installed"
+    return $AI_ERR_DEFINITION_PARSE_FAILED
+}
+
+# Convert YAML to JSON (alias for ai-parse-yaml)
+# Usage: _ai-yaml-to-json <file>
+_ai-yaml-to-json() {
+    ai-parse-yaml "$@"
+}
+
+# Extract field from JSON using jq
+# Usage: _ai-json-get-field <json> <field_path> [default]
+# Returns: 0 on success, value to stdout; 1 if not found
+_ai-json-get-field() {
+    local json="$1"
+    local field="$2"
+    local default="${3:-}"
+
+    if ! common-command-exists jq; then
+        _ai-log error "jq is required for JSON field extraction"
+        return 1
+    fi
+
+    local value
+    value=$(echo -E "$json" | /usr/bin/jq -r ".$field // empty" 2>/dev/null)
+
+    if [[ -n "$value" && "$value" != "null" ]]; then
+        echo "$value"
+        return 0
+    elif [[ -n "$default" ]]; then
+        echo "$default"
+        return 0
+    else
+        return 1
+    fi
+}
+
+# ------------------------------
+# Definition Management
+# ------------------------------
+
+# List all available definitions
+# Usage: ai-list-definitions [type]
+# Parameters:
+#   type (optional): Filter by type (skill, command, agent)
+# Returns: 0 on success, definition names to stdout (one per line)
+ai-list-definitions() {
+    local filter_type="${1:-}"
+
+    if [[ ! -d "$AI_DEFINITION_DIR" ]]; then
+        _ai-log debug "Definition directory not found: $AI_DEFINITION_DIR"
+        return 0
+    fi
+
+    # Enable null_glob to handle no matches gracefully
+    setopt local_options null_glob
+
+    # Search for definition files based on type filter
+    if [[ -n "$filter_type" ]]; then
+        # Filter by specific type
+        local type_dir="$AI_DEFINITION_DIR/${filter_type}s"
+        if [[ -d "$type_dir" ]]; then
+            for file in "$type_dir"/*.yml "$type_dir"/*.yaml; do
+                [[ -f "$file" ]] || continue
+                local basename="${file##*/}"
+                local name="${basename%.yml}"
+                name="${name%.yaml}"
+                echo "$name"
+            done
+        fi
+    else
+        # List all definitions from all types
+        for type_dir in "$AI_DEFINITION_DIR"/*; do
+            [[ -d "$type_dir" ]] || continue
+            for file in "$type_dir"/*.yml "$type_dir"/*.yaml; do
+                [[ -f "$file" ]] || continue
+                local basename="${file##*/}"
+                local name="${basename%.yml}"
+                name="${name%.yaml}"
+                echo "$name"
+            done
+        done
+    fi
+
+    return 0
+}
+
+# Find definition file path
+# Usage: ai-find-definition <name>
+# Parameters:
+#   name (required): Definition name
+# Returns: 0 on success, path to stdout; 10 if not found
+ai-find-definition() {
+    local name="$1"
+
+    if [[ -z "$name" ]]; then
+        _ai-log error "Definition name required"
+        return $AI_ERR_INVALID_ARGUMENT
+    fi
+
+    # Search in all type directories
+    for type_dir in "$AI_DEFINITION_DIR"/{skills,commands,agents}; do
+        [[ -d "$type_dir" ]] || continue
+
+        # Try .yml extension
+        local file="$type_dir/${name}.yml"
+        if [[ -f "$file" ]]; then
+            echo "$file"
+            return 0
+        fi
+
+        # Try .yaml extension
+        file="$type_dir/${name}.yaml"
+        if [[ -f "$file" ]]; then
+            echo "$file"
+            return 0
+        fi
+    done
+
+    _ai-log debug "Definition not found: $name"
+    return $AI_ERR_DEFINITION_NOT_FOUND
+}
+
+# Load and parse definition file
+# Usage: ai-load-definition <file>
+# Parameters:
+#   file (required): Path to definition file
+# Returns: 0 on success, JSON to stdout; 11 on parse failure
+ai-load-definition() {
+    local file="$1"
+
+    if [[ -z "$file" ]]; then
+        _ai-log error "Definition file path required"
+        return $AI_ERR_INVALID_ARGUMENT
+    fi
+
+    if [[ ! -f "$file" ]]; then
+        _ai-log error "Definition file not found: $file"
+        return $AI_ERR_DEFINITION_NOT_FOUND
+    fi
+
+    # Check cache first
+    local cache_key="definition:$(basename "$file")"
+    if [[ -n "${_AI_DEFINITION_CACHE[$cache_key]:-}" ]]; then
+        _ai-log trace "Using cached definition: $file"
+        printf '%s\n' "${_AI_DEFINITION_CACHE[$cache_key]}"
+        return 0
+    fi
+
+    # Parse YAML to JSON
+    local json
+    json=$(ai-parse-yaml "$file")
+    local parse_status=$?
+
+    if [[ $parse_status -ne 0 ]]; then
+        _ai-log error "Failed to parse definition: $file"
+        return $AI_ERR_DEFINITION_PARSE_FAILED
+    fi
+
+    # Cache the parsed definition
+    _AI_DEFINITION_CACHE[$cache_key]="$json"
+    ((_AI_STATS_DEFINITIONS_LOADED++))
+
+    # Emit event
+    local def_name=$(echo -E "$json" | /usr/bin/jq -r '.name // "unknown"' 2>/dev/null)
+    local def_type=$(echo -E "$json" | /usr/bin/jq -r '.type // "unknown"' 2>/dev/null)
+    _ai-emit "$AI_EVENT_DEFINITION_LOADED" "type=$def_type" "name=$def_name"
+
+    printf '%s\n' "$json"
+    return 0
+}
+
+# Extract field from definition JSON
+# Usage: ai-get-field <json> <field_path> [default]
+# Parameters:
+#   json (required): Definition JSON
+#   field_path (required): Dot-notation path (e.g., "skill.triggers.keywords")
+#   default (optional): Default value if field missing
+# Returns: 0 on success, value to stdout; 1 if not found
+ai-get-field() {
+    local name="$1"
+    local field="$2"
+    local default="${3:-}"
+
+    if [[ -z "$name" || -z "$field" ]]; then
+        _ai-log error "ai-get-field: name and field required"
+        return $AI_ERR_INVALID_ARGUMENT
+    fi
+
+    # Find and load the definition
+    local file
+    file=$(ai-find-definition "$name")
+    if [[ $? -ne 0 || ! -f "$file" ]]; then
+        _ai-log error "Definition not found: $name"
+        return $AI_ERR_DEFINITION_NOT_FOUND
+    fi
+
+    local json
+    json=$(ai-load-definition "$file")
+    if [[ $? -ne 0 ]]; then
+        _ai-log error "Failed to load definition: $name"
+        return $AI_ERR_DEFINITION_PARSE_FAILED
+    fi
+
+    # Extract field
+    _ai-json-get-field "$json" "$field" "$default"
+}
+
+# ------------------------------
+# Validation System
+# ------------------------------
+
+# Validate definition structure
+# Usage: ai-validate-definition <file>
+# Parameters:
+#   file (required): Path to definition file
+# Returns: 0 if valid, 12 if invalid structure
+ai-validate-definition() {
+    local file="$1"
+
+    if [[ -z "$file" ]]; then
+        _ai-log error "Definition file path required"
+        return $AI_ERR_INVALID_ARGUMENT
+    fi
+
+    if [[ ! -f "$file" ]]; then
+        _ai-log error "Definition file not found: $file"
+        return $AI_ERR_DEFINITION_NOT_FOUND
+    fi
+
+    # Load the definition
+    local json
+    json=$(ai-load-definition "$file")
+    local load_status=$?
+
+    if [[ $load_status -ne 0 ]]; then
+        return $load_status
+    fi
+
+    # Perform structural validation
+    _ai-validate-structure "$json" "$file"
+}
+
+# Internal: Validate definition structure
+# Usage: _ai-validate-structure <json> <file>
+_ai-validate-structure() {
+    local json="$1"
+    local file="$2"
+    local -a errors=()
+
+    _ai-log trace "Validating structure for: $file"
+
+    # Check schema version
+    local schema=$(echo -E "$json" | /usr/bin/jq -r '.schema // empty' 2>/dev/null)
+    if [[ -z "$schema" ]]; then
+        errors+=("Missing required field: 'schema'")
+    elif [[ ! "$schema" =~ ^ai-definition/v[0-9]+$ ]]; then
+        errors+=("Invalid schema version: '$schema' (expected format: ai-definition/vN)")
+    fi
+
+    # Check required base fields
+    local type=$(echo -E "$json" | /usr/bin/jq -r '.type // empty' 2>/dev/null)
+    if [[ -z "$type" ]]; then
+        errors+=("Missing required field: 'type'")
+    elif [[ ! "$type" =~ ^(skill|command|agent)$ ]]; then
+        errors+=("Invalid type: '$type' (must be: skill, command, or agent)")
+    fi
+
+    local name=$(echo -E "$json" | /usr/bin/jq -r '.name // empty' 2>/dev/null)
+    if [[ -z "$name" ]]; then
+        errors+=("Missing required field: 'name'")
+    elif [[ ! "$name" =~ ^[a-z][a-z0-9-]*$ ]]; then
+        errors+=("Invalid name: '$name' (must be kebab-case: lowercase letters, numbers, hyphens)")
+    fi
+
+    local version=$(echo -E "$json" | /usr/bin/jq -r '.version // empty' 2>/dev/null)
+    if [[ -z "$version" ]]; then
+        errors+=("Missing required field: 'version'")
+    elif [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        errors+=("Invalid version: '$version' (must be semantic version: X.Y.Z)")
+    fi
+
+    local description=$(echo -E "$json" | /usr/bin/jq -r '.description // empty' 2>/dev/null)
+    if [[ -z "$description" ]]; then
+        errors+=("Missing required field: 'description'")
+    fi
+
+    # Type-specific validation
+    case "$type" in
+        skill)
+            _ai-validate-skill-structure "$json" errors
+            ;;
+        command)
+            _ai-validate-command-structure "$json" errors
+            ;;
+        agent)
+            _ai-validate-agent-structure "$json" errors
+            ;;
+    esac
+
+    # Report errors if any
+    if [[ ${#errors[@]} -gt 0 ]]; then
+        _ai-log error "Validation failed for: $file"
+        for error in "${errors[@]}"; do
+            _ai-log error "  - $error"
+        done
+        _ai-emit "$AI_EVENT_VALIDATE_ERROR" "file=$file" "errors=${#errors[@]}"
+        return $AI_ERR_DEFINITION_INVALID_STRUCTURE
+    fi
+
+    _ai-log debug "Validation passed for: $file"
+    return 0
+}
+
+# Internal: Validate skill-specific structure
+# Usage: _ai-validate-skill-structure <json> <errors_array_name>
+_ai-validate-skill-structure() {
+    local json="$1"
+    local errors_array_name="$2"
+
+    # Check for skill section
+    local has_skill=$(echo -E "$json" | /usr/bin/jq 'has("skill")' 2>/dev/null)
+    if [[ "$has_skill" != "true" ]]; then
+        eval "$errors_array_name+=(\"Missing required section: 'skill'\")"
+        return
+    fi
+
+    # Check skill.triggers (optional but recommended)
+    local has_triggers=$(echo -E "$json" | /usr/bin/jq 'has("skill") and .skill | has("triggers")' 2>/dev/null)
+    if [[ "$has_triggers" == "true" ]]; then
+        # Validate triggers.keywords is an array
+        local keywords_type=$(echo -E "$json" | /usr/bin/jq -r '.skill.triggers.keywords | type // empty' 2>/dev/null)
+        if [[ -n "$keywords_type" && "$keywords_type" != "array" ]]; then
+            eval "$errors_array_name+=(\"skill.triggers.keywords must be an array\")"
+        fi
+    fi
+
+    # Check skill.scope (optional)
+    local has_scope=$(echo -E "$json" | /usr/bin/jq 'has("skill") and .skill | has("scope")' 2>/dev/null)
+    if [[ "$has_scope" == "true" ]]; then
+        # Validate scope.tools is an array if present
+        local tools_type=$(echo -E "$json" | /usr/bin/jq -r '.skill.scope.tools | type // empty' 2>/dev/null)
+        if [[ -n "$tools_type" && "$tools_type" != "array" ]]; then
+            eval "$errors_array_name+=(\"skill.scope.tools must be an array\")"
+        fi
+    fi
+}
+
+# Internal: Validate command-specific structure
+# Usage: _ai-validate-command-structure <json> <errors_array_name>
+_ai-validate-command-structure() {
+    local json="$1"
+    local errors_array_name="$2"
+
+    # Check for command section
+    local has_command=$(echo -E "$json" | /usr/bin/jq 'has("command")' 2>/dev/null)
+    if [[ "$has_command" != "true" ]]; then
+        eval "$errors_array_name+=(\"Missing required section: 'command'\")"
+        return
+    fi
+
+    # Validate command.arguments if present
+    local has_args=$(echo -E "$json" | /usr/bin/jq 'has("command") and .command | has("arguments")' 2>/dev/null)
+    if [[ "$has_args" == "true" ]]; then
+        local args_type=$(echo -E "$json" | /usr/bin/jq -r '.command.arguments | type // empty' 2>/dev/null)
+        if [[ "$args_type" != "array" ]]; then
+            eval "$errors_array_name+=(\"command.arguments must be an array\")"
+        fi
+    fi
+}
+
+# Internal: Validate agent-specific structure
+# Usage: _ai-validate-agent-structure <json> <errors_array_name>
+_ai-validate-agent-structure() {
+    local json="$1"
+    local errors_array_name="$2"
+
+    # Check for agent section
+    local has_agent=$(echo -E "$json" | /usr/bin/jq 'has("agent")' 2>/dev/null)
+    if [[ "$has_agent" != "true" ]]; then
+        eval "$errors_array_name+=(\"Missing required section: 'agent'\")"
+        return
+    fi
+
+    # Check agent.role (optional but recommended)
+    local has_role=$(echo -E "$json" | /usr/bin/jq 'has("agent") and .agent | has("role")' 2>/dev/null)
+    if [[ "$has_role" == "true" ]]; then
+        local persona=$(echo -E "$json" | /usr/bin/jq -r '.agent.role.persona // empty' 2>/dev/null)
+        if [[ -z "$persona" ]]; then
+            eval "$errors_array_name+=(\"agent.role.persona is recommended when role is defined\")"
+        fi
+    fi
+}
+
+# ------------------------------
+# Cache Management
+# ------------------------------
+
+# Get cached artifact
+# Usage: ai-cache-get <tool> <type> <name>
+# Returns: 0 if found (artifact to stdout), 1 if not found or expired
+ai-cache-get() {
+    local tool="$1"
+    local type="$2"
+    local name="$3"
+
+    if [[ -z "$tool" || -z "$type" || -z "$name" ]]; then
+        _ai-log error "ai-cache-get: Missing required parameters"
+        return $AI_ERR_INVALID_ARGUMENTS
+    fi
+
+    if [[ "$AI_CACHE_ENABLED" != "true" ]]; then
+        return $AI_ERR_CACHE_MISS
+    fi
+
+    local cache_key="ai:artifact:${tool}:${type}:${name}"
+
+    # Use _cache library if available
+    if [[ "$AI_CACHE_AVAILABLE" == "true" ]]; then
+        local content
+        if content=$(cache-get "$cache_key" 2>/dev/null); then
+            echo "$content"
+            (( _AI_STATS_CACHE_HITS++ ))
+            _ai-emit "$AI_EVENT_CACHE_HIT" "tool=$tool type=$type name=$name source=library"
+            return 0
+        else
+            (( _AI_STATS_CACHE_MISSES++ ))
+            _ai-emit "$AI_EVENT_CACHE_MISS" "tool=$tool type=$type name=$name"
+            return $AI_ERR_CACHE_MISS
+        fi
+    fi
+
+    # Fallback: Filesystem cache (when _cache not available)
+    # Try in-memory cache first
+    if [[ -n "${_AI_ARTIFACT_CACHE[$cache_key]:-}" ]]; then
+        echo "${_AI_ARTIFACT_CACHE[$cache_key]}"
+        (( _AI_STATS_CACHE_HITS++ ))
+        _ai-emit "$AI_EVENT_CACHE_HIT" "tool=$tool type=$type name=$name source=memory"
+        return 0
+    fi
+
+    # Try filesystem cache
+    local cache_file="$AI_CACHE_DIR/artifacts/${tool}/${type}/${name}"
+    if [[ -f "$cache_file" ]]; then
+        # Check if expired
+        local file_age=$(($(date +%s) - $(stat -c %Y "$cache_file" 2>/dev/null || stat -f %m "$cache_file" 2>/dev/null || echo 0)))
+        if [[ $file_age -lt $AI_CACHE_TTL ]]; then
+            local content
+            content=$(<"$cache_file")
+            # Load into memory cache for next time
+            _AI_ARTIFACT_CACHE[$cache_key]="$content"
+            echo "$content"
+            (( _AI_STATS_CACHE_HITS++ ))
+            _ai-emit "$AI_EVENT_CACHE_HIT" "tool=$tool type=$type name=$name source=disk"
+            return 0
+        else
+            # Expired, remove it
+            rm -f "$cache_file" 2>/dev/null
+        fi
+    fi
+
+    (( _AI_STATS_CACHE_MISSES++ ))
+    _ai-emit "$AI_EVENT_CACHE_MISS" "tool=$tool type=$type name=$name"
+    return $AI_ERR_CACHE_MISS
+}
+
+# Store artifact in cache
+# Usage: ai-cache-set <tool> <type> <name> <content> [ttl]
+# Returns: 0 if stored, 1 if failed
+ai-cache-set() {
+    local tool="$1"
+    local type="$2"
+    local name="$3"
+    local content="$4"
+    local ttl="${5:-$AI_CACHE_TTL}"
+
+    if [[ -z "$tool" || -z "$type" || -z "$name" || -z "$content" ]]; then
+        _ai-log error "ai-cache-set: Missing required parameters"
+        return $AI_ERR_INVALID_ARGUMENTS
+    fi
+
+    if [[ "$AI_CACHE_ENABLED" != "true" ]]; then
+        return 0  # Silently succeed if caching disabled
+    fi
+
+    local cache_key="ai:artifact:${tool}:${type}:${name}"
+
+    # Use _cache library if available
+    if [[ "$AI_CACHE_AVAILABLE" == "true" ]]; then
+        if cache-set "$cache_key" "$content" "$ttl" 2>/dev/null; then
+            _ai-emit "ai.cache.set" "tool=$tool type=$type name=$name size=${#content} backend=library"
+            return 0
+        else
+            _ai-log warn "Failed to store in _cache library, falling back to filesystem"
+        fi
+    fi
+
+    # Fallback: Filesystem cache (when _cache not available or failed)
+    # Store in memory cache
+    _AI_ARTIFACT_CACHE[$cache_key]="$content"
+
+    # Store on disk for persistence
+    local cache_file="$AI_CACHE_DIR/artifacts/${tool}/${type}/${name}"
+    local cache_dir
+    cache_dir=$(dirname "$cache_file")
+
+    if ! mkdir -p "$cache_dir" 2>/dev/null; then
+        _ai-log warn "Failed to create cache directory: $cache_dir"
+        return 1
+    fi
+
+    if ! echo "$content" > "$cache_file" 2>/dev/null; then
+        _ai-log warn "Failed to write cache file: $cache_file"
+        return 1
+    fi
+
+    _ai-emit "ai.cache.set" "tool=$tool type=$type name=$name size=${#content} backend=filesystem"
+    return 0
+}
+
+# Invalidate cached artifacts
+# Usage: ai-cache-invalidate <pattern>
+# Returns: 0 if invalidated, 1 if failed
+ai-cache-invalidate() {
+    local pattern="$1"
+
+    if [[ -z "$pattern" ]]; then
+        _ai-log error "ai-cache-invalidate: Missing pattern parameter"
+        return $AI_ERR_INVALID_ARGUMENTS
+    fi
+
+    local count=0
+
+    # Use _cache library if available
+    if [[ "$AI_CACHE_AVAILABLE" == "true" ]]; then
+        # Normalize pattern to include namespace prefix
+        local cache_pattern="$pattern"
+        [[ "$cache_pattern" != ai:artifact:* ]] && cache_pattern="ai:artifact:${cache_pattern}"
+
+        # Special case: invalidate entire namespace
+        if [[ "$cache_pattern" == "ai:artifact:*" ]]; then
+            cache-clear-namespace "ai:artifact" 2>/dev/null
+            count=1
+            _ai-log info "Cleared entire ai:artifact namespace"
+        else
+            # Pattern matching: manually iterate through keys
+            # Note: _cache library doesn't expose keys directly, so we use our knowledge
+            # of the pattern format to build specific keys
+            # For now, handle common patterns
+            case "$cache_pattern" in
+                ai:artifact:*:*:*)
+                    # Specific key
+                    cache-clear "$cache_pattern" 2>/dev/null && count=1
+                    ;;
+                *)
+                    # More complex patterns - would need key enumeration
+                    # Fall through to filesystem method
+                    _ai-log debug "Complex pattern, using filesystem invalidation"
+                    ;;
+            esac
+        fi
+
+        if [[ $count -gt 0 ]]; then
+            _ai-log info "Invalidated $count cache entries matching: $pattern (backend=library)"
+            _ai-emit "ai.cache.invalidate" "pattern=$pattern count=$count backend=library"
+            return 0
+        fi
+    fi
+
+    # Fallback: Filesystem cache pattern matching
+    # Clear from memory cache
+    for key in "${(@k)_AI_ARTIFACT_CACHE}"; do
+        case "$key" in
+            $pattern)
+                unset "_AI_ARTIFACT_CACHE[$key]"
+                (( count++ ))
+                ;;
+        esac
+    done
+
+    # Clear from disk cache
+    # Convert pattern from "tool:type:name" to filesystem path
+    # Pattern format: "claude:*" or "claude:skill:*" or "claude:skill:security-review"
+    local fs_pattern
+    fs_pattern=$(echo "$pattern" | sed 's/ai:artifact://; s/:/\//g')
+
+    if [[ -d "$AI_CACHE_DIR/artifacts" ]]; then
+        setopt local_options null_glob
+        local -a files
+        files=("$AI_CACHE_DIR/artifacts"/$~fs_pattern)
+
+        for file in "${files[@]}"; do
+            if [[ -f "$file" ]]; then
+                rm -f "$file" 2>/dev/null && (( count++ ))
+            elif [[ -d "$file" ]]; then
+                rm -rf "$file" 2>/dev/null && (( count++ ))
+            fi
+        done
+    fi
+
+    _ai-log info "Invalidated $count cache entries matching: $pattern (backend=filesystem)"
+    _ai-emit "ai.cache.invalidate" "pattern=$pattern count=$count backend=filesystem"
+    return 0
+}
+
+# Show cache statistics
+# Usage: ai-cache-status
+ai-cache-status() {
+    echo "AI Cache Status"
+    echo "==============="
+
+    # Count memory cache entries
+    local mem_count=${#_AI_ARTIFACT_CACHE[@]}
+    echo "Memory cache entries: $mem_count"
+
+    # Count disk cache entries
+    local disk_count=0
+    if [[ -d "$AI_CACHE_DIR/artifacts" ]]; then
+        disk_count=$(find "$AI_CACHE_DIR/artifacts" -type f 2>/dev/null | wc -l)
+    fi
+    echo "Disk cache entries: $disk_count"
+    echo "Total entries: $((mem_count + disk_count))"
+
+    # Show hit/miss stats
+    local total=$((_AI_STATS_CACHE_HITS + _AI_STATS_CACHE_MISSES))
+    echo ""
+    echo "Statistics:"
+    echo "  Cache hits: $_AI_STATS_CACHE_HITS"
+    echo "  Cache misses: $_AI_STATS_CACHE_MISSES"
+
+    if [[ $total -gt 0 ]]; then
+        local hit_rate=$(( (_AI_STATS_CACHE_HITS * 100) / total ))
+        echo "  Hit rate: ${hit_rate}%"
+    else
+        echo "  Hit rate: N/A (no requests)"
+    fi
+
+    # Show cache location and TTL
+    echo ""
+    echo "Configuration:"
+    echo "  Cache directory: $AI_CACHE_DIR"
+    echo "  Cache TTL: $AI_CACHE_TTL seconds"
+    echo "  Cache enabled: $AI_CACHE_ENABLED"
+}
+
+# ------------------------------
+# Template Engine
+# ------------------------------
+
+# Main template rendering function
+# Usage: ai-template-render <template_file> <json_data>
+# Returns: 0 on success (rendered output to stdout), error code on failure
+ai-template-render() {
+    # Disable xtrace to prevent variable assignment output
+    setopt local_options no_xtrace 2>/dev/null || set +x
+
+    local template_file="$1"
+    local json_data="$2"
+
+    if [[ -z "$template_file" || -z "$json_data" ]]; then
+        _ai-log error "ai-template-render: template_file and json_data required"
+        return $AI_ERR_INVALID_ARGUMENT
+    fi
+
+    if [[ ! -f "$template_file" ]]; then
+        _ai-log error "Template file not found: $template_file"
+        return $AI_ERR_TEMPLATE_NOT_FOUND
+    fi
+
+    # Check cache first
+    local cache_key="template:$(basename "$template_file")"
+    local template_content
+
+    if [[ "$AI_TEMPLATE_CACHE_ENABLED" == "true" && -n "${_AI_TEMPLATE_CACHE[$cache_key]:-}" ]]; then
+        template_content="${_AI_TEMPLATE_CACHE[$cache_key]}"
+    else
+        template_content=$(<"$template_file")
+        if [[ "$AI_TEMPLATE_CACHE_ENABLED" == "true" ]]; then
+            _AI_TEMPLATE_CACHE[$cache_key]="$template_content"
+        fi
+    fi
+
+    # Render the template
+    _ai-render-template "$template_content" "$json_data"
+}
+
+# Internal: Render template content with data
+# Usage: _ai-render-template <template_content> <json_data>
+_ai-render-template() {
+    # Disable xtrace to prevent command substitution debug output
+    setopt local_options no_xtrace no_verbose 2>/dev/null
+    set +x +v 2>/dev/null
+
+    local template="$1"
+    local data="$2"
+    local output=""
+    local depth=0
+
+    # Process template line by line, handling multi-line templates
+    output=$(_ai-process-template "$template" "$data" $depth)
+
+    printf '%s\n' "$output"
+}
+
+# Internal: Process template and substitute variables
+# Usage: _ai-process-template <template> <data> <depth>
+_ai-process-template() {
+    # Disable all tracing/verbose output
+    setopt local_options no_xtrace no_verbose 2>/dev/null
+    set +x +v 2>/dev/null
+
+    local template="$1"
+    local data="$2"
+    local depth="${3:-0}"
+    local output=""
+
+    # Prevent infinite recursion
+    if [[ $depth -gt $AI_TEMPLATE_MAX_DEPTH ]]; then
+        _ai-log error "Template recursion depth exceeded (max: $AI_TEMPLATE_MAX_DEPTH)"
+        return $AI_ERR_TEMPLATE_PARSE_FAILED
+    fi
+
+    # Parse and process template tags
+    local pos=0
+    local len=${#template}
+
+    while [[ $pos -lt $len ]]; do
+        # Find next tag
+        local tag_start=$(echo "${template:$pos}" | grep -b -o '{{' | head -1 | cut -d: -f1)
+
+        if [[ -z "$tag_start" ]]; then
+            # No more tags, append rest of template
+            output+="${template:$pos}"
+            break
+        fi
+
+        # Append content before tag
+        output+="${template:$pos:$tag_start}"
+        pos=$((pos + tag_start))
+
+        # Find tag end
+        local remaining="${template:$pos}"
+        local tag_end=$(echo "$remaining" | grep -b -o '}}' | head -1 | cut -d: -f1)
+
+        if [[ -z "$tag_end" ]]; then
+            _ai-log error "Unbalanced template tag: missing closing }}"
+            return $AI_ERR_TEMPLATE_UNBALANCED_TAGS
+        fi
+
+        # Extract full tag (including {{ and }})
+        tag_end=$((tag_end + 2))
+        local tag="${remaining:0:$tag_end}"
+        local tag_content="${tag:2:-2}"  # Remove {{ and }}
+        tag_content="${tag_content# }"   # Trim leading space
+        tag_content="${tag_content% }"   # Trim trailing space
+
+        # Process tag based on type
+        local result
+        result=$(_ai-process-tag "$tag_content" "$data" "$template" $((pos + tag_end)) $depth)
+        local tag_status=$?
+
+        if [[ $tag_status -eq 0 ]]; then
+            output+="$result"
+        else
+            return $tag_status
+        fi
+
+        pos=$((pos + tag_end))
+    done
+
+    printf '%s\n' "$output"
+}
+
+# Internal: Process a single template tag
+# Usage: _ai-process-tag <tag_content> <data> <full_template> <current_pos> <depth>
+_ai-process-tag() {
+    # Disable xtrace to prevent command substitution debug output
+    setopt local_options no_xtrace no_verbose 2>/dev/null
+    set +x +v 2>/dev/null
+
+    local tag="$1"
+    local data="$2"
+    local template="$3"
+    local pos="$4"
+    local depth="$5"
+
+    # Comment - skip
+    if [[ "$tag" =~ ^! ]]; then
+        echo ""
+        return 0
+    fi
+
+    # Partial include - {{> partial-name}}
+    if [[ "$tag" =~ ^\>  ]]; then
+        local partial_name="${tag:1}"
+        partial_name="${partial_name# }"  # Trim space
+        _ai-render-partial "$partial_name" "$data" $((depth + 1))
+        return $?
+    fi
+
+    # Block start - {{#if}}, {{#unless}}, {{#each}}
+    if [[ "$tag" =~ ^\# ]]; then
+        local block_type="${tag:1}"
+        block_type="${block_type%% *}"  # Get first word
+
+        case "$block_type" in
+            if)
+                _ai-process-if-block "$tag" "$data" "$template" "$pos" $depth
+                return $?
+                ;;
+            unless)
+                _ai-process-unless-block "$tag" "$data" "$template" "$pos" $depth
+                return $?
+                ;;
+            each)
+                _ai-process-each-block "$tag" "$data" "$template" "$pos" $depth
+                return $?
+                ;;
+            *)
+                _ai-log error "Unknown block type: $block_type"
+                return $AI_ERR_TEMPLATE_INVALID_SYNTAX
+                ;;
+        esac
+    fi
+
+    # Block end - {{/if}}, {{/unless}}, {{/each}} - handled in block processing
+    if [[ "$tag" =~ ^\/ ]]; then
+        echo ""
+        return 0
+    fi
+
+    # Helper function - {{helper arg1 arg2}}
+    if [[ "$tag" =~ ^[a-z]+  ]] && [[ "$tag" =~ [[:space:]] ]]; then
+        local helper_name="${tag%% *}"
+        local helper_args="${tag#* }"
+
+        if [[ -n "${_AI_TEMPLATE_HELPERS[$helper_name]:-}" ]]; then
+            "${_AI_TEMPLATE_HELPERS[$helper_name]}" "$helper_args" "$data"
+            return $?
+        fi
+    fi
+
+    # Variable substitution - {{variable}} or {{nested.field}}
+    _ai-get-value "$tag" "$data"
+    return $?
+}
+
+# Internal: Get value from JSON data using dot notation
+# Usage: _ai-get-value <path> <json_data>
+_ai-get-value() {
+    # Disable xtrace to prevent command substitution debug output
+    setopt local_options no_xtrace no_verbose 2>/dev/null
+    set +x +v 2>/dev/null
+
+    local path="$1"
+    local data="$2"
+
+    # Special variable: {{this}}
+    if [[ "$path" == "this" ]]; then
+        echo "$data"
+        return 0
+    fi
+
+    # Convert dot notation to jq path
+    local jq_path=".$path"
+
+    # Direct jq check (no subshell)
+    if [[ -z "$(which jq 2>/dev/null)" ]]; then
+        _ai-log error "jq is required for template rendering"
+        return $AI_ERR_TEMPLATE_PARSE_FAILED
+    fi
+
+    # Use jq with stdin directly - simplest approach
+    local value
+    value=$(echo -E "$data" | /usr/bin/jq -r "$jq_path // empty" 2>/dev/null)
+
+    if [[ -n "$value" && "$value" != "null" ]]; then
+        echo "$value"
+        return 0
+    fi
+
+    # Return empty for undefined variables (permissive mode)
+    echo ""
+    return 0
+}
+
+# Internal: Extract block content between opening and closing tags
+# Usage: _ai-extract-block <template> <start_pos> <block_type>
+# Returns: Block content (without tags) and end position as "content|||endpos"
+_ai-extract-block() {
+    # Disable xtrace to prevent command substitution debug output
+    setopt local_options no_xtrace no_verbose 2>/dev/null
+    set +x +v 2>/dev/null
+
+    local template="$1"
+    local start_pos="$2"
+    local block_type="$3"
+
+    local remaining="${template:$start_pos}"
+    local depth=1
+    local pos=0
+    local content=""
+
+    while [[ $depth -gt 0 && $pos -lt ${#remaining} ]]; do
+        # Find next tag
+        local next_tag=$(echo "${remaining:$pos}" | grep -b -o '{{' | head -1 | cut -d: -f1)
+
+        if [[ -z "$next_tag" ]]; then
+            _ai-log error "Unbalanced block: missing {{/$block_type}}"
+            echo "|||"
+            return $AI_ERR_TEMPLATE_UNBALANCED_TAGS
+        fi
+
+        # Add content before tag
+        content+="${remaining:$pos:$next_tag}"
+        pos=$((pos + next_tag))
+
+        # Find tag end
+        local tag_end=$(echo "${remaining:$pos}" | grep -b -o '}}' | head -1 | cut -d: -f1)
+        tag_end=$((tag_end + 2))
+
+        local tag="${remaining:$pos:$tag_end}"
+        local tag_content="${tag:2:-2}"
+        tag_content="${tag_content# }"
+        tag_content="${tag_content% }"
+
+        # Check if it's opening or closing our block type
+        if [[ "$tag_content" == "#$block_type"* ]]; then
+            ((depth++))
+            content+="$tag"
+        elif [[ "$tag_content" == "/$block_type" ]]; then
+            ((depth--))
+            if [[ $depth -eq 0 ]]; then
+                # Found our closing tag
+                echo "${content}|||$((start_pos + pos + tag_end))"
+                return 0
+            else
+                content+="$tag"
+            fi
+        else
+            content+="$tag"
+        fi
+
+        pos=$((pos + tag_end))
+    done
+
+    _ai-log error "Unbalanced block: missing {{/$block_type}}"
+    echo "|||"
+    return $AI_ERR_TEMPLATE_UNBALANCED_TAGS
+}
+
+# Internal: Process {{#if condition}} block
+# Usage: _ai-process-if-block <tag> <data> <template> <pos> <depth>
+_ai-process-if-block() {
+    # Disable xtrace to prevent command substitution debug output
+    setopt local_options no_xtrace no_verbose 2>/dev/null
+    set +x +v 2>/dev/null
+
+    local tag="$1"
+    local data="$2"
+    local template="$3"
+    local pos="$4"
+    local depth="$5"
+
+    # Extract condition from tag
+    local condition="${tag:3}"  # Remove "#if"
+    condition="${condition# }"  # Trim space
+
+    # Extract block content
+    local block_data
+    block_data=$(_ai-extract-block "$template" "$pos" "if")
+    local extract_status=$?
+
+    if [[ $extract_status -ne 0 ]]; then
+        return $extract_status
+    fi
+
+    local content="${block_data%|||*}"
+    local end_pos="${block_data#*|||}"
+
+    # Evaluate condition
+    local condition_value
+    condition_value=$(_ai-get-value "$condition" "$data")
+
+    # Check if truthy
+    if _ai-is-truthy "$condition_value"; then
+        # Render block content
+        _ai-process-template "$content" "$data" $((depth + 1))
+        return $?
+    fi
+
+    echo ""
+    return 0
+}
+
+# Internal: Process {{#unless condition}} block
+# Usage: _ai-process-unless-block <tag> <data> <template> <pos> <depth>
+_ai-process-unless-block() {
+    local tag="$1"
+    local data="$2"
+    local template="$3"
+    local pos="$4"
+    local depth="$5"
+
+    # Extract condition from tag
+    local condition="${tag:8}"  # Remove "#unless"
+    condition="${condition# }"  # Trim space
+
+    # Extract block content
+    local block_data
+    block_data=$(_ai-extract-block "$template" "$pos" "unless")
+    local extract_status=$?
+
+    if [[ $extract_status -ne 0 ]]; then
+        return $extract_status
+    fi
+
+    local content="${block_data%|||*}"
+
+    # Evaluate condition
+    local condition_value
+    condition_value=$(_ai-get-value "$condition" "$data")
+
+    # Check if falsy (opposite of if)
+    if ! _ai-is-truthy "$condition_value"; then
+        # Render block content
+        _ai-process-template "$content" "$data" $((depth + 1))
+        return $?
+    fi
+
+    echo ""
+    return 0
+}
+
+# Internal: Process {{#each array}} block
+# Usage: _ai-process-each-block <tag> <data> <template> <pos> <depth>
+_ai-process-each-block() {
+    # Disable all tracing/verbose output
+    setopt local_options no_xtrace no_verbose 2>/dev/null
+    set +x +v 2>/dev/null
+
+    local tag="$1"
+    local data="$2"
+    local template="$3"
+    local pos="$4"
+    local depth="$5"
+
+    # Extract array path from tag
+    local array_path="${tag:5}"  # Remove "#each"
+    array_path="${array_path# }"  # Trim space
+
+    # Extract block content
+    local block_data
+    block_data=$(_ai-extract-block "$template" "$pos" "each")
+    local extract_status=$?
+
+    if [[ $extract_status -ne 0 ]]; then
+        return $extract_status
+    fi
+
+    local content="${block_data%|||*}"
+    local output=""
+
+    # Get array/object from data
+    local jq_path=".$array_path"
+    local items
+
+    if ! command -v jq >/dev/null 2>&1; then
+        _ai-log error "jq is required for loops"
+        return $AI_ERR_TEMPLATE_PARSE_FAILED
+    fi
+
+    # Check if it's an array or object
+    local item_type
+    item_type=$(echo -E "$data" | /usr/bin/jq -r "$jq_path | type // empty" 2>/dev/null)
+
+    if [[ "$item_type" == "array" ]]; then
+        # Iterate over array
+        local length
+        length=$(echo -E "$data" | /usr/bin/jq -r "$jq_path | length" 2>/dev/null)
+
+        local i
+        for (( i=0; i<length; i++ )); do
+            local item
+            local jq_query="${jq_path}[$i]"
+            item=$(echo -E "$data" | /usr/bin/jq -c "$jq_query" 2>/dev/null)
+
+            # Render template with item as context
+            local rendered
+            rendered=$(_ai-process-template "$content" "$item" $((depth + 1)))
+            output+="$rendered"
+        done
+    elif [[ "$item_type" == "object" ]]; then
+        # Iterate over object keys
+        local keys
+        keys=$(echo -E "$data" | /usr/bin/jq -r "$jq_path | keys[]" 2>/dev/null)
+
+        while IFS= read -r key; do
+            [[ -z "$key" ]] && continue
+
+            local item
+            local jq_query="${jq_path}[\"$key\"]"
+            item=$(echo -E "$data" | /usr/bin/jq -c "$jq_query" 2>/dev/null)
+
+            # For objects, we need to support {{@key}}
+            # Create augmented context with @key
+            local augmented_context
+            augmented_context=$(echo -E "{}" | /usr/bin/jq -c ".\"@key\" = \"$key\" | .this = $item" 2>/dev/null)
+
+            local rendered
+            rendered=$(_ai-process-template "$content" "$augmented_context" $((depth + 1)))
+            output+="$rendered"
+        done <<< "$keys"
+    fi
+
+    echo "$output"
+    return 0
+}
+
+# Internal: Check if value is truthy
+# Usage: _ai-is-truthy <value>
+_ai-is-truthy() {
+    local value="$1"
+
+    # Empty, null, false, 0 are falsy
+    if [[ -z "$value" || "$value" == "null" || "$value" == "false" || "$value" == "0" ]]; then
+        return 1
+    fi
+
+    return 0
+}
+
+# Internal: Render partial template
+# Usage: _ai-render-partial <partial_name> <data> <depth>
+_ai-render-partial() {
+    local name="$1"
+    local data="$2"
+    local depth="${3:-0}"
+
+    # Find partial file
+    local partial_file="$AI_TEMPLATE_DIR/${name}.tmpl"
+
+    if [[ ! -f "$partial_file" ]]; then
+        # Try without .tmpl extension
+        partial_file="$AI_TEMPLATE_DIR/$name"
+    fi
+
+    if [[ ! -f "$partial_file" ]]; then
+        _ai-log warn "Partial not found: $name"
+        return $AI_ERR_TEMPLATE_PARTIAL_NOT_FOUND
+    fi
+
+    # Load and render partial
+    local partial_content
+    partial_content=$(<"$partial_file")
+
+    _ai-process-template "$partial_content" "$data" $depth
+}
+
+# ------------------------------
+# Template Helper Functions
+# ------------------------------
+
+# Helper: Join array with separator
+# Usage: _ai-helper-join <args> <data>
+_ai-helper-join() {
+    local args="$1"
+    local data="$2"
+
+    # Parse: join array_path "separator"
+    local array_path="${args%% \"*}"
+    array_path="${array_path# }"
+
+    local separator="${args#*\"}"
+    separator="${separator%\"*}"
+
+    # Get array
+    local items
+    items=$(echo -E "$data" | /usr/bin/jq -r ".$array_path | join(\"$separator\")" 2>/dev/null)
+
+    echo "$items"
+}
+
+# Helper: Convert to uppercase
+# Usage: _ai-helper-upper <args> <data>
+_ai-helper-upper() {
+    local args="$1"
+    local data="$2"
+
+    local value
+    value=$(_ai-get-value "$args" "$data")
+
+    # Use ZSH uppercase parameter expansion
+    echo "${value:u}"
+}
+
+# Helper: Convert to lowercase
+# Usage: _ai-helper-lower <args> <data>
+_ai-helper-lower() {
+    local args="$1"
+    local data="$2"
+
+    local value
+    value=$(_ai-get-value "$args" "$data")
+
+    # Use ZSH lowercase parameter expansion
+    echo "${value:l}"
+}
+
+# Helper: Provide default value if empty
+# Usage: _ai-helper-default <args> <data>
+_ai-helper-default() {
+    local args="$1"
+    local data="$2"
+
+    # Parse: default value_path "fallback"
+    local value_path="${args%% \"*}"
+    value_path="${value_path# }"
+
+    local fallback="${args#*\"}"
+    fallback="${fallback%\"*}"
+
+    local value
+    value=$(_ai-get-value "$value_path" "$data")
+
+    if [[ -n "$value" ]]; then
+        echo "$value"
+    else
+        echo "$fallback"
+    fi
+}
+
+# Helper: Get length of array or string
+# Usage: _ai-helper-length <args> <data>
+_ai-helper-length() {
+    local args="$1"
+    local data="$2"
+
+    local value
+    value=$(_ai-get-value "$args" "$data")
+
+    # Try as JSON array/object first
+    local len
+    len=$(echo "$value" | jq 'length' 2>/dev/null)
+
+    if [[ -n "$len" && "$len" != "null" ]]; then
+        echo "$len"
+    else
+        # String length
+        echo "${#value}"
+    fi
+}
+
+# Template validation
+# Usage: ai-template-validate <template_file>
+# Returns: 0 if valid, error code otherwise
+ai-template-validate() {
+    local template_file="$1"
+
+    if [[ -z "$template_file" ]]; then
+        _ai-log error "Template file required"
+        return $AI_ERR_INVALID_ARGUMENT
+    fi
+
+    if [[ ! -f "$template_file" ]]; then
+        _ai-log error "Template file not found: $template_file"
+        return $AI_ERR_TEMPLATE_NOT_FOUND
+    fi
+
+    local template
+    template=$(<"$template_file")
+
+    # Check for balanced tags
+    local -a stack=()
+    local errors=0
+
+    # Find all block tags
+    while [[ "$template" =~ \{\{(#|/)[a-z]+ ]]; do
+        local tag="${BASH_REMATCH[0]}"
+        local tag_type="${tag:2:1}"  # # or /
+        local tag_name="${tag:3}"
+        tag_name="${tag_name%% *}"   # Remove any arguments
+
+        if [[ "$tag_type" == "#" ]]; then
+            # Opening tag
+            stack+=("$tag_name")
+        elif [[ "$tag_type" == "/" ]]; then
+            # Closing tag
+            if [[ ${#stack[@]} -eq 0 ]]; then
+                _ai-log error "Unmatched closing tag: {{/$tag_name}}"
+                ((errors++))
+            else
+                local expected="${stack[-1]}"
+                unset 'stack[-1]'
+
+                if [[ "$expected" != "$tag_name" ]]; then
+                    _ai-log error "Mismatched tags: expected {{/$expected}}, got {{/$tag_name}}"
+                    ((errors++))
+                fi
+            fi
+        fi
+
+        # Remove processed tag from template
+        template="${template#*$tag}"
+    done
+
+    # Check for unclosed tags
+    if [[ ${#stack[@]} -gt 0 ]]; then
+        for tag in "${stack[@]}"; do
+            _ai-log error "Unclosed tag: {{#$tag}}"
+            ((errors++))
+        done
+    fi
+
+    if [[ $errors -gt 0 ]]; then
+        _ai-log error "Template validation failed with $errors error(s)"
+        return $AI_ERR_TEMPLATE_INVALID_SYNTAX
+    fi
+
+    _ai-log info "Template validation passed: $template_file"
+    return 0
+}
+
+# ------------------------------
+# Generation Pipeline
+# ------------------------------
+
+# Calculate hash of source files for cache invalidation
+# Usage: ai-hash-sources <def_file> <template_file>
+# Returns: SHA256 hash string
+ai-hash-sources() {
+    local def_file="$1"
+    local template_file="$2"
+
+    if [[ -z "$def_file" || -z "$template_file" ]]; then
+        _ai-log error "ai-hash-sources: def_file and template_file required"
+        return $AI_ERR_INVALID_ARGUMENT
+    fi
+
+    if [[ ! -f "$def_file" ]]; then
+        _ai-log error "Definition file not found: $def_file"
+        return $AI_ERR_FILE_NOT_FOUND
+    fi
+
+    if [[ ! -f "$template_file" ]]; then
+        _ai-log error "Template file not found: $template_file"
+        return $AI_ERR_TEMPLATE_NOT_FOUND
+    fi
+
+    # Calculate combined hash of both files
+    local combined_hash
+    combined_hash=$(cat "$def_file" "$template_file" | /usr/bin/sha256sum | awk '{print $1}')
+
+    if [[ -z "$combined_hash" ]]; then
+        _ai-log error "Failed to calculate hash"
+        return $AI_ERR_CACHE_OPERATION_FAILED
+    fi
+
+    echo "$combined_hash"
+    return 0
+}
+
+# Check if artifact should be regenerated
+# Usage: ai-should-regenerate <tool> <type> <name> <def_file> <template_file>
+# Returns: 0 if should regenerate, 1 if cache valid
+ai-should-regenerate() {
+    local tool="$1"
+    local type="$2"
+    local name="$3"
+    local def_file="$4"
+    local template_file="$5"
+
+    if [[ -z "$tool" || -z "$type" || -z "$name" || -z "$def_file" || -z "$template_file" ]]; then
+        _ai-log error "ai-should-regenerate: all arguments required"
+        return $AI_ERR_INVALID_ARGUMENT
+    fi
+
+    # Always regenerate if cache is disabled
+    if [[ "$AI_CACHE_ENABLED" != "true" ]]; then
+        return 0
+    fi
+
+    # Cache metadata path
+    local cache_dir="${AI_CACHE_DIR}/artifacts/${tool}/${type}s"
+    local meta_file="${cache_dir}/.${name}.meta"
+
+    # Regenerate if metadata doesn't exist
+    if [[ ! -f "$meta_file" ]]; then
+        return 0
+    fi
+
+    # Calculate current hash
+    local current_hash
+    current_hash=$(ai-hash-sources "$def_file" "$template_file")
+    if [[ $? -ne 0 ]]; then
+        # Hash calculation failed, regenerate to be safe
+        return 0
+    fi
+
+    # Read cached hash from metadata
+    local cached_hash
+    if [[ -f "$meta_file" ]]; then
+        cached_hash=$(grep "^hash:" "$meta_file" | cut -d: -f2 | tr -d ' ')
+    fi
+
+    # Regenerate if hashes don't match
+    if [[ "$current_hash" != "$cached_hash" ]]; then
+        return 0
+    fi
+
+    # Cache is valid
+    return 1
+}
+
+# Generate artifact from definition and template
+# Usage: ai-generate-artifact <tool> <name> [--force]
+# Returns: Generated artifact content
+ai-generate-artifact() {
+    local tool=""
+    local name=""
+    local force=false
+
+    # Parse arguments
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --force|-f)
+                force=true
+                shift
+                ;;
+            *)
+                if [[ -z "$tool" ]]; then
+                    tool="$1"
+                elif [[ -z "$name" ]]; then
+                    name="$1"
+                else
+                    _ai-log error "ai-generate-artifact: unexpected argument: $1"
+                    return $AI_ERR_INVALID_ARGUMENT
+                fi
+                shift
+                ;;
+        esac
+    done
+
+    if [[ -z "$tool" || -z "$name" ]]; then
+        _ai-log error "ai-generate-artifact: tool and name required"
+        echo "Usage: ai-generate-artifact <tool> <name> [--force]" >&2
+        return $AI_ERR_INVALID_ARGUMENT
+    fi
+
+    _ai-log info "Generating artifact: $tool/$name"
+    _ai-emit "$AI_EVENT_GENERATE_START" "tool=$tool" "name=$name" "force=$force"
+
+    # Find definition file
+    local def_file
+    def_file=$(ai-find-definition "$name")
+    if [[ $? -ne 0 || -z "$def_file" ]]; then
+        _ai-log error "Definition not found: $name"
+        _ai-emit "$AI_EVENT_GENERATE_ERROR" "tool=$tool" "name=$name" "error=definition_not_found"
+        return $AI_ERR_FILE_NOT_FOUND
+    fi
+
+    # Load definition
+    local definition
+    definition=$(ai-load-definition "$def_file")
+    if [[ $? -ne 0 ]]; then
+        _ai-emit "$AI_EVENT_GENERATE_ERROR" "tool=$tool" "name=$name" "error=definition_load_failed"
+        return $?
+    fi
+
+    # Validate definition
+    if ! ai-validate-definition "$def_file"; then
+        _ai-log error "Definition validation failed: $def_file"
+        _ai-emit "$AI_EVENT_GENERATE_ERROR" "tool=$tool" "name=$name" "error=validation_failed"
+        return $AI_ERR_VALIDATION_FAILED
+    fi
+
+    # Get type from definition
+    local type
+    type=$(printf '%s\n' "$definition" | /usr/bin/jq -r '.type // empty' 2>/dev/null)
+    if [[ -z "$type" ]]; then
+        _ai-log error "Definition missing 'type' field: $def_file"
+        _ai-emit "$AI_EVENT_GENERATE_ERROR" "tool=$tool" "name=$name" "error=missing_type_field"
+        return $AI_ERR_VALIDATION_FAILED
+    fi
+
+    # Find template file
+    local template_file="${AI_TEMPLATE_DIR}/${tool}/${type}.tmpl"
+    if [[ ! -f "$template_file" ]]; then
+        # Try common template
+        template_file="${AI_TEMPLATE_DIR}/common/${type}.tmpl"
+        if [[ ! -f "$template_file" ]]; then
+            _ai-log error "Template not found for type '$type' (tool: $tool)"
+            _ai-emit "$AI_EVENT_GENERATE_ERROR" "tool=$tool" "name=$name" "type=$type" "error=template_not_found"
+            return $AI_ERR_TEMPLATE_NOT_FOUND
+        fi
+    fi
+
+    # Check cache unless forced
+    local cache_dir="${AI_CACHE_DIR}/artifacts/${tool}/${type}s"
+    local cache_file="${cache_dir}/${name}.md"
+    local meta_file="${cache_dir}/.${name}.meta"
+
+    if [[ "$force" == "false" ]]; then
+        if ! ai-should-regenerate "$tool" "$type" "$name" "$def_file" "$template_file"; then
+            # Cache is valid, return cached artifact
+            if [[ -f "$cache_file" ]]; then
+                _ai-log info "Using cached artifact: $cache_file"
+                cat "$cache_file"
+                return 0
+            fi
+        fi
+    fi
+
+    # Perform semantic validation
+    if ! _ai-validate-semantic "$definition"; then
+        _ai-log error "Semantic validation failed: $def_file"
+        _ai-emit "$AI_EVENT_GENERATE_ERROR" "tool=$tool" "name=$name" "type=$type" "error=semantic_validation_failed"
+        return $AI_ERR_VALIDATION_FAILED
+    fi
+
+    # Render template
+    local artifact
+    artifact=$(ai-template-render "$template_file" "$definition")
+    if [[ $? -ne 0 ]]; then
+        _ai-log error "Template rendering failed: $template_file"
+        _ai-emit "$AI_EVENT_GENERATE_ERROR" "tool=$tool" "name=$name" "type=$type" "error=template_rendering_failed"
+        return $AI_ERR_TEMPLATE_PARSE_FAILED
+    fi
+
+    # Store in cache
+    if [[ "$AI_CACHE_ENABLED" == "true" ]]; then
+        mkdir -p "$cache_dir"
+        printf '%s\n' "$artifact" > "$cache_file"
+
+        # Store metadata
+        local hash
+        hash=$(ai-hash-sources "$def_file" "$template_file")
+        cat > "$meta_file" <<EOF
+hash: $hash
+generated: $(date -Iseconds)
+tool: $tool
+type: $type
+name: $name
+def_file: $def_file
+template_file: $template_file
+EOF
+        _ai-log info "Artifact cached: $cache_file"
+    fi
+
+    # Emit events
+    _ai-emit "$AI_EVENT_ARTIFACT_GENERATED" "tool=$tool" "type=$type" "name=$name"
+    _ai-emit "$AI_EVENT_GENERATE_COMPLETE" "tool=$tool" "name=$name" "type=$type"
+
+    # Return artifact
+    printf '%s\n' "$artifact"
+    return 0
+}
+
+# Validate semantic correctness of definition
+# Usage: _ai-validate-semantic <json_definition>
+# Returns: 0 if valid, non-zero otherwise
+_ai-validate-semantic() {
+    local definition="$1"
+
+    if [[ -z "$definition" ]]; then
+        _ai-log error "_ai-validate-semantic: definition required"
+        return $AI_ERR_INVALID_ARGUMENT
+    fi
+
+    # Check if definition is valid JSON
+    if ! echo "$definition" | /usr/bin/jq empty 2>/dev/null; then
+        _ai-log error "Definition is not valid JSON"
+        return $AI_ERR_VALIDATION_FAILED
+    fi
+
+    # Extract dependencies if present
+    local dependencies
+    dependencies=$(echo "$definition" | /usr/bin/jq -r '.dependencies // [] | .[]' 2>/dev/null)
+
+    # Check each dependency exists
+    if [[ -n "$dependencies" ]]; then
+        while IFS= read -r dep; do
+            [[ -z "$dep" ]] && continue
+
+            local dep_file
+            dep_file=$(ai-find-definition "$dep" 2>/dev/null)
+            if [[ $? -ne 0 || -z "$dep_file" ]]; then
+                _ai-log error "Dependency not found: $dep"
+                return $AI_ERR_VALIDATION_FAILED
+            fi
+        done <<< "$dependencies"
+    fi
+
+    # TODO: Add circular dependency detection
+    # TODO: Add reference validation
+
+    return 0
+}
+
+# Generate all artifacts for a tool
+# Usage: ai-generate-all <tool> [--force]
+# Returns: 0 on success
+ai-generate-all() {
+    local tool=""
+    local force=false
+
+    # Parse arguments
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --force|-f)
+                force=true
+                shift
+                ;;
+            *)
+                if [[ -z "$tool" ]]; then
+                    tool="$1"
+                else
+                    _ai-log error "ai-generate-all: unexpected argument: $1"
+                    return $AI_ERR_INVALID_ARGUMENT
+                fi
+                shift
+                ;;
+        esac
+    done
+
+    if [[ -z "$tool" ]]; then
+        _ai-log error "ai-generate-all: tool required"
+        echo "Usage: ai-generate-all <tool> [--force]" >&2
+        return $AI_ERR_INVALID_ARGUMENT
+    fi
+
+    _ai-log info "Generating all artifacts for tool: $tool"
+
+    # Get all definitions
+    local definitions
+    definitions=$(ai-list-definitions)
+    if [[ -z "$definitions" ]]; then
+        _ai-log warn "No definitions found"
+        return 0
+    fi
+
+    local total=0
+    local generated=0
+    local cached=0
+    local failed=0
+
+    # Generate each definition
+    while IFS= read -r def_file; do
+        [[ -z "$def_file" ]] && continue
+        ((total++))
+
+        local name
+        name=$(basename "$def_file" .yml)
+
+        _ai-log info "[$total] Generating: $name"
+
+        local force_flag=""
+        [[ "$force" == "true" ]] && force_flag="--force"
+
+        if ai-generate-artifact "$tool" "$name" $force_flag > /dev/null; then
+            # Check if it was cached or generated
+            if [[ "$force" == "false" ]]; then
+                local def
+                def=$(ai-load-definition "$def_file")
+                local type
+                type=$(printf '%s\n' "$def" | /usr/bin/jq -r '.type // empty' 2>/dev/null)
+                local template_file="${AI_TEMPLATE_DIR}/${tool}/${type}.tmpl"
+                [[ ! -f "$template_file" ]] && template_file="${AI_TEMPLATE_DIR}/common/${type}.tmpl"
+
+                if ai-should-regenerate "$tool" "$type" "$name" "$def_file" "$template_file"; then
+                    ((generated++))
+                else
+                    ((cached++))
+                fi
+            else
+                ((generated++))
+            fi
+        else
+            _ai-log error "Failed to generate: $name"
+            ((failed++))
+        fi
+    done <<< "$definitions"
+
+    _ai-log info "Batch generation complete: total=$total generated=$generated cached=$cached failed=$failed"
+
+    if [[ $failed -gt 0 ]]; then
+        return $AI_ERR_VALIDATION_FAILED
+    fi
+
+    return 0
+}
+
+# ------------------------------
+# Helper Functions
+# ------------------------------
+
+# (Will be implemented in M2)
+
+# Auto-initialize on load
+ai-init 2>/dev/null || true

@@ -1,0 +1,1346 @@
+#!/usr/bin/env zsh
+
+# _jq - JSON processing wrapper with comprehensive query operations
+# Part of the dotfiles library v2.0
+# Version: 2.1.0
+#
+# Usage:
+#   source "${DOTLIB}/_jq"
+#
+# Provides:
+#   - JSON validation and formatting
+#   - Query operations (select, filter, map, reduce)
+#   - Object manipulation (merge, add, update, delete)
+#   - Array operations (sort, unique, flatten, group)
+#   - Type checking and conversion
+#   - String and math operations
+#   - Path operations
+#   - Pretty printing and compact output
+#   - Schema validation
+#   - Streaming support
+#   - CSV/TSV conversion
+#   - Base64/URI encoding
+#
+# Dependencies:
+#   Layer 1: _common v2.0 (required)
+#   Layer 2: _log v2.0 (optional), _cache v2.0 (optional), _lifecycle v3.0 (optional)
+#   External: jq (required)
+
+# ------------------------------
+# Source Guard
+# ------------------------------
+
+[[ -n "${JQ_LOADED:-}" ]] && return 0
+
+# ------------------------------
+# Version
+# ------------------------------
+
+declare -gr JQ_VERSION="2.1.0"
+declare -g JQ_LOADED=1
+
+# ------------------------------
+# Layer 1: Load Foundation
+# ------------------------------
+
+# Load _common (required)
+if ! source "${DOTLIB}/_common" 2>/dev/null; then
+    echo "[ERROR] _jq requires _common - cannot load" >&2
+    return 1
+fi
+
+# ------------------------------
+# Layer 2: Load Infrastructure (Optional)
+# ------------------------------
+
+# Load _log (optional, with fallback)
+if ! source "${DOTLIB}/_log" 2>/dev/null; then
+    log-trace() { [[ "${TRACE:-0}" == "1" ]] && echo "[TRACE] $*" >&2 || true; }
+    log-debug() { [[ "${DEBUG:-0}" == "1" ]] && echo "[DEBUG] $*" >&2 || true; }
+    log-info() { echo "[INFO] $*" >&2; }
+    log-warn() { echo "[WARN] $*" >&2; }
+    log-error() { echo "[ERROR] $*" >&2; }
+fi
+
+# Load _cache (optional)
+source "${DOTLIB}/_cache" 2>/dev/null || true
+
+# Load _lifecycle (optional, for cleanup)
+source "${DOTLIB}/_lifecycle" 2>/dev/null || true
+
+# ------------------------------
+# Configuration Variables
+# ------------------------------
+
+# JQ_COMPACT: Output compact JSON (no whitespace)
+declare -g JQ_COMPACT="${JQ_COMPACT:-false}"
+
+# JQ_RAW_OUTPUT: Output raw strings (no JSON encoding)
+declare -g JQ_RAW_OUTPUT="${JQ_RAW_OUTPUT:-true}"
+
+# JQ_SORT_KEYS: Sort object keys in output
+declare -g JQ_SORT_KEYS="${JQ_SORT_KEYS:-false}"
+
+# JQ_TAB_INDENT: Use tabs instead of spaces
+declare -g JQ_TAB_INDENT="${JQ_TAB_INDENT:-false}"
+
+# JQ_INDENT: Indentation level (spaces, if not using tabs)
+declare -g JQ_INDENT="${JQ_INDENT:-2}"
+
+# JQ_COLOR: Colorize output (auto, always, never)
+declare -g JQ_COLOR="${JQ_COLOR:-auto}"
+
+# JQ_NULL_INPUT: Start with null input
+declare -g JQ_NULL_INPUT="${JQ_NULL_INPUT:-false}"
+
+# JQ_EXIT_STATUS: Set exit status based on output
+declare -g JQ_EXIT_STATUS="${JQ_EXIT_STATUS:-false}"
+
+# JQ_SLURP: Read entire input into array
+declare -g JQ_SLURP="${JQ_SLURP:-false}"
+
+# JQ_STREAM: Parse input in streaming fashion
+declare -g JQ_STREAM="${JQ_STREAM:-false}"
+
+# JQ_ASCII_OUTPUT: Force ASCII output
+declare -g JQ_ASCII_OUTPUT="${JQ_ASCII_OUTPUT:-false}"
+
+# ------------------------------
+# Internal State
+# ------------------------------
+
+# Last jq exit code
+declare -g _JQ_LAST_EXIT_CODE=0
+
+# Last jq output
+declare -g _JQ_LAST_OUTPUT=""
+
+# Command cache key
+declare -gr _JQ_CACHE_KEY="jq-command-available"
+
+# ------------------------------
+# Dependency Check
+# ------------------------------
+
+# Check if jq is installed (with caching)
+# Usage: jq-check || return 1
+jq-check() {
+    # Try cache first
+    if typeset -f cache-get >/dev/null 2>&1; then
+        local cached=$(cache-get "$_JQ_CACHE_KEY" 2>/dev/null)
+        if [[ -n "$cached" ]]; then
+            [[ "$cached" == "true" ]] && return 0 || return 1
+        fi
+    fi
+
+    # Check command
+    if common-command-exists "jq"; then
+        typeset -f cache-set >/dev/null 2>&1 && cache-set "$_JQ_CACHE_KEY" "true" 3600 2>/dev/null
+        return 0
+    else
+        log-error "jq is not installed. Install with: pacman -S jq"
+        typeset -f cache-set >/dev/null 2>&1 && cache-set "$_JQ_CACHE_KEY" "false" 3600 2>/dev/null
+        return 1
+    fi
+}
+
+# Get jq version
+# Usage: version=$(jq-get-version)
+jq-get-version() {
+    jq-check || return 1
+    jq --version 2>/dev/null | sed 's/jq-//'
+}
+
+# ------------------------------
+# Configuration Helpers
+# ------------------------------
+
+# Enable compact output
+# Usage: jq-enable-compact
+jq-enable-compact() {
+    JQ_COMPACT="true"
+    log-debug "Enabled compact output"
+}
+
+# Disable compact output
+# Usage: jq-disable-compact
+jq-disable-compact() {
+    JQ_COMPACT="false"
+    log-debug "Disabled compact output"
+}
+
+# Enable raw output
+# Usage: jq-enable-raw
+jq-enable-raw() {
+    JQ_RAW_OUTPUT="true"
+    log-debug "Enabled raw output"
+}
+
+# Disable raw output
+# Usage: jq-disable-raw
+jq-disable-raw() {
+    JQ_RAW_OUTPUT="false"
+    log-debug "Disabled raw output"
+}
+
+# Enable sorted keys
+# Usage: jq-enable-sort-keys
+jq-enable-sort-keys() {
+    JQ_SORT_KEYS="true"
+    log-debug "Enabled sorted keys"
+}
+
+# Disable sorted keys
+# Usage: jq-disable-sort-keys
+jq-disable-sort-keys() {
+    JQ_SORT_KEYS="false"
+    log-debug "Disabled sorted keys"
+}
+
+# Enable colored output
+# Usage: jq-enable-color
+jq-enable-color() {
+    JQ_COLOR="always"
+    log-debug "Enabled colored output"
+}
+
+# Disable colored output
+# Usage: jq-disable-color
+jq-disable-color() {
+    JQ_COLOR="never"
+    log-debug "Disabled colored output"
+}
+
+# Set indentation
+# Usage: jq-set-indent 4
+jq-set-indent() {
+    local indent="$1"
+
+    if [[ ! "$indent" =~ ^[0-9]+$ ]]; then
+        log-error "Invalid indent: $indent (must be a positive integer)"
+        return 1
+    fi
+
+    JQ_INDENT="$indent"
+    log-debug "Set indent to $indent spaces"
+    return 0
+}
+
+# Get current configuration
+# Usage: jq-get-config
+jq-get-config() {
+    echo "JQ Configuration:"
+    echo "  Version:        $(jq-get-version 2>/dev/null || echo 'not installed')"
+    echo "  Compact:        ${JQ_COMPACT}"
+    echo "  Raw Output:     ${JQ_RAW_OUTPUT}"
+    echo "  Sort Keys:      ${JQ_SORT_KEYS}"
+    echo "  Tab Indent:     ${JQ_TAB_INDENT}"
+    echo "  Indent:         ${JQ_INDENT}"
+    echo "  Color:          ${JQ_COLOR}"
+    echo "  Null Input:     ${JQ_NULL_INPUT}"
+    echo "  Exit Status:    ${JQ_EXIT_STATUS}"
+    echo "  Slurp:          ${JQ_SLURP}"
+    echo "  Stream:         ${JQ_STREAM}"
+    echo "  ASCII Output:   ${JQ_ASCII_OUTPUT}"
+}
+
+# ------------------------------
+# Argument Building
+# ------------------------------
+
+# Build common jq arguments based on configuration
+# Usage: args=($(_jq-build-args))
+_jq-build-args() {
+    local -a args=()
+
+    # Compact output
+    [[ "$JQ_COMPACT" == "true" ]] && args+=(-c)
+
+    # Raw output
+    [[ "$JQ_RAW_OUTPUT" == "true" ]] && args+=(-r)
+
+    # Sort keys
+    [[ "$JQ_SORT_KEYS" == "true" ]] && args+=(-S)
+
+    # Tab indent
+    if [[ "$JQ_TAB_INDENT" == "true" ]]; then
+        args+=(--tab)
+    else
+        args+=(--indent "$JQ_INDENT")
+    fi
+
+    # Color
+    case "$JQ_COLOR" in
+        always) args+=(-C) ;;
+        never)  args+=(-M) ;;
+        auto)   ;; # Default
+    esac
+
+    # Null input
+    [[ "$JQ_NULL_INPUT" == "true" ]] && args+=(-n)
+
+    # Exit status
+    [[ "$JQ_EXIT_STATUS" == "true" ]] && args+=(-e)
+
+    # Slurp
+    [[ "$JQ_SLURP" == "true" ]] && args+=(-s)
+
+    # Stream
+    [[ "$JQ_STREAM" == "true" ]] && args+=(--stream)
+
+    # ASCII output
+    [[ "$JQ_ASCII_OUTPUT" == "true" ]] && args+=(-a)
+
+    echo "${args[@]}"
+}
+
+# ------------------------------
+# Core Query Functions
+# ------------------------------
+
+# Execute jq query with optional variable arguments
+# Usage: jq-query '.foo' [key value ...]
+# Example: echo '{"x":1}' | jq-query '.x * $multiplier' multiplier 5
+jq-query() {
+    local filter="$1"
+    shift
+
+    if [[ -z "$filter" ]]; then
+        log-error "Filter required"
+        return 1
+    fi
+
+    jq-check || return 1
+
+    # Build args array for --arg flags
+    local -a var_args=()
+    while [[ $# -gt 0 ]]; do
+        if [[ $# -lt 2 ]]; then
+            log-error "Odd number of arguments (key-value pairs required)"
+            return 1
+        fi
+        var_args+=(--arg "$1" "$2")
+        shift 2
+    done
+
+    local -a args=($(_jq-build-args))
+
+    log-trace "Executing jq filter: $filter"
+
+    local output
+    output=$(jq "${args[@]}" "${var_args[@]}" "$filter" 2>&1)
+    _JQ_LAST_EXIT_CODE=$?
+    _JQ_LAST_OUTPUT="$output"
+
+    if [[ $_JQ_LAST_EXIT_CODE -ne 0 ]]; then
+        log-error "jq query failed: $output"
+        return $_JQ_LAST_EXIT_CODE
+    fi
+
+    echo "$output"
+    return 0
+}
+
+# Execute jq filter on input (alias for jq-query)
+# Usage: echo '{"x":1}' | jq-filter '.x'
+jq-filter() {
+    jq-query "$@"
+}
+
+# Execute raw jq command with custom arguments
+# Usage: echo '{}' | jq-raw -r '.foo // "default"'
+jq-raw() {
+    jq-check || return 1
+    jq "$@"
+    return $?
+}
+
+# ------------------------------
+# Validation and Formatting
+# ------------------------------
+
+# Validate JSON input
+# Usage: echo '{"valid":"json"}' | jq-validate && echo "Valid"
+jq-validate() {
+    jq-check || return 1
+
+    if jq empty >/dev/null 2>&1; then
+        log-debug "JSON validation passed"
+        return 0
+    else
+        log-error "JSON validation failed"
+        return 1
+    fi
+}
+
+# Validate JSON from file
+# Usage: jq-validate-file config.json
+jq-validate-file() {
+    local file="$1"
+
+    if [[ -z "$file" ]]; then
+        log-error "File path required"
+        return 1
+    fi
+
+    if [[ ! -f "$file" ]]; then
+        log-error "File not found: $file"
+        return 1
+    fi
+
+    log-debug "Validating JSON file: $file"
+    cat "$file" | jq-validate
+}
+
+# Pretty print JSON
+# Usage: echo '{"x":1}' | jq-pretty
+jq-pretty() {
+    jq-check || return 1
+
+    local -a args=(--indent "$JQ_INDENT")
+    [[ "$JQ_SORT_KEYS" == "true" ]] && args+=(-S)
+
+    jq "${args[@]}" .
+    return $?
+}
+
+# Compact JSON (single line)
+# Usage: echo '{"x": 1}' | jq-compact
+jq-compact() {
+    jq-check || return 1
+    jq -c .
+    return $?
+}
+
+# Minify JSON (alias for jq-compact)
+# Usage: echo '{"x": 1}' | jq-minify
+jq-minify() {
+    jq-compact
+}
+
+# ------------------------------
+# Object Operations
+# ------------------------------
+
+# Get value by key
+# Usage: echo '{"name":"test"}' | jq-get "name"
+jq-get() {
+    local key="$1"
+
+    if [[ -z "$key" ]]; then
+        log-error "Key required"
+        return 1
+    fi
+
+    jq-query ".$key"
+}
+
+# Get nested value by path (dot notation)
+# Usage: echo '{"a":{"b":{"c":1}}}' | jq-get-path "a.b.c"
+jq-get-path() {
+    local path="$1"
+
+    if [[ -z "$path" ]]; then
+        log-error "Path required"
+        return 1
+    fi
+
+    # Convert dot notation to jq path
+    local filter=".$path"
+    jq-query "$filter"
+}
+
+# Check if key exists
+# Usage: echo '{"x":1}' | jq-has-key "x" && echo "exists"
+jq-has-key() {
+    local key="$1"
+
+    if [[ -z "$key" ]]; then
+        log-error "Key required"
+        return 1
+    fi
+
+    local result=$(jq-query "has(\"$key\")" 2>/dev/null)
+
+    [[ "$result" == "true" ]]
+}
+
+# Get all keys
+# Usage: echo '{"a":1,"b":2}' | jq-keys
+jq-keys() {
+    jq-query 'keys'
+}
+
+# Get all keys (unsorted)
+# Usage: echo '{"a":1,"b":2}' | jq-keys-unsorted
+jq-keys-unsorted() {
+    jq-query 'keys_unsorted'
+}
+
+# Get all values
+# Usage: echo '{"a":1,"b":2}' | jq-values
+jq-values() {
+    jq-query '.[]'
+}
+
+# Set key-value pair
+# Usage: echo '{}' | jq-set "name" "value"
+jq-set() {
+    local key="$1"
+    local value="$2"
+
+    if [[ -z "$key" ]]; then
+        log-error "Key required"
+        return 1
+    fi
+
+    # Try to parse value as JSON, otherwise treat as string
+    if echo "$value" | jq empty >/dev/null 2>&1; then
+        # Value is valid JSON
+        jq-query --argjson val "$value" ".\"$key\" = \$val"
+    else
+        # Treat as string
+        jq-query ".\"$key\" = \"$value\"" "val" "$value"
+    fi
+}
+
+# Delete key
+# Usage: echo '{"x":1,"y":2}' | jq-delete "x"
+jq-delete() {
+    local key="$1"
+
+    if [[ -z "$key" ]]; then
+        log-error "Key required"
+        return 1
+    fi
+
+    jq-query "del(.$key)"
+}
+
+# Merge multiple JSON objects
+# Usage: echo -e '{"a":1}\n{"b":2}' | jq-merge
+jq-merge() {
+    jq-check || return 1
+
+    local old_slurp="$JQ_SLURP"
+    JQ_SLURP="true"
+
+    local result=$(jq-query 'reduce .[] as $item ({}; . * $item)')
+    local exit_code=$?
+
+    JQ_SLURP="$old_slurp"
+
+    echo "$result"
+    return $exit_code
+}
+
+# Select subset of keys
+# Usage: echo '{"a":1,"b":2,"c":3}' | jq-select-keys a c
+jq-select-keys() {
+    local keys="$@"
+
+    if [[ -z "$keys" ]]; then
+        log-error "Keys required"
+        return 1
+    fi
+
+    # Build array of keys
+    local key_array="["
+    local first=1
+    for key in $keys; do
+        [[ $first -eq 0 ]] && key_array+=","
+        key_array+="\"$key\""
+        first=0
+    done
+    key_array+="]"
+
+    jq-query --argjson keys "$key_array" 'with_entries(select(.key as $k | $keys | index($k)))'
+}
+
+# Rename key
+# Usage: echo '{"old":"value"}' | jq-rename-key "old" "new"
+jq-rename-key() {
+    local old_key="$1"
+    local new_key="$2"
+
+    if [[ -z "$old_key" ]] || [[ -z "$new_key" ]]; then
+        log-error "Old and new keys required"
+        return 1
+    fi
+
+    jq-query ".\"$new_key\" = .\"$old_key\" | del(.\"$old_key\")"
+}
+
+# ------------------------------
+# Array Operations
+# ------------------------------
+
+# Get array length
+# Usage: echo '[1,2,3]' | jq-length
+jq-length() {
+    jq-query 'length'
+}
+
+# Get array element by index
+# Usage: echo '[1,2,3]' | jq-index 1
+jq-index() {
+    local idx="$1"
+
+    if [[ -z "$idx" ]]; then
+        log-error "Index required"
+        return 1
+    fi
+
+    jq-query ".[$idx]"
+}
+
+# Get first element
+# Usage: echo '[1,2,3]' | jq-first
+jq-first() {
+    jq-query 'first'
+}
+
+# Get last element
+# Usage: echo '[1,2,3]' | jq-last
+jq-last() {
+    jq-query 'last'
+}
+
+# Sort array
+# Usage: echo '[3,1,2]' | jq-sort
+jq-sort() {
+    jq-query 'sort'
+}
+
+# Sort by key
+# Usage: echo '[{"x":2},{"x":1}]' | jq-sort-by "x"
+jq-sort-by() {
+    local key="$1"
+
+    if [[ -z "$key" ]]; then
+        log-error "Key required"
+        return 1
+    fi
+
+    jq-query "sort_by(.$key)"
+}
+
+# Reverse array
+# Usage: echo '[1,2,3]' | jq-reverse
+jq-reverse() {
+    jq-query 'reverse'
+}
+
+# Get unique elements
+# Usage: echo '[1,2,2,3]' | jq-unique
+jq-unique() {
+    jq-query 'unique'
+}
+
+# Get unique by key
+# Usage: echo '[{"x":1},{"x":1},{"x":2}]' | jq-unique-by "x"
+jq-unique-by() {
+    local key="$1"
+
+    if [[ -z "$key" ]]; then
+        log-error "Key required"
+        return 1
+    fi
+
+    jq-query "unique_by(.$key)"
+}
+
+# Flatten array
+# Usage: echo '[[1,2],[3,4]]' | jq-flatten
+jq-flatten() {
+    local depth="${1:-1}"
+    jq-query "flatten($depth)"
+}
+
+# Group by key
+# Usage: echo '[{"x":1},{"x":1},{"x":2}]' | jq-group-by "x"
+jq-group-by() {
+    local key="$1"
+
+    if [[ -z "$key" ]]; then
+        log-error "Key required"
+        return 1
+    fi
+
+    jq-query "group_by(.$key)"
+}
+
+# Map over array
+# Usage: echo '[1,2,3]' | jq-map '. * 2'
+jq-map() {
+    local expr="$1"
+
+    if [[ -z "$expr" ]]; then
+        log-error "Expression required"
+        return 1
+    fi
+
+    jq-query "map($expr)"
+}
+
+# Select from array
+# Usage: echo '[1,2,3,4]' | jq-select '. > 2'
+jq-select() {
+    local expr="$1"
+
+    if [[ -z "$expr" ]]; then
+        log-error "Expression required"
+        return 1
+    fi
+
+    jq-query "[.[] | select($expr)]"
+}
+
+# Filter array (alias for jq-select)
+# Usage: echo '[1,2,3,4]' | jq-filter-array '. > 2'
+jq-filter-array() {
+    jq-select "$@"
+}
+
+# Append element to array
+# Usage: echo '[1,2]' | jq-append 3
+jq-append() {
+    local value="$1"
+
+    if [[ -z "$value" ]]; then
+        log-error "Value required"
+        return 1
+    fi
+
+    # Try to parse value as JSON
+    if echo "$value" | jq empty >/dev/null 2>&1; then
+        jq-query --argjson val "$value" '. + [$val]'
+    else
+        jq-query ". + [\"$value\"]"
+    fi
+}
+
+# Prepend element to array
+# Usage: echo '[2,3]' | jq-prepend 1
+jq-prepend() {
+    local value="$1"
+
+    if [[ -z "$value" ]]; then
+        log-error "Value required"
+        return 1
+    fi
+
+    # Try to parse value as JSON
+    if echo "$value" | jq empty >/dev/null 2>&1; then
+        jq-query --argjson val "$value" '[$val] + .'
+    else
+        jq-query "[\"$value\"] + ."
+    fi
+}
+
+# Remove element at index
+# Usage: echo '[1,2,3]' | jq-remove-index 1
+jq-remove-index() {
+    local idx="$1"
+
+    if [[ -z "$idx" ]]; then
+        log-error "Index required"
+        return 1
+    fi
+
+    jq-query "del(.[$idx])"
+}
+
+# Slice array
+# Usage: echo '[1,2,3,4,5]' | jq-slice 1 3
+jq-slice() {
+    local start="$1"
+    local end="$2"
+
+    if [[ -z "$start" ]]; then
+        log-error "Start index required"
+        return 1
+    fi
+
+    if [[ -z "$end" ]]; then
+        jq-query ".[$start:]"
+    else
+        jq-query ".[$start:$end]"
+    fi
+}
+
+# ------------------------------
+# Type Operations
+# ------------------------------
+
+# Get type of value
+# Usage: echo '"string"' | jq-get-type
+jq-get-type() {
+    jq-query 'type'
+}
+
+# Check if null
+# Usage: echo 'null' | jq-is-null && echo "is null"
+jq-is-null() {
+    local result=$(jq-query 'type' 2>/dev/null)
+    [[ "$result" == "null" ]]
+}
+
+# Check if boolean
+# Usage: echo 'true' | jq-is-boolean && echo "is bool"
+jq-is-boolean() {
+    local result=$(jq-query 'type' 2>/dev/null)
+    [[ "$result" == "boolean" ]]
+}
+
+# Check if number
+# Usage: echo '42' | jq-is-number && echo "is number"
+jq-is-number() {
+    local result=$(jq-query 'type' 2>/dev/null)
+    [[ "$result" == "number" ]]
+}
+
+# Check if string
+# Usage: echo '"text"' | jq-is-string && echo "is string"
+jq-is-string() {
+    local result=$(jq-query 'type' 2>/dev/null)
+    [[ "$result" == "string" ]]
+}
+
+# Check if array
+# Usage: echo '[]' | jq-is-array && echo "is array"
+jq-is-array() {
+    local result=$(jq-query 'type' 2>/dev/null)
+    [[ "$result" == "array" ]]
+}
+
+# Check if object
+# Usage: echo '{}' | jq-is-object && echo "is object"
+jq-is-object() {
+    local result=$(jq-query 'type' 2>/dev/null)
+    [[ "$result" == "object" ]]
+}
+
+# Convert to string
+# Usage: echo '42' | jq-to-string
+jq-to-string() {
+    jq-query 'tostring'
+}
+
+# Convert to number
+# Usage: echo '"42"' | jq-to-number
+jq-to-number() {
+    jq-query 'tonumber'
+}
+
+# Convert to array
+# Usage: echo '1' | jq-to-array
+jq-to-array() {
+    jq-query '[.]'
+}
+
+# ------------------------------
+# String Operations
+# ------------------------------
+
+# Split string
+# Usage: echo '"a,b,c"' | jq-split ","
+jq-split() {
+    local separator="$1"
+
+    if [[ -z "$separator" ]]; then
+        log-error "Separator required"
+        return 1
+    fi
+
+    jq-query "split(\"$separator\")"
+}
+
+# Join array into string
+# Usage: echo '["a","b","c"]' | jq-join ","
+jq-join() {
+    local separator="$1"
+
+    if [[ -z "$separator" ]]; then
+        log-error "Separator required"
+        return 1
+    fi
+
+    jq-query "join(\"$separator\")"
+}
+
+# Convert to lowercase
+# Usage: echo '"HELLO"' | jq-lowercase
+jq-lowercase() {
+    jq-query 'ascii_downcase'
+}
+
+# Convert to uppercase
+# Usage: echo '"hello"' | jq-uppercase
+jq-uppercase() {
+    jq-query 'ascii_upcase'
+}
+
+# Trim whitespace
+# Usage: echo '"  text  "' | jq-trim
+jq-trim() {
+    jq-query 'gsub("^\\s+|\\s+$"; "")'
+}
+
+# Check if string contains substring
+# Usage: echo '"hello world"' | jq-contains "world" && echo "contains"
+jq-contains() {
+    local substring="$1"
+
+    if [[ -z "$substring" ]]; then
+        log-error "Substring required"
+        return 1
+    fi
+
+    local result=$(jq-query "contains(\"$substring\")" 2>/dev/null)
+    [[ "$result" == "true" ]]
+}
+
+# Check if string starts with prefix
+# Usage: echo '"hello"' | jq-starts-with "he" && echo "starts with"
+jq-starts-with() {
+    local prefix="$1"
+
+    if [[ -z "$prefix" ]]; then
+        log-error "Prefix required"
+        return 1
+    fi
+
+    local result=$(jq-query "startswith(\"$prefix\")" 2>/dev/null)
+    [[ "$result" == "true" ]]
+}
+
+# Check if string ends with suffix
+# Usage: echo '"hello"' | jq-ends-with "lo" && echo "ends with"
+jq-ends-with() {
+    local suffix="$1"
+
+    if [[ -z "$suffix" ]]; then
+        log-error "Suffix required"
+        return 1
+    fi
+
+    local result=$(jq-query "endswith(\"$suffix\")" 2>/dev/null)
+    [[ "$result" == "true" ]]
+}
+
+# Replace substring
+# Usage: echo '"hello world"' | jq-replace "world" "universe"
+jq-replace() {
+    local pattern="$1"
+    local replacement="$2"
+
+    if [[ -z "$pattern" ]]; then
+        log-error "Pattern required"
+        return 1
+    fi
+
+    jq-query "gsub(\"$pattern\"; \"$replacement\")"
+}
+
+# ------------------------------
+# Math Operations
+# ------------------------------
+
+# Add numbers in array
+# Usage: echo '[1,2,3]' | jq-add
+jq-add() {
+    jq-query 'add'
+}
+
+# Get minimum value
+# Usage: echo '[3,1,2]' | jq-min
+jq-min() {
+    jq-query 'min'
+}
+
+# Get maximum value
+# Usage: echo '[3,1,2]' | jq-max
+jq-max() {
+    jq-query 'max'
+}
+
+# Calculate sum
+# Usage: echo '[1,2,3]' | jq-sum
+jq-sum() {
+    jq-query '[.[] | tonumber] | add'
+}
+
+# Calculate average
+# Usage: echo '[1,2,3]' | jq-average
+jq-average() {
+    jq-query '[.[] | tonumber] | add / length'
+}
+
+# Round number
+# Usage: echo '3.7' | jq-round
+jq-round() {
+    jq-query 'round'
+}
+
+# Floor number
+# Usage: echo '3.7' | jq-floor
+jq-floor() {
+    jq-query 'floor'
+}
+
+# Ceiling number
+# Usage: echo '3.2' | jq-ceil
+jq-ceil() {
+    jq-query 'ceil'
+}
+
+# ------------------------------
+# Path Operations
+# ------------------------------
+
+# Get value at path
+# Usage: echo '{"a":{"b":1}}' | jq-getpath '"a","b"'
+jq-getpath() {
+    local path="$1"
+
+    if [[ -z "$path" ]]; then
+        log-error "Path required"
+        return 1
+    fi
+
+    jq-query "getpath([$path])"
+}
+
+# Set value at path
+# Usage: echo '{}' | jq-setpath '"a","b"' '1'
+jq-setpath() {
+    local path="$1"
+    local value="$2"
+
+    if [[ -z "$path" ]]; then
+        log-error "Path required"
+        return 1
+    fi
+
+    if echo "$value" | jq empty >/dev/null 2>&1; then
+        jq-query --argjson val "$value" "setpath([$path]; \$val)"
+    else
+        jq-query "setpath([$path]; \"$value\")"
+    fi
+}
+
+# Delete path
+# Usage: echo '{"a":{"b":1}}' | jq-delpath '"a","b"'
+jq-delpath() {
+    local path="$1"
+
+    if [[ -z "$path" ]]; then
+        log-error "Path required"
+        return 1
+    fi
+
+    jq-query "delpaths([[$path]])"
+}
+
+# Get all paths
+# Usage: echo '{"a":{"b":1}}' | jq-paths
+jq-paths() {
+    jq-query 'paths'
+}
+
+# Get leaf paths
+# Usage: echo '{"a":{"b":1}}' | jq-leaf-paths
+jq-leaf-paths() {
+    jq-query 'paths(scalars)'
+}
+
+# ------------------------------
+# Advanced Operations
+# ------------------------------
+
+# Reduce array
+# Usage: echo '[1,2,3]' | jq-reduce '. + $item' '0'
+jq-reduce() {
+    local expr="$1"
+    local init="${2:-{}}"
+
+    if [[ -z "$expr" ]]; then
+        log-error "Expression required"
+        return 1
+    fi
+
+    jq-query "reduce .[] as \$item ($init; $expr)"
+}
+
+# Recurse through structure
+# Usage: echo '{"a":{"b":1}}' | jq-recurse
+jq-recurse() {
+    local expr="${1:-.[]?}"
+    jq-query "recurse($expr)"
+}
+
+# Walk through structure
+# Usage: echo '{"a":1}' | jq-walk 'if type == "number" then . * 2 else . end'
+jq-walk() {
+    local expr="$1"
+
+    if [[ -z "$expr" ]]; then
+        log-error "Expression required"
+        return 1
+    fi
+
+    jq-query "walk($expr)"
+}
+
+# Transpose array of arrays
+# Usage: echo '[[1,2],[3,4]]' | jq-transpose
+jq-transpose() {
+    jq-query 'transpose'
+}
+
+# Combinations
+# Usage: echo '[[1,2],[3,4]]' | jq-combinations
+jq-combinations() {
+    jq-query 'combinations'
+}
+
+# ------------------------------
+# Utility Functions
+# ------------------------------
+
+# Get last output
+# Usage: output=$(jq-last-output)
+jq-last-output() {
+    echo "$_JQ_LAST_OUTPUT"
+}
+
+# Get last exit code
+# Usage: jq-last-exit-code
+jq-last-exit-code() {
+    return $_JQ_LAST_EXIT_CODE
+}
+
+# Count items
+# Usage: echo '[1,2,3]' | jq-count
+jq-count() {
+    jq-length
+}
+
+# Check if empty
+# Usage: echo '[]' | jq-is-empty && echo "empty"
+jq-is-empty() {
+    local result=$(jq-query 'length' 2>/dev/null)
+    [[ "$result" == "0" ]] || [[ "$result" == "null" ]]
+}
+
+# Convert to CSV
+# Usage: echo '[["a","b"],["c","d"]]' | jq-to-csv
+jq-to-csv() {
+    jq-check || return 1
+    jq -r '@csv'
+    return $?
+}
+
+# Convert to TSV
+# Usage: echo '[["a","b"],["c","d"]]' | jq-to-tsv
+jq-to-tsv() {
+    jq-check || return 1
+    jq -r '@tsv'
+    return $?
+}
+
+# Convert from CSV
+# Usage: echo -e '"a","b"\n"c","d"' | jq-from-csv
+jq-from-csv() {
+    jq-check || return 1
+    jq -R -s 'split("\n") | map(split(",")) | .[0:-1]'
+    return $?
+}
+
+# Convert to base64
+# Usage: echo '"hello"' | jq-to-base64
+jq-to-base64() {
+    jq-query '@base64'
+}
+
+# Convert from base64
+# Usage: echo '"aGVsbG8="' | jq-from-base64
+jq-from-base64() {
+    jq-query '@base64d'
+}
+
+# Convert to URI encoding
+# Usage: echo '"hello world"' | jq-to-uri
+jq-to-uri() {
+    jq-query '@uri'
+}
+
+# Convert to HTML encoding
+# Usage: echo '"<tag>"' | jq-to-html
+jq-to-html() {
+    jq-query '@html'
+}
+
+# Convert to JSON string
+# Usage: echo '{"x":1}' | jq-to-json
+jq-to-json() {
+    jq-query '@json'
+}
+
+# Format as text
+# Usage: echo '"text"' | jq-to-text
+jq-to-text() {
+    jq-query '@text'
+}
+
+# ------------------------------
+# File Operations
+# ------------------------------
+
+# Load JSON from file
+# Usage: jq-load config.json | jq-get "server.host"
+jq-load() {
+    local file="$1"
+
+    if [[ -z "$file" ]]; then
+        log-error "File path required"
+        return 1
+    fi
+
+    if [[ ! -f "$file" ]]; then
+        log-error "File not found: $file"
+        return 1
+    fi
+
+    log-debug "Loading JSON from: $file"
+    cat "$file"
+}
+
+# Save JSON to file
+# Usage: echo '{"x":1}' | jq-save output.json
+jq-save() {
+    local file="$1"
+
+    if [[ -z "$file" ]]; then
+        log-error "File path required"
+        return 1
+    fi
+
+    log-debug "Saving JSON to: $file"
+    cat > "$file"
+}
+
+# Query JSON file
+# Usage: jq-query-file config.json '.server.host'
+jq-query-file() {
+    local file="$1"
+    local filter="$2"
+
+    if [[ -z "$file" ]] || [[ -z "$filter" ]]; then
+        log-error "File and filter required"
+        return 1
+    fi
+
+    jq-load "$file" | jq-query "$filter"
+}
+
+# ------------------------------
+# Self-Test Function
+# ------------------------------
+
+# Run comprehensive self-tests
+# Usage: jq-self-test
+jq-self-test() {
+    log-info "Running _jq v${JQ_VERSION} self-tests..."
+
+    local tests_passed=0
+    local tests_failed=0
+
+    # Test 1: Check jq availability
+    if jq-check; then
+        log-info "✓ jq is available"
+        ((tests_passed++))
+    else
+        log-error "✗ jq is not available"
+        ((tests_failed++))
+        return 1
+    fi
+
+    # Test 2: Get version
+    local version=$(jq-get-version)
+    if [[ -n "$version" ]]; then
+        log-info "✓ jq version: $version"
+        ((tests_passed++))
+    else
+        log-error "✗ Failed to get jq version"
+        ((tests_failed++))
+    fi
+
+    # Test 3: Validate JSON
+    if echo '{"test": true}' | jq-validate; then
+        log-info "✓ JSON validation works"
+        ((tests_passed++))
+    else
+        log-error "✗ JSON validation failed"
+        ((tests_failed++))
+    fi
+
+    # Test 4: Query operation
+    local result=$(echo '{"name": "test"}' | jq-get "name" 2>/dev/null)
+    if [[ "$result" == "test" ]]; then
+        log-info "✓ Query operation works"
+        ((tests_passed++))
+    else
+        log-error "✗ Query operation failed (got: $result)"
+        ((tests_failed++))
+    fi
+
+    # Test 5: Array operations
+    local result=$(echo '[3,1,2]' | jq-sort | jq-compact 2>/dev/null)
+    if [[ "$result" == "[1,2,3]" ]]; then
+        log-info "✓ Array operations work"
+        ((tests_passed++))
+    else
+        log-error "✗ Array operations failed (got: $result)"
+        ((tests_failed++))
+    fi
+
+    # Test 6: Type checking
+    if echo '"string"' | jq-is-string; then
+        log-info "✓ Type checking works"
+        ((tests_passed++))
+    else
+        log-error "✗ Type checking failed"
+        ((tests_failed++))
+    fi
+
+    # Test 7: Object operations
+    if echo '{"a": 1}' | jq-has-key "a"; then
+        log-info "✓ Object operations work"
+        ((tests_passed++))
+    else
+        log-error "✗ Object operations failed"
+        ((tests_failed++))
+    fi
+
+    # Test 8: Configuration
+    local old_compact=$JQ_COMPACT
+    jq-enable-compact
+    if [[ "$JQ_COMPACT" == "true" ]]; then
+        log-info "✓ Configuration management works"
+        ((tests_passed++))
+    else
+        log-error "✗ Configuration management failed"
+        ((tests_failed++))
+    fi
+    JQ_COMPACT=$old_compact
+
+    # Summary
+    log-info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    log-info "Self-tests complete: $tests_passed passed, $tests_failed failed"
+    log-info "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+    [[ $tests_failed -eq 0 ]] && return 0 || return 1
+}
+

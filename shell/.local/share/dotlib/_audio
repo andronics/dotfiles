@@ -1,0 +1,1542 @@
+#!/usr/bin/env zsh
+
+# _audio - PulseAudio integration and management library
+# Part of the dotfiles library v2.0
+# Version: 1.0.0
+#
+# Usage:
+#   source "${DOTLIB}/_audio"
+#
+# Provides:
+#   - Audio device pattern matching and identification
+#   - Sink management (switching, enumeration, current detection)
+#   - Volume control (increase/decrease with limits, query, bounds checking)
+#   - Mute control (enable/disable/toggle with state tracking)
+#   - PulseAudio server management (restart)
+#   - Spectrum visualization (cava integration)
+#   - Event subscription for PulseAudio events
+#   - Configuration loading (devices.json, levels.json)
+#
+# Dependencies:
+#   Required:
+#     - _common v2.0: Core utilities and validation
+#     - _jq v2.0: JSON processing for device/level data
+#     - _xdg v2.0: XDG-compliant paths for configuration
+#     - pactl: PulseAudio control utility
+#   Optional (gracefully degraded):
+#     - _log v2.0: Structured logging
+#     - _cava v2.0: Spectrum visualization
+#     - _config v2.0: Configuration management
+#     - _lifecycle v3.0: Cleanup registration
+#     - _events v2.0: Event emission
+#     - pacmd: Legacy PulseAudio command interface (fallback)
+
+# ------------------------------
+# Source Guard
+# ------------------------------
+
+[[ -n "${AUDIO_LOADED:-}" ]] && return 0
+declare -g AUDIO_LOADED=1
+
+# ------------------------------
+# Version
+# ------------------------------
+
+declare -r AUDIO_VERSION="1.0.0"
+
+# ------------------------------
+# Dependency Loading
+# ------------------------------
+
+# Load foundation (required)
+if ! source "${DOTLIB}/_common" 2>/dev/null; then
+    echo "[ERROR] _audio requires _common v2.0 - cannot load" >&2
+    return 1
+fi
+
+# Load required extensions
+if ! source "${DOTLIB}/_jq" 2>/dev/null; then
+    echo "[ERROR] _audio requires _jq v2.0 - cannot load" >&2
+    return 1
+fi
+
+if ! source "${DOTLIB}/_xdg" 2>/dev/null; then
+    echo "[ERROR] _audio requires _xdg v2.0 - cannot load" >&2
+    return 1
+fi
+
+# Load infrastructure (optional with fallbacks)
+if ! source "${DOTLIB}/_log" 2>/dev/null; then
+    # Fallback logging
+    log-info() { echo "[INFO] $*" >&2; }
+    log-error() { echo "[ERROR] $*" >&2; }
+    log-warn() { echo "[WARN] $*" >&2; }
+    log-warning() { echo "[WARN] $*" >&2; }
+    log-debug() { [[ "${AUDIO_DEBUG:-false}" == "true" ]] && echo "[DEBUG] $*" >&2 || true; }
+    log-success() { echo "[SUCCESS] $*" >&2; }
+fi
+
+# Load optional extensions
+if source "${DOTLIB}/_cava" 2>/dev/null; then
+    declare -g AUDIO_CAVA_AVAILABLE=true
+else
+    declare -g AUDIO_CAVA_AVAILABLE=false
+fi
+
+if source "${DOTLIB}/_config" 2>/dev/null; then
+    declare -g AUDIO_CONFIG_AVAILABLE=true
+else
+    declare -g AUDIO_CONFIG_AVAILABLE=false
+fi
+
+if source "${DOTLIB}/_lifecycle" 2>/dev/null; then
+    declare -g AUDIO_LIFECYCLE_AVAILABLE=true
+else
+    declare -g AUDIO_LIFECYCLE_AVAILABLE=false
+fi
+
+if source "${DOTLIB}/_events" 2>/dev/null; then
+    declare -g AUDIO_EVENTS_AVAILABLE=true
+else
+    declare -g AUDIO_EVENTS_AVAILABLE=false
+fi
+
+# ------------------------------
+# Configuration
+# ------------------------------
+
+# Paths (XDG-compliant)
+declare -g AUDIO_CONFIG_DIR=""
+declare -g AUDIO_DATA_DIR=""
+declare -g AUDIO_CACHE_DIR=""
+
+# Behavior configuration
+declare -g AUDIO_DEBUG="${AUDIO_DEBUG:-false}"                     # Enable debug logging
+declare -g AUDIO_EMIT_EVENTS="${AUDIO_EMIT_EVENTS:-true}"         # Emit events via _events
+declare -g AUDIO_VOLUME_MAX="${AUDIO_VOLUME_MAX:-150}"            # Max volume percentage (150% = 1.5x)
+declare -g AUDIO_VOLUME_STEP="${AUDIO_VOLUME_STEP:-5}"            # Volume step percentage
+declare -g AUDIO_USE_PACTL="${AUDIO_USE_PACTL:-true}"             # Prefer pactl over pacmd
+
+# Event names (if _events is available)
+declare -r AUDIO_EVENT_VOLUME_CHANGED="audio.volume.changed"
+declare -r AUDIO_EVENT_MUTE_CHANGED="audio.mute.changed"
+declare -r AUDIO_EVENT_SINK_CHANGED="audio.sink.changed"
+declare -r AUDIO_EVENT_SERVER_RESTARTED="audio.server.restarted"
+declare -r AUDIO_EVENT_ERROR="audio.error"
+
+# ------------------------------
+# Internal State
+# ------------------------------
+
+# Configuration data (loaded lazily)
+declare -g _AUDIO_DEVICES_DATA=""
+declare -g _AUDIO_LEVELS_DATA=""
+
+# Initialization flag
+declare -g _AUDIO_INITIALIZED="false"
+
+# Volume level ranges (for icon selection)
+declare -g -A AUDIO_LEVEL_RANGES=(
+    [muted]="muted"
+    [lowest]="0-19"
+    [low]="20-39"
+    [medium]="40-59"
+    [high]="60-79"
+    [highest]="80-150"
+)
+
+# ------------------------------
+# Initialization
+# ------------------------------
+
+# Initialize extension
+#
+# Function: _audio-init
+# Description: Lazy initialization of _audio extension
+# Internal use only
+#
+_audio-init() {
+    [[ "$_AUDIO_INITIALIZED" == "true" ]] && return 0
+
+    log-debug "Initializing _audio v$AUDIO_VERSION"
+
+    # Initialize XDG paths
+    local app_name="audio"
+    xdg-setup-all "$app_name" || {
+        log-error "Failed to setup XDG directories"
+        return 1
+    }
+
+    AUDIO_CONFIG_DIR="$(xdg-config-dir "$app_name")"
+    AUDIO_DATA_DIR="$(xdg-data-dir "$app_name")"
+    AUDIO_CACHE_DIR="$(xdg-cache-dir "$app_name")"
+
+    log-debug "XDG directories initialized" "config=$AUDIO_CONFIG_DIR" "data=$AUDIO_DATA_DIR" "cache=$AUDIO_CACHE_DIR"
+
+    # Load configuration files
+    _audio-load-config
+
+    # Verify PulseAudio availability
+    if ! audio-check-server; then
+        log-warn "PulseAudio server not running or not available"
+    fi
+
+    _AUDIO_INITIALIZED="true"
+
+    # Emit initialization event
+    _audio-emit "audio.initialized" "version=$AUDIO_VERSION"
+
+    return 0
+}
+
+# Load configuration files
+#
+# Function: _audio-load-config
+# Description: Load devices.json and levels.json configuration
+# Internal use only
+#
+_audio-load-config() {
+    local devices_file="${AUDIO_DATA_DIR}/devices.json"
+    local levels_file="${AUDIO_DATA_DIR}/levels.json"
+
+    # Load devices configuration
+    if [[ -f "$devices_file" ]]; then
+        _AUDIO_DEVICES_DATA=$(<"$devices_file")
+        log-debug "Loaded devices configuration" "file=$devices_file"
+    else
+        log-warn "Devices configuration not found" "file=$devices_file"
+        _AUDIO_DEVICES_DATA="[]"
+    fi
+
+    # Load levels configuration
+    if [[ -f "$levels_file" ]]; then
+        _AUDIO_LEVELS_DATA=$(<"$levels_file")
+        log-debug "Loaded levels configuration" "file=$levels_file"
+    else
+        log-warn "Levels configuration not found" "file=$levels_file"
+        _AUDIO_LEVELS_DATA="{}"
+    fi
+
+    return 0
+}
+
+# ------------------------------
+# Internal Helpers
+# ------------------------------
+
+# Emit an event (uses _events if available)
+#
+# Function: _audio-emit
+# Description: Emit event via _events extension if available and enabled
+# Parameters:
+#   $1 - Event name (required)
+#   $@ - Event data (optional)
+# Internal use only
+#
+_audio-emit() {
+    [[ "$AUDIO_EMIT_EVENTS" != "true" ]] && return 0
+    [[ "$AUDIO_EVENTS_AVAILABLE" != "true" ]] && return 0
+
+    events-emit "$@"
+}
+
+# Check PulseAudio command availability
+#
+# Function: _audio-check-command
+# Description: Verify required PulseAudio commands are available
+# Parameters:
+#   $1 - Command name (required)
+# Returns:
+#   0 - Command available
+#   127 - Command not found
+# Internal use only
+#
+_audio-check-command() {
+    local command="$1"
+
+    if ! common-command-exists "$command"; then
+        log-error "Required command not found" "command=$command"
+        return 127
+    fi
+
+    return 0
+}
+
+# ------------------------------
+# Server Management
+# ------------------------------
+
+# Check if PulseAudio server is running
+#
+# Function: audio-check-server
+# Description: Verify PulseAudio server is running and accessible
+# Returns:
+#   0 - Server is running
+#   1 - Server is not running
+# Example:
+#   audio-check-server && echo "PulseAudio is ready"
+#
+audio-check-server() {
+    # Try pulseaudio --check first
+    if common-command-exists "pulseaudio"; then
+        pulseaudio --check 2>/dev/null && return 0
+    fi
+
+    # Fallback: try pactl info
+    if common-command-exists "pactl"; then
+        pactl info >/dev/null 2>&1 && return 0
+    fi
+
+    return 1
+}
+
+# Restart PulseAudio server
+#
+# Function: audio-server-restart
+# Description: Kill and restart PulseAudio server
+# Returns:
+#   0 - Success
+#   1 - Failed to restart
+#   127 - pulseaudio command not found
+# Example:
+#   audio-server-restart
+#
+audio-server-restart() {
+    _audio-init
+
+    _audio-check-command "pulseaudio" || return 127
+
+    log-info "Restarting PulseAudio server"
+
+    # Kill existing server
+    pulseaudio --kill 2>/dev/null || true
+    sleep 0.5
+
+    # Start new server
+    if pulseaudio --start 2>/dev/null; then
+        log-success "PulseAudio server restarted"
+        _audio-emit "$AUDIO_EVENT_SERVER_RESTARTED"
+        return 0
+    else
+        log-error "Failed to restart PulseAudio server"
+        _audio-emit "$AUDIO_EVENT_ERROR" "operation=server-restart"
+        return 1
+    fi
+}
+
+# ------------------------------
+# Device Management
+# ------------------------------
+
+# Find device by pattern
+#
+# Function: audio-device-find
+# Description: Find device by regex pattern matching against device name
+# Parameters:
+#   $1 - Pattern (required) - regex pattern
+# Output: Device name (raw from pactl/pacmd)
+# Returns:
+#   0 - Device found
+#   1 - Device not found
+#   2 - Invalid arguments
+# Example:
+#   device=$(audio-device-find "alsa_output.*hdmi")
+#
+audio-device-find() {
+    local pattern="$1"
+
+    _audio-init
+    common-validate-required "$pattern" "pattern" || return 2
+
+    # Get all sink names
+    local sinks
+    if [[ "$AUDIO_USE_PACTL" == "true" ]] && _audio-check-command "pactl" >/dev/null 2>&1; then
+        sinks=$(pactl list short sinks 2>/dev/null | awk '{print $2}')
+    elif _audio-check-command "pacmd" >/dev/null 2>&1; then
+        sinks=$(pacmd list-sinks 2>/dev/null | awk '/name:/ {gsub(/[<>]/, "", $2); print $2}')
+    else
+        log-error "No PulseAudio control command available"
+        return 127
+    fi
+
+    # Match pattern
+    while IFS= read -r sink; do
+        if [[ "$sink" =~ $pattern ]]; then
+            echo "$sink"
+            return 0
+        fi
+    done <<< "$sinks"
+
+    log-debug "No device found matching pattern" "pattern=$pattern"
+    return 1
+}
+
+# Get friendly name for device
+#
+# Function: audio-device-get-name
+# Description: Get friendly name for device from devices.json configuration
+# Parameters:
+#   $1 - Device name (optional, uses current sink if omitted)
+# Output: Friendly name
+# Returns:
+#   0 - Success
+#   1 - Device name not found in configuration
+# Example:
+#   friendly_name=$(audio-device-get-name)
+#
+audio-device-get-name() {
+    local device="$1"
+
+    _audio-init
+
+    # Get current sink if not provided
+    if [[ -z "$device" ]]; then
+        device=$(audio-sink-get-current) || return 1
+    fi
+
+    # Get device name from sink
+    local sink_name=$(audio-sink-get-name "$device") || return 1
+
+    # Query devices.json for friendly name
+    local filter='.[] | .pattern as $pattern | select($name | test($pattern)) | .name'
+    local friendly_name=$(echo "$_AUDIO_DEVICES_DATA" | jq-query "$filter" "name" "$sink_name")
+
+    if [[ -n "$friendly_name" ]]; then
+        echo "$friendly_name"
+        return 0
+    else
+        log-debug "No friendly name found for device" "sink=$device" "name=$sink_name"
+        echo "$sink_name"
+        return 1
+    fi
+}
+
+# Get icon for device
+#
+# Function: audio-device-get-icon
+# Description: Get icon for device from devices.json configuration
+# Parameters:
+#   $1 - Device name (optional, uses current sink if omitted)
+# Output: Icon string
+# Returns:
+#   0 - Success
+#   1 - Icon not found in configuration
+# Example:
+#   icon=$(audio-device-get-icon)
+#
+audio-device-get-icon() {
+    local device="$1"
+
+    _audio-init
+
+    # Get current sink if not provided
+    if [[ -z "$device" ]]; then
+        device=$(audio-sink-get-current) || return 1
+    fi
+
+    # Get device name from sink
+    local sink_name=$(audio-sink-get-name "$device") || return 1
+
+    # Query devices.json for icon
+    local filter='.[] | .pattern as $pattern | select($name | test($pattern)) | .icon'
+    local icon=$(echo "$_AUDIO_DEVICES_DATA" | jq-query "$filter" "name" "$sink_name")
+
+    if [[ -n "$icon" ]]; then
+        echo "$icon"
+        return 0
+    else
+        log-debug "No icon found for device" "sink=$device" "name=$sink_name"
+        echo ""
+        return 1
+    fi
+}
+
+# ------------------------------
+# Sink Management
+# ------------------------------
+
+# Get current active sink
+#
+# Function: audio-sink-get-current
+# Description: Get the currently active default sink ID
+# Output: Sink ID (numeric)
+# Returns:
+#   0 - Success
+#   1 - Failed to get current sink
+# Example:
+#   current_sink=$(audio-sink-get-current)
+#
+audio-sink-get-current() {
+    _audio-init
+
+    audio-check-server || {
+        log-error "PulseAudio server not running"
+        return 1
+    }
+
+    local sink
+    if [[ "$AUDIO_USE_PACTL" == "true" ]] && _audio-check-command "pactl" >/dev/null 2>&1; then
+        # Get default sink name then find its index
+        local default_sink=$(pactl info 2>/dev/null | awk '/Default Sink:/ {print $3}')
+        sink=$(pactl list short sinks 2>/dev/null | awk -v name="$default_sink" '$2 == name {print $1}')
+    elif _audio-check-command "pacmd" >/dev/null 2>&1; then
+        sink=$(pacmd list-sinks 2>/dev/null | awk '/\* index:/ {print $3}')
+    else
+        log-error "No PulseAudio control command available"
+        return 127
+    fi
+
+    if [[ -n "$sink" ]]; then
+        echo "$sink"
+        return 0
+    else
+        log-error "Failed to get current sink"
+        return 1
+    fi
+}
+
+# Get sink name (device string)
+#
+# Function: audio-sink-get-name
+# Description: Get device name for sink ID
+# Parameters:
+#   $1 - Sink ID (required)
+# Output: Device name
+# Returns:
+#   0 - Success
+#   1 - Sink not found
+#   2 - Invalid arguments
+# Example:
+#   name=$(audio-sink-get-name 0)
+#
+audio-sink-get-name() {
+    local sink="$1"
+
+    _audio-init
+    common-validate-required "$sink" "sink ID" || return 2
+
+    local name
+    if [[ "$AUDIO_USE_PACTL" == "true" ]] && _audio-check-command "pactl" >/dev/null 2>&1; then
+        name=$(pactl list short sinks 2>/dev/null | awk -v id="$sink" '$1 == id {print $2}')
+    elif _audio-check-command "pacmd" >/dev/null 2>&1; then
+        name=$(pacmd list-sinks 2>/dev/null | awk -v id="$sink" '/index: '"$sink"'$/,/name:/ {if (/name:/) {gsub(/[<>]/, "", $2); print $2; exit}}')
+    else
+        log-error "No PulseAudio control command available"
+        return 127
+    fi
+
+    if [[ -n "$name" ]]; then
+        echo "$name"
+        return 0
+    else
+        log-error "Failed to get name for sink" "sink=$sink"
+        return 1
+    fi
+}
+
+# List all sinks
+#
+# Function: audio-sink-list
+# Description: List all available sinks with their IDs
+# Output: List of "ID NAME" pairs
+# Returns:
+#   0 - Success
+#   1 - Failed to list sinks
+# Example:
+#   audio-sink-list
+#
+audio-sink-list() {
+    _audio-init
+
+    audio-check-server || {
+        log-error "PulseAudio server not running"
+        return 1
+    }
+
+    if [[ "$AUDIO_USE_PACTL" == "true" ]] && _audio-check-command "pactl" >/dev/null 2>&1; then
+        pactl list short sinks 2>/dev/null | awk '{print $1, $2}'
+    elif _audio-check-command "pacmd" >/dev/null 2>&1; then
+        pacmd list-sinks 2>/dev/null | awk '/index:/ {idx=$2} /name:/ {gsub(/[<>]/, "", $2); print idx, $2; idx=""}'
+    else
+        log-error "No PulseAudio control command available"
+        return 127
+    fi
+}
+
+# Get all sink IDs
+#
+# Function: _audio-sink-get-ids
+# Description: Get array of all sink IDs
+# Output: Space-separated sink IDs
+# Internal use only
+#
+_audio-sink-get-ids() {
+    audio-sink-list | awk '{print $1}'
+}
+
+# Set default sink
+#
+# Function: audio-sink-set
+# Description: Set the default sink
+# Parameters:
+#   $1 - Sink ID or name (required)
+# Returns:
+#   0 - Success
+#   1 - Failed to set sink
+#   2 - Invalid arguments
+# Example:
+#   audio-sink-set 1
+#
+audio-sink-set() {
+    local sink="$1"
+
+    _audio-init
+    common-validate-required "$sink" "sink" || return 2
+
+    log-info "Setting default sink" "sink=$sink"
+
+    # Set default sink
+    if [[ "$AUDIO_USE_PACTL" == "true" ]] && _audio-check-command "pactl" >/dev/null 2>&1; then
+        # pactl accepts both ID and name
+        pactl set-default-sink "$sink" 2>/dev/null || {
+            log-error "Failed to set default sink" "sink=$sink"
+            return 1
+        }
+
+        # Move existing sink inputs to new sink
+        local inputs=$(pactl list short sink-inputs 2>/dev/null | awk '{print $1}')
+        for input in $inputs; do
+            pactl move-sink-input "$input" "$sink" 2>/dev/null || true
+        done
+    elif _audio-check-command "pacmd" >/dev/null 2>&1; then
+        # Get sink name if ID was provided
+        local sink_name="$sink"
+        if [[ "$sink" =~ ^[0-9]+$ ]]; then
+            sink_name=$(audio-sink-get-name "$sink") || return 1
+        fi
+
+        pacmd set-default-sink "$sink_name" 2>/dev/null || {
+            log-error "Failed to set default sink" "sink=$sink"
+            return 1
+        }
+
+        # Move existing sink inputs to new sink
+        local inputs=$(pacmd list-sink-inputs 2>/dev/null | awk '/index:/ {print $2}')
+        for input in $inputs; do
+            pacmd move-sink-input "$input" "$sink_name" 2>/dev/null || true
+        done
+    else
+        log-error "No PulseAudio control command available"
+        return 127
+    fi
+
+    log-success "Default sink set" "sink=$sink"
+    _audio-emit "$AUDIO_EVENT_SINK_CHANGED" "sink=$sink"
+
+    return 0
+}
+
+# Switch to next sink
+#
+# Function: audio-sink-set-next
+# Description: Switch to the next available sink in the list
+# Returns:
+#   0 - Success
+#   1 - Failed to switch or no sinks available
+# Example:
+#   audio-sink-set-next
+#
+audio-sink-set-next() {
+    _audio-init
+
+    local current=$(audio-sink-get-current) || return 1
+    local -a sinks=($(audio-sink-list | awk '{print $1}'))
+
+    [[ ${#sinks[@]} -eq 0 ]] && {
+        log-error "No sinks available"
+        return 1
+    }
+
+    # Find next sink
+    local next=""
+    local found=false
+    for sink in "${sinks[@]}"; do
+        if [[ "$found" == "true" ]]; then
+            next="$sink"
+            break
+        fi
+        [[ "$sink" == "$current" ]] && found=true
+    done
+
+    # Wrap around if at end
+    [[ -z "$next" ]] && next="${sinks[1]}"
+
+    log-info "Switching to next sink" "current=$current" "next=$next"
+    audio-sink-set "$next"
+}
+
+# Switch to previous sink
+#
+# Function: audio-sink-set-prev
+# Description: Switch to the previous available sink in the list
+# Returns:
+#   0 - Success
+#   1 - Failed to switch or no sinks available
+# Example:
+#   audio-sink-set-prev
+#
+audio-sink-set-prev() {
+    _audio-init
+
+    local current=$(audio-sink-get-current) || return 1
+    local -a sinks=($(audio-sink-list | awk '{print $1}'))
+
+    [[ ${#sinks[@]} -eq 0 ]] && {
+        log-error "No sinks available"
+        return 1
+    }
+
+    # Find previous sink
+    local prev=""
+    for sink in "${sinks[@]}"; do
+        [[ "$sink" == "$current" ]] && break
+        prev="$sink"
+    done
+
+    # Wrap around if at beginning
+    [[ -z "$prev" ]] && prev="${sinks[-1]}"
+
+    log-info "Switching to previous sink" "current=$current" "prev=$prev"
+    audio-sink-set "$prev"
+}
+
+# ------------------------------
+# Volume Management
+# ------------------------------
+
+# Get volume for sink
+#
+# Function: audio-volume-get
+# Description: Get current volume percentage for sink
+# Parameters:
+#   $1 - Sink ID (optional, uses current sink if omitted)
+# Output: Volume percentage (0-150)
+# Returns:
+#   0 - Success
+#   1 - Failed to get volume
+# Example:
+#   volume=$(audio-volume-get)
+#
+audio-volume-get() {
+    local sink="${1:-$(audio-sink-get-current)}"
+
+    _audio-init
+
+    [[ -z "$sink" ]] && {
+        log-error "Failed to get current sink"
+        return 1
+    }
+
+    local volume
+    if [[ "$AUDIO_USE_PACTL" == "true" ]] && _audio-check-command "pactl" >/dev/null 2>&1; then
+        volume=$(pactl list sinks 2>/dev/null | awk -v id="$sink" '
+            /^Sink #/ {current=$2; gsub(/#/, "", current)}
+            current == id && /Volume:/ {
+                # Extract first percentage
+                for (i=1; i<=NF; i++) {
+                    if ($i ~ /%/) {
+                        gsub(/%/, "", $i)
+                        print $i
+                        exit
+                    }
+                }
+            }
+        ')
+    elif _audio-check-command "pacmd" >/dev/null 2>&1; then
+        volume=$(pacmd list-sinks 2>/dev/null | awk -v id="$sink" '
+            /index:/ {current=$2}
+            current == id && /volume:/ && !/base volume:/ {
+                for (i=1; i<=NF; i++) {
+                    if ($i ~ /%/) {
+                        gsub(/%/, "", $i)
+                        print $i
+                        exit
+                    }
+                }
+            }
+        ')
+    else
+        log-error "No PulseAudio control command available"
+        return 127
+    fi
+
+    if [[ -n "$volume" ]]; then
+        echo "$volume"
+        return 0
+    else
+        log-error "Failed to get volume for sink" "sink=$sink"
+        return 1
+    fi
+}
+
+# Set absolute volume
+#
+# Function: audio-volume-set
+# Description: Set volume to specific percentage with bounds checking
+# Parameters:
+#   $1 - Volume percentage (required, 0-150)
+#   $2 - Sink ID (optional, uses current sink if omitted)
+# Returns:
+#   0 - Success
+#   1 - Failed to set volume
+#   2 - Invalid arguments
+# Example:
+#   audio-volume-set 75
+#
+audio-volume-set() {
+    local volume="$1"
+    local sink="${2:-$(audio-sink-get-current)}"
+
+    _audio-init
+    common-validate-required "$volume" "volume" || return 2
+    common-validate-numeric "$volume" || {
+        log-error "Volume must be numeric" "volume=$volume"
+        return 2
+    }
+
+    [[ -z "$sink" ]] && {
+        log-error "Failed to get current sink"
+        return 1
+    }
+
+    # Bounds checking
+    if [[ $volume -lt 0 ]]; then
+        volume=0
+    elif [[ $volume -gt $AUDIO_VOLUME_MAX ]]; then
+        volume=$AUDIO_VOLUME_MAX
+    fi
+
+    log-debug "Setting volume" "sink=$sink" "volume=$volume%"
+
+    if [[ "$AUDIO_USE_PACTL" == "true" ]] && _audio-check-command "pactl" >/dev/null 2>&1; then
+        pactl set-sink-volume "$sink" "${volume}%" 2>/dev/null || {
+            log-error "Failed to set volume" "sink=$sink" "volume=$volume"
+            return 1
+        }
+    elif _audio-check-command "pacmd" >/dev/null 2>&1; then
+        # Convert percentage to PulseAudio volume (65536 = 100%)
+        local pa_volume=$((volume * 65536 / 100))
+        pacmd set-sink-volume "$sink" "$pa_volume" 2>/dev/null || {
+            log-error "Failed to set volume" "sink=$sink" "volume=$volume"
+            return 1
+        }
+    else
+        log-error "No PulseAudio control command available"
+        return 127
+    fi
+
+    _audio-emit "$AUDIO_EVENT_VOLUME_CHANGED" "sink=$sink" "volume=$volume"
+    return 0
+}
+
+# Increase volume
+#
+# Function: audio-volume-increase
+# Description: Increase volume by step amount with max limit
+# Parameters:
+#   $1 - Step amount (optional, default: AUDIO_VOLUME_STEP)
+#   $2 - Sink ID (optional, uses current sink if omitted)
+# Returns:
+#   0 - Success
+#   1 - Failed to increase volume
+# Example:
+#   audio-volume-increase
+#   audio-volume-increase 10
+#
+audio-volume-increase() {
+    local step="${1:-$AUDIO_VOLUME_STEP}"
+    local sink="${2:-$(audio-sink-get-current)}"
+
+    _audio-init
+
+    [[ -z "$sink" ]] && {
+        log-error "Failed to get current sink"
+        return 1
+    }
+
+    local current=$(audio-volume-get "$sink") || return 1
+    local new_volume=$((current + step))
+    local volume_max_limit=$((AUDIO_VOLUME_MAX - step))
+
+    # Smart capping: if we're near the max, jump to max instead of overshooting
+    if [[ $current -lt $volume_max_limit && $new_volume -gt $AUDIO_VOLUME_MAX ]]; then
+        new_volume=$AUDIO_VOLUME_MAX
+    elif [[ $current -ge $volume_max_limit && $current -lt $AUDIO_VOLUME_MAX ]]; then
+        new_volume=$AUDIO_VOLUME_MAX
+    fi
+
+    # Cap at max
+    [[ $new_volume -gt $AUDIO_VOLUME_MAX ]] && new_volume=$AUDIO_VOLUME_MAX
+
+    log-info "Increasing volume" "current=$current%" "new=$new_volume%"
+    audio-volume-set "$new_volume" "$sink"
+}
+
+# Decrease volume
+#
+# Function: audio-volume-decrease
+# Description: Decrease volume by step amount with min limit
+# Parameters:
+#   $1 - Step amount (optional, default: AUDIO_VOLUME_STEP)
+#   $2 - Sink ID (optional, uses current sink if omitted)
+# Returns:
+#   0 - Success
+#   1 - Failed to decrease volume
+# Example:
+#   audio-volume-decrease
+#   audio-volume-decrease 10
+#
+audio-volume-decrease() {
+    local step="${1:-$AUDIO_VOLUME_STEP}"
+    local sink="${2:-$(audio-sink-get-current)}"
+
+    _audio-init
+
+    [[ -z "$sink" ]] && {
+        log-error "Failed to get current sink"
+        return 1
+    }
+
+    local current=$(audio-volume-get "$sink") || return 1
+    local new_volume=$((current - step))
+
+    # Cap at 0
+    [[ $new_volume -lt 0 ]] && new_volume=0
+
+    log-info "Decreasing volume" "current=$current%" "new=$new_volume%"
+    audio-volume-set "$new_volume" "$sink"
+}
+
+# ------------------------------
+# Mute Control
+# ------------------------------
+
+# Query mute state
+#
+# Function: audio-mute-query
+# Description: Get current mute state for sink
+# Parameters:
+#   $1 - Sink ID (optional, uses current sink if omitted)
+# Output: "yes" or "no"
+# Returns:
+#   0 - Success
+#   1 - Failed to query mute state
+# Example:
+#   state=$(audio-mute-query)
+#   [[ "$state" == "yes" ]] && echo "Muted"
+#
+audio-mute-query() {
+    local sink="${1:-$(audio-sink-get-current)}"
+
+    _audio-init
+
+    [[ -z "$sink" ]] && {
+        log-error "Failed to get current sink"
+        return 1
+    }
+
+    local muted
+    if [[ "$AUDIO_USE_PACTL" == "true" ]] && _audio-check-command "pactl" >/dev/null 2>&1; then
+        muted=$(pactl list sinks 2>/dev/null | awk -v id="$sink" '
+            /^Sink #/ {current=$2; gsub(/#/, "", current)}
+            current == id && /Mute:/ {print $2; exit}
+        ')
+    elif _audio-check-command "pacmd" >/dev/null 2>&1; then
+        muted=$(pacmd list-sinks 2>/dev/null | awk -v id="$sink" '
+            /index:/ {current=$2}
+            current == id && /muted:/ {print $2; exit}
+        ')
+    else
+        log-error "No PulseAudio control command available"
+        return 127
+    fi
+
+    if [[ -n "$muted" ]]; then
+        echo "$muted"
+        return 0
+    else
+        log-error "Failed to query mute state" "sink=$sink"
+        return 1
+    fi
+}
+
+# Enable mute
+#
+# Function: audio-mute-enable
+# Description: Mute the sink
+# Parameters:
+#   $1 - Sink ID (optional, uses current sink if omitted)
+# Returns:
+#   0 - Success
+#   1 - Failed to enable mute
+# Example:
+#   audio-mute-enable
+#
+audio-mute-enable() {
+    local sink="${1:-$(audio-sink-get-current)}"
+
+    _audio-init
+
+    [[ -z "$sink" ]] && {
+        log-error "Failed to get current sink"
+        return 1
+    }
+
+    log-info "Enabling mute" "sink=$sink"
+
+    if [[ "$AUDIO_USE_PACTL" == "true" ]] && _audio-check-command "pactl" >/dev/null 2>&1; then
+        pactl set-sink-mute "$sink" 1 2>/dev/null || {
+            log-error "Failed to enable mute" "sink=$sink"
+            return 1
+        }
+    elif _audio-check-command "pacmd" >/dev/null 2>&1; then
+        pacmd set-sink-mute "$sink" 1 2>/dev/null || {
+            log-error "Failed to enable mute" "sink=$sink"
+            return 1
+        }
+    else
+        log-error "No PulseAudio control command available"
+        return 127
+    fi
+
+    _audio-emit "$AUDIO_EVENT_MUTE_CHANGED" "sink=$sink" "muted=yes"
+    return 0
+}
+
+# Disable mute
+#
+# Function: audio-mute-disable
+# Description: Unmute the sink
+# Parameters:
+#   $1 - Sink ID (optional, uses current sink if omitted)
+# Returns:
+#   0 - Success
+#   1 - Failed to disable mute
+# Example:
+#   audio-mute-disable
+#
+audio-mute-disable() {
+    local sink="${1:-$(audio-sink-get-current)}"
+
+    _audio-init
+
+    [[ -z "$sink" ]] && {
+        log-error "Failed to get current sink"
+        return 1
+    }
+
+    log-info "Disabling mute" "sink=$sink"
+
+    if [[ "$AUDIO_USE_PACTL" == "true" ]] && _audio-check-command "pactl" >/dev/null 2>&1; then
+        pactl set-sink-mute "$sink" 0 2>/dev/null || {
+            log-error "Failed to disable mute" "sink=$sink"
+            return 1
+        }
+    elif _audio-check-command "pacmd" >/dev/null 2>&1; then
+        pacmd set-sink-mute "$sink" 0 2>/dev/null || {
+            log-error "Failed to disable mute" "sink=$sink"
+            return 1
+        }
+    else
+        log-error "No PulseAudio control command available"
+        return 127
+    fi
+
+    _audio-emit "$AUDIO_EVENT_MUTE_CHANGED" "sink=$sink" "muted=no"
+    return 0
+}
+
+# Toggle mute
+#
+# Function: audio-mute-toggle
+# Description: Toggle mute state for sink
+# Parameters:
+#   $1 - Sink ID (optional, uses current sink if omitted)
+# Returns:
+#   0 - Success
+#   1 - Failed to toggle mute
+# Example:
+#   audio-mute-toggle
+#
+audio-mute-toggle() {
+    local sink="${1:-$(audio-sink-get-current)}"
+
+    _audio-init
+
+    [[ -z "$sink" ]] && {
+        log-error "Failed to get current sink"
+        return 1
+    }
+
+    log-info "Toggling mute" "sink=$sink"
+
+    if [[ "$AUDIO_USE_PACTL" == "true" ]] && _audio-check-command "pactl" >/dev/null 2>&1; then
+        pactl set-sink-mute "$sink" toggle 2>/dev/null || {
+            log-error "Failed to toggle mute" "sink=$sink"
+            return 1
+        }
+    elif _audio-check-command "pacmd" >/dev/null 2>&1; then
+        # pacmd doesn't have toggle, query and flip
+        local current=$(audio-mute-query "$sink") || return 1
+        if [[ "$current" == "yes" ]]; then
+            audio-mute-disable "$sink"
+        else
+            audio-mute-enable "$sink"
+        fi
+    else
+        log-error "No PulseAudio control command available"
+        return 127
+    fi
+
+    local new_state=$(audio-mute-query "$sink")
+    _audio-emit "$AUDIO_EVENT_MUTE_CHANGED" "sink=$sink" "muted=$new_state"
+    return 0
+}
+
+# ------------------------------
+# Level and Icon Management
+# ------------------------------
+
+# Get volume level name
+#
+# Function: audio-level-get-name
+# Description: Get volume level name based on current volume and mute state
+# Parameters:
+#   $1 - Sink ID (optional, uses current sink if omitted)
+# Output: Level name (muted, lowest, low, medium, high, highest)
+# Returns:
+#   0 - Success
+#   1 - Failed to get level
+# Example:
+#   level=$(audio-level-get-name)
+#
+audio-level-get-name() {
+    local sink="${1:-$(audio-sink-get-current)}"
+
+    _audio-init
+
+    [[ -z "$sink" ]] && {
+        log-error "Failed to get current sink"
+        return 1
+    }
+
+    # Check mute first
+    local muted=$(audio-mute-query "$sink") || return 1
+    if [[ "$muted" == "yes" ]]; then
+        echo "muted"
+        return 0
+    fi
+
+    # Get volume and determine level
+    local volume=$(audio-volume-get "$sink") || return 1
+
+    local level="highest"  # default
+    if [[ $volume -ge 0 && $volume -le 19 ]]; then
+        level="lowest"
+    elif [[ $volume -ge 20 && $volume -le 39 ]]; then
+        level="low"
+    elif [[ $volume -ge 40 && $volume -le 59 ]]; then
+        level="medium"
+    elif [[ $volume -ge 60 && $volume -le 79 ]]; then
+        level="high"
+    elif [[ $volume -ge 80 && $volume -le 150 ]]; then
+        level="highest"
+    fi
+
+    echo "$level"
+    return 0
+}
+
+# Get icon for volume level
+#
+# Function: audio-level-get-icon
+# Description: Get icon for current volume level from levels.json
+# Parameters:
+#   $1 - Sink ID (optional, uses current sink if omitted)
+# Output: Icon string
+# Returns:
+#   0 - Success
+#   1 - Failed to get icon
+# Example:
+#   icon=$(audio-level-get-icon)
+#
+audio-level-get-icon() {
+    local sink="${1:-$(audio-sink-get-current)}"
+
+    _audio-init
+
+    local level=$(audio-level-get-name "$sink") || return 1
+
+    # Query levels.json for icon
+    local icon=$(echo "$_AUDIO_LEVELS_DATA" | jq-query ".$level")
+
+    if [[ -n "$icon" ]]; then
+        echo "$icon"
+        return 0
+    else
+        log-debug "No icon found for level" "level=$level"
+        echo ""
+        return 1
+    fi
+}
+
+# ------------------------------
+# Spectrum Visualization
+# ------------------------------
+
+# Show spectrum visualization
+#
+# Function: audio-spectrum-show
+# Description: Display audio spectrum visualization using cava
+# Returns:
+#   0 - Success
+#   1 - Failed to show spectrum
+#   6 - _cava extension not available
+# Example:
+#   audio-spectrum-show
+#
+audio-spectrum-show() {
+    _audio-init
+
+    if [[ "$AUDIO_CAVA_AVAILABLE" != "true" ]]; then
+        log-error "_cava extension not available"
+        return 6
+    fi
+
+    # Start cava with audio configuration
+    cava-start "audio-spectrum" \
+        --bars 16 \
+        --input-method pulse \
+        --input-source auto \
+        --ascii-max-range 7
+
+    return $?
+}
+
+# ------------------------------
+# Event Subscription
+# ------------------------------
+
+# Subscribe to PulseAudio events
+#
+# Function: audio-subscribe
+# Description: Subscribe to PulseAudio server events and process them
+# Output: Event stream to stdout
+# Returns:
+#   0 - Subscription ended normally
+#   1 - Failed to subscribe
+#   127 - pactl not available
+# Example:
+#   audio-subscribe | while read event; do
+#       echo "Event: $event"
+#   done
+#
+audio-subscribe() {
+    _audio-init
+
+    _audio-check-command "pactl" || return 127
+
+    log-info "Subscribing to PulseAudio events"
+
+    pactl subscribe 2>/dev/null | while IFS="'# " read -A event_parts; do
+        local event_type="${event_parts[2]}"
+        local element="${event_parts[4]}"
+        local id="${event_parts[5]}"
+
+        case "${element}:${event_type}" in
+            sink:change)
+                echo "sink id $id changed"
+                ;;
+            sink:new)
+                echo "new sink id $id"
+                ;;
+            sink:remove)
+                echo "sink id $id removed"
+                ;;
+            sink-input:change)
+                echo "sink-input id $id changed"
+                ;;
+            sink-input:new)
+                echo "new sink-input id $id"
+                ;;
+            sink-input:remove)
+                echo "sink-input id $id removed"
+                ;;
+            *)
+                echo "$element id $id $event_type"
+                ;;
+        esac
+    done
+}
+
+# ------------------------------
+# Utility Functions
+# ------------------------------
+
+# Display version
+#
+# Function: audio-version
+# Description: Display extension version
+# Output: Version string
+# Example:
+#   audio-version
+#
+audio-version() {
+    echo "$AUDIO_VERSION"
+}
+
+# Display extension information
+#
+# Function: audio-info
+# Description: Display comprehensive extension information
+# Output: Extension details
+# Example:
+#   audio-info
+#
+audio-info() {
+    _audio-init
+
+    cat <<EOF
+_audio Extension Information
+
+Version:          $AUDIO_VERSION
+Config Directory: $AUDIO_CONFIG_DIR
+Data Directory:   $AUDIO_DATA_DIR
+Cache Directory:  $AUDIO_CACHE_DIR
+
+Configuration:
+  Debug Mode:       $AUDIO_DEBUG
+  Emit Events:      $AUDIO_EMIT_EVENTS
+  Volume Max:       $AUDIO_VOLUME_MAX%
+  Volume Step:      $AUDIO_VOLUME_STEP%
+  Use pactl:        $AUDIO_USE_PACTL
+
+Integration Status:
+  _common:          yes (required)
+  _jq:              yes (required)
+  _xdg:             yes (required)
+  _log:             ${LOG_LOADED:-no}
+  _cava:            $AUDIO_CAVA_AVAILABLE
+  _config:          $AUDIO_CONFIG_AVAILABLE
+  _lifecycle:       $AUDIO_LIFECYCLE_AVAILABLE
+  _events:          $AUDIO_EVENTS_AVAILABLE
+
+PulseAudio Status:
+  Server Running:   $(audio-check-server && echo "yes" || echo "no")
+  Current Sink:     $(audio-sink-get-current 2>/dev/null || echo "unknown")
+  Volume:           $(audio-volume-get 2>/dev/null || echo "unknown")%
+  Muted:            $(audio-mute-query 2>/dev/null || echo "unknown")
+EOF
+}
+
+# Display help
+#
+# Function: audio-help
+# Description: Display comprehensive help information
+# Output: Help text
+# Example:
+#   audio-help
+#
+audio-help() {
+    cat <<EOF
+_audio - PulseAudio Integration and Management
+
+Version: $AUDIO_VERSION
+
+USAGE:
+  source "\${DOTLIB}/_audio"
+
+CONFIGURATION:
+  AUDIO_DEBUG                Enable debug logging (default: false)
+  AUDIO_EMIT_EVENTS          Emit events via _events (default: true)
+  AUDIO_VOLUME_MAX           Max volume percentage (default: 150)
+  AUDIO_VOLUME_STEP          Volume step percentage (default: 5)
+  AUDIO_USE_PACTL            Prefer pactl over pacmd (default: true)
+
+SERVER MANAGEMENT:
+  audio-check-server         Check if PulseAudio is running
+  audio-server-restart       Restart PulseAudio server
+
+DEVICE MANAGEMENT:
+  audio-device-find PATTERN  Find device by pattern
+  audio-device-get-name [DEVICE]  Get friendly device name
+  audio-device-get-icon [DEVICE]  Get device icon
+
+SINK MANAGEMENT:
+  audio-sink-get-current     Get current active sink ID
+  audio-sink-get-name SINK   Get device name for sink
+  audio-sink-list            List all sinks
+  audio-sink-set SINK        Set default sink
+  audio-sink-set-next        Switch to next sink
+  audio-sink-set-prev        Switch to previous sink
+
+VOLUME CONTROL:
+  audio-volume-get [SINK]    Get current volume
+  audio-volume-set VOL [SINK] Set volume (0-150%)
+  audio-volume-increase [STEP] [SINK]  Increase volume
+  audio-volume-decrease [STEP] [SINK]  Decrease volume
+
+MUTE CONTROL:
+  audio-mute-query [SINK]    Query mute state
+  audio-mute-enable [SINK]   Enable mute
+  audio-mute-disable [SINK]  Disable mute
+  audio-mute-toggle [SINK]   Toggle mute
+
+LEVEL AND ICONS:
+  audio-level-get-name [SINK]  Get volume level name
+  audio-level-get-icon [SINK]  Get icon for volume level
+
+VISUALIZATION:
+  audio-spectrum-show        Display spectrum visualization (requires _cava)
+
+EVENT SUBSCRIPTION:
+  audio-subscribe            Subscribe to PulseAudio events
+
+UTILITIES:
+  audio-version              Display version
+  audio-help                 Display this help
+  audio-info                 Display system information
+  audio-self-test            Run self-tests
+
+INTEGRATION STATUS:
+  _common:    yes (required)
+  _jq:        yes (required)
+  _xdg:       yes (required)
+  _log:       ${LOG_LOADED:-no}
+  _cava:      $AUDIO_CAVA_AVAILABLE
+  _config:    $AUDIO_CONFIG_AVAILABLE
+  _lifecycle: $AUDIO_LIFECYCLE_AVAILABLE
+  _events:    $AUDIO_EVENTS_AVAILABLE
+
+For detailed documentation: cat ~/.local/docs/lib/_audio.md
+EOF
+}
+
+# Run self-tests
+#
+# Function: audio-self-test
+# Description: Run comprehensive self-tests to validate functionality
+# Returns:
+#   0 - All tests passed
+#   1 - Some tests failed
+# Example:
+#   audio-self-test
+#
+audio-self-test() {
+    _audio-init
+
+    log-info "Running _audio v$AUDIO_VERSION self-tests..."
+    local tests_passed=0
+    local tests_failed=0
+
+    # Test 1: PulseAudio availability
+    if audio-check-server; then
+        log-info "✓ PulseAudio server is running"
+        ((tests_passed++))
+    else
+        log-error "✗ PulseAudio server not running (expected if not available)"
+        ((tests_failed++))
+    fi
+
+    # Test 2: Dependency checks
+    if _audio-check-command "pactl" >/dev/null 2>&1; then
+        log-info "✓ pactl command available"
+        ((tests_passed++))
+    else
+        log-warn "✗ pactl command not available (will use pacmd)"
+    fi
+
+    # Test 3: Configuration loading
+    if [[ -n "$_AUDIO_DEVICES_DATA" ]]; then
+        log-info "✓ Devices configuration loaded"
+        ((tests_passed++))
+    else
+        log-warn "✗ Devices configuration not loaded (expected if file missing)"
+    fi
+
+    if [[ -n "$_AUDIO_LEVELS_DATA" ]]; then
+        log-info "✓ Levels configuration loaded"
+        ((tests_passed++))
+    else
+        log-warn "✗ Levels configuration not loaded (expected if file missing)"
+    fi
+
+    # Test 4: Get current sink (if server running)
+    if audio-check-server; then
+        local sink=$(audio-sink-get-current 2>/dev/null)
+        if [[ -n "$sink" ]]; then
+            log-info "✓ Can get current sink" "sink=$sink"
+            ((tests_passed++))
+
+            # Test 5: Get volume
+            local volume=$(audio-volume-get "$sink" 2>/dev/null)
+            if [[ -n "$volume" ]]; then
+                log-info "✓ Can get volume" "volume=$volume%"
+                ((tests_passed++))
+            else
+                log-error "✗ Failed to get volume"
+                ((tests_failed++))
+            fi
+
+            # Test 6: Query mute
+            local muted=$(audio-mute-query "$sink" 2>/dev/null)
+            if [[ -n "$muted" ]]; then
+                log-info "✓ Can query mute state" "muted=$muted"
+                ((tests_passed++))
+            else
+                log-error "✗ Failed to query mute state"
+                ((tests_failed++))
+            fi
+
+            # Test 7: Get level name
+            local level=$(audio-level-get-name "$sink" 2>/dev/null)
+            if [[ -n "$level" ]]; then
+                log-info "✓ Can get level name" "level=$level"
+                ((tests_passed++))
+            else
+                log-error "✗ Failed to get level name"
+                ((tests_failed++))
+            fi
+        else
+            log-error "✗ Failed to get current sink"
+            ((tests_failed++))
+        fi
+    fi
+
+    # Test 8: Integration detection
+    log-info "Integration availability:"
+    log-info "  _cava:      $AUDIO_CAVA_AVAILABLE"
+    log-info "  _config:    $AUDIO_CONFIG_AVAILABLE"
+    log-info "  _lifecycle: $AUDIO_LIFECYCLE_AVAILABLE"
+    log-info "  _events:    $AUDIO_EVENTS_AVAILABLE"
+    ((tests_passed++))
+
+    log-info ""
+    log-info "Self-tests complete: $tests_passed passed, $tests_failed failed"
+
+    if [[ $tests_failed -eq 0 ]]; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+# ------------------------------
+# Module Load
+# ------------------------------
+
+# Initialize eagerly to avoid log messages in command substitutions
+_audio-init || true
+
+# Log module load
+log-debug "_audio extension loaded" "version=$AUDIO_VERSION" "integrations=cava:$AUDIO_CAVA_AVAILABLE,config:$AUDIO_CONFIG_AVAILABLE,lifecycle:$AUDIO_LIFECYCLE_AVAILABLE,events:$AUDIO_EVENTS_AVAILABLE"

@@ -1,0 +1,1215 @@
+#!/usr/bin/env zsh
+
+# _git - Git operations and integration utilities
+# Part of the dotfiles library v2.0
+# Version: 1.0.0
+#
+# Usage:
+#   source "${DOTLIB}/_git"
+#
+# Provides:
+#   - Repository status and information
+#   - Branch management and operations
+#   - Commit operations
+#   - Remote operations (fetch, push, pull)
+#   - Tag management
+#   - Diff and log parsing
+#   - Hook management
+#   - Worktree operations
+#   - Cleanup utilities
+#   - Git automation helpers
+#
+# Dependencies:
+#   Required:
+#     - _common v2.0: Core utilities
+#     - git: Git version control
+#   Optional (gracefully degraded):
+#     - _log v2.0: Logging functions
+#     - _events v2.0: Event emission
+#     - _cache v2.0: Status caching
+#     - _lifecycle v3.0: Cleanup registration
+
+# ------------------------------
+# Source Guard
+# ------------------------------
+
+[[ -n "${_GIT_LOADED}" ]] && return 0
+declare -gr _GIT_LOADED=1
+
+# ------------------------------
+# Version
+# ------------------------------
+
+declare -gr GIT_VERSION="1.0.0"
+
+# ------------------------------
+# Dependency Loading
+# ------------------------------
+
+# Load foundation (required)
+if ! source "${DOTLIB}/_common" 2>/dev/null; then
+    echo "[ERROR] _git requires _common - cannot load" >&2
+    return 1
+fi
+
+# Load infrastructure (optional with fallbacks)
+if ! source "${DOTLIB}/_log" 2>/dev/null; then
+    log-info() { echo "[INFO] $*"; }
+    log-error() { echo "[ERROR] $*" >&2; }
+    log-warn() { echo "[WARN] $*" >&2; }
+    log-debug() { [[ "${GIT_DEBUG:-false}" == "true" ]] && echo "[DEBUG] $*" >&2 || true; }
+    log-success() { echo "[SUCCESS] $*"; }
+fi
+
+# Load optional dependencies
+source "${DOTLIB}/_events" 2>/dev/null || true
+declare -g GIT_EVENTS_AVAILABLE=$(common-command-exists "events-emit" && echo "true" || echo "false")
+
+source "${DOTLIB}/_cache" 2>/dev/null || true
+declare -g GIT_CACHE_AVAILABLE=$(common-command-exists "cache-set" && echo "true" || echo "false")
+
+source "${DOTLIB}/_lifecycle" 2>/dev/null || true
+declare -g GIT_LIFECYCLE_AVAILABLE=$(common-command-exists "lifecycle-add-cleanup" && echo "true" || echo "false")
+
+# ------------------------------
+# Configuration
+# ------------------------------
+
+# Default branch name
+declare -g GIT_DEFAULT_BRANCH="${GIT_DEFAULT_BRANCH:-main}"
+
+# Auto-fetch before operations
+declare -g GIT_AUTO_FETCH="${GIT_AUTO_FETCH:-false}"
+
+# Auto-push after commit
+declare -g GIT_AUTO_PUSH="${GIT_AUTO_PUSH:-false}"
+
+# Log format
+declare -g GIT_LOG_FORMAT="${GIT_LOG_FORMAT:-%h %ad %an: %s}"
+
+# Log date format
+declare -g GIT_LOG_DATE_FORMAT="${GIT_LOG_DATE_FORMAT:-short}"
+
+# Cache TTL for status (seconds)
+declare -g GIT_STATUS_CACHE_TTL="${GIT_STATUS_CACHE_TTL:-5}"
+
+# Debug mode
+declare -g GIT_DEBUG="${GIT_DEBUG:-false}"
+
+# ------------------------------
+# Event Constants
+# ------------------------------
+
+declare -gr GIT_EVENT_COMMIT="git.commit"
+declare -gr GIT_EVENT_PUSH="git.push"
+declare -gr GIT_EVENT_PULL="git.pull"
+declare -gr GIT_EVENT_FETCH="git.fetch"
+declare -gr GIT_EVENT_BRANCH_CREATE="git.branch.create"
+declare -gr GIT_EVENT_BRANCH_DELETE="git.branch.delete"
+declare -gr GIT_EVENT_BRANCH_SWITCH="git.branch.switch"
+declare -gr GIT_EVENT_TAG_CREATE="git.tag.create"
+declare -gr GIT_EVENT_TAG_DELETE="git.tag.delete"
+declare -gr GIT_EVENT_MERGE="git.merge"
+declare -gr GIT_EVENT_HOOK_INSTALL="git.hook.install"
+declare -gr GIT_EVENT_HOOK_REMOVE="git.hook.remove"
+
+# ------------------------------
+# Internal Functions
+# ------------------------------
+
+# Emit event if events available
+_git-emit-event() {
+    local event_name="${1}"
+    shift
+
+    if [[ "$GIT_EVENTS_AVAILABLE" == "true" ]]; then
+        events-emit "$event_name" "$@"
+    fi
+}
+
+# ------------------------------
+# Validation and Checking
+# ------------------------------
+
+# Check if git is available (required)
+git-check() {
+    if ! common-command-exists "git"; then
+        log-error "Git not found - required for git operations"
+        return 6
+    fi
+    return 0
+}
+
+# Check if in git repository
+# Usage: git-is-repo
+git-is-repo() {
+    git rev-parse --git-dir &>/dev/null
+}
+
+# Require git repository
+# Usage: git-require-repo || return 1
+git-require-repo() {
+    if ! git-is-repo; then
+        log-error "Not in a git repository"
+        return 1
+    fi
+}
+
+# ------------------------------
+# Repository Information
+# ------------------------------
+
+# Get git root directory
+# Usage: root=$(git-root)
+git-root() {
+    if ! git-require-repo; then
+        return 1
+    fi
+
+    git rev-parse --show-toplevel 2>/dev/null
+}
+
+# Get current branch name
+# Usage: branch=$(git-current-branch)
+git-current-branch() {
+    if ! git-require-repo; then
+        return 1
+    fi
+
+    git branch --show-current 2>/dev/null
+}
+
+# Get git directory path
+# Usage: gitdir=$(git-dir)
+git-dir() {
+    if ! git-require-repo; then
+        return 1
+    fi
+
+    git rev-parse --git-dir 2>/dev/null
+}
+
+# Get remote URL
+# Usage: url=$(git-remote-url [remote])
+git-remote-url() {
+    local remote="${1:-origin}"
+
+    if ! git-require-repo; then
+        return 1
+    fi
+
+    git remote get-url "$remote" 2>/dev/null
+}
+
+# ------------------------------
+# Repository Status
+# ------------------------------
+
+# Get repository status
+# Usage: git-status [--format <format>] [--cached]
+# Formats: text, short, json
+git-status() {
+    local format="text"
+    local use_cache=false
+
+    # Parse options
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --format)
+                format="${2}"
+                shift 2
+                ;;
+            --cached)
+                use_cache=true
+                shift
+                ;;
+            *)
+                shift
+                ;;
+        esac
+    done
+
+    if ! git-require-repo; then
+        return 1
+    fi
+
+    # Check cache if requested
+    if $use_cache && [[ "$GIT_CACHE_AVAILABLE" == "true" ]] && [[ "$format" == "json" ]]; then
+        local cache_key="git:status:$(git-root)"
+        local cached=$(cache-get "$cache_key" 2>/dev/null)
+        if [[ -n "$cached" ]]; then
+            log-debug "Cache hit for git status"
+            echo "$cached"
+            return 0
+        fi
+    fi
+
+    case "$format" in
+        text)
+            git status
+            ;;
+        short)
+            git status --short
+            ;;
+        json)
+            local result=$(_git-status-json)
+            # Cache result if available
+            if $use_cache && [[ "$GIT_CACHE_AVAILABLE" == "true" ]]; then
+                cache-set "git:status:$(git-root)" "$result" "$GIT_STATUS_CACHE_TTL" 2>/dev/null
+            fi
+            echo "$result"
+            ;;
+        *)
+            log-error "Unknown format: $format"
+            return 1
+            ;;
+    esac
+}
+
+# Get status in JSON format (internal)
+_git-status-json() {
+    local branch=$(git-current-branch)
+    local modified=$(git status --short 2>/dev/null | grep '^ M' | wc -l)
+    local added=$(git status --short 2>/dev/null | grep '^A' | wc -l)
+    local deleted=$(git status --short 2>/dev/null | grep '^ D' | wc -l)
+    local untracked=$(git status --short 2>/dev/null | grep '^??' | wc -l)
+    local ahead=$(git rev-list --count @{upstream}..HEAD 2>/dev/null || echo "0")
+    local behind=$(git rev-list --count HEAD..@{upstream} 2>/dev/null || echo "0")
+    local clean=$(git-is-clean && echo "true" || echo "false")
+
+    cat << EOF
+{
+  "branch": "$branch",
+  "modified": $modified,
+  "added": $added,
+  "deleted": $deleted,
+  "untracked": $untracked,
+  "ahead": $ahead,
+  "behind": $behind,
+  "clean": $clean
+}
+EOF
+}
+
+# Check if working directory is clean
+# Usage: git-is-clean && echo "clean"
+git-is-clean() {
+    if ! git-require-repo; then
+        return 1
+    fi
+
+    [[ -z "$(git status --porcelain 2>/dev/null)" ]]
+}
+
+# Check if repository has uncommitted changes
+# Usage: git-has-changes && echo "has changes"
+git-has-changes() {
+    ! git-is-clean
+}
+
+# Check if branch has upstream
+# Usage: git-has-upstream [branch]
+git-has-upstream() {
+    local branch="${1:-$(git-current-branch)}"
+
+    if ! git-require-repo; then
+        return 1
+    fi
+
+    git rev-parse --abbrev-ref "${branch}@{upstream}" &>/dev/null
+}
+
+# ------------------------------
+# Commit Operations
+# ------------------------------
+
+# Create commit
+# Usage: git-commit <message> [--all] [--amend] [--no-verify]
+git-commit() {
+    local message="${1}"
+    shift
+    local add_all=false
+    local amend=false
+    local no_verify=false
+
+    # Parse options
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --all|-a)
+                add_all=true
+                shift
+                ;;
+            --amend)
+                amend=true
+                shift
+                ;;
+            --no-verify)
+                no_verify=true
+                shift
+                ;;
+            *)
+                shift
+                ;;
+        esac
+    done
+
+    # Validate inputs
+    if [[ -z "$message" ]] && ! $amend; then
+        log-error "Commit message required"
+        return 1
+    fi
+
+    if ! git-require-repo; then
+        return 1
+    fi
+
+    # Stage files if requested
+    if $add_all; then
+        git add -A
+    fi
+
+    # Build commit command
+    local -a cmd=(git commit)
+
+    if [[ -n "$message" ]]; then
+        cmd+=(-m "$message")
+    fi
+
+    $amend && cmd+=(--amend)
+    $no_verify && cmd+=(--no-verify)
+
+    # Execute commit
+    "${cmd[@]}"
+    local exit_code=$?
+
+    if (( exit_code == 0 )); then
+        log-success "Created commit: $message"
+        _git-emit-event "$GIT_EVENT_COMMIT" "$message"
+
+        # Auto-push if enabled
+        if [[ "$GIT_AUTO_PUSH" == "true" ]]; then
+            git-push
+        fi
+    else
+        log-error "Commit failed"
+    fi
+
+    return $exit_code
+}
+
+# Amend last commit
+# Usage: git-amend [message]
+git-amend() {
+    local message="${1:-}"
+
+    if ! git-require-repo; then
+        return 1
+    fi
+
+    if [[ -n "$message" ]]; then
+        git commit --amend -m "$message"
+    else
+        git commit --amend --no-edit
+    fi
+}
+
+# ------------------------------
+# Branch Management
+# ------------------------------
+
+# List branches
+# Usage: git-branch-list [--remote] [--all]
+git-branch-list() {
+    local show_remote=false
+    local show_all=false
+
+    # Parse options
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --remote|-r)
+                show_remote=true
+                shift
+                ;;
+            --all|-a)
+                show_all=true
+                shift
+                ;;
+            *)
+                shift
+                ;;
+        esac
+    done
+
+    if ! git-require-repo; then
+        return 1
+    fi
+
+    if $show_all; then
+        git branch -a
+    elif $show_remote; then
+        git branch -r
+    else
+        git branch
+    fi
+}
+
+# Create new branch
+# Usage: git-branch-create <name> [--checkout]
+git-branch-create() {
+    local name="${1}"
+    shift
+    local checkout=false
+
+    # Parse options
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --checkout|-c)
+                checkout=true
+                shift
+                ;;
+            *)
+                shift
+                ;;
+        esac
+    done
+
+    # Validate inputs
+    if [[ -z "$name" ]]; then
+        log-error "Branch name required"
+        return 1
+    fi
+
+    if ! git-require-repo; then
+        return 1
+    fi
+
+    # Create branch
+    if $checkout; then
+        git checkout -b "$name"
+    else
+        git branch "$name"
+    fi
+
+    local exit_code=$?
+
+    if (( exit_code == 0 )); then
+        log-success "Created branch: $name"
+        _git-emit-event "$GIT_EVENT_BRANCH_CREATE" "$name"
+    else
+        log-error "Failed to create branch: $name"
+    fi
+
+    return $exit_code
+}
+
+# Delete branch
+# Usage: git-branch-delete <name> [--force]
+git-branch-delete() {
+    local name="${1}"
+    shift
+    local force=false
+
+    # Parse options
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --force|-f)
+                force=true
+                shift
+                ;;
+            *)
+                shift
+                ;;
+        esac
+    done
+
+    # Validate inputs
+    if [[ -z "$name" ]]; then
+        log-error "Branch name required"
+        return 1
+    fi
+
+    if ! git-require-repo; then
+        return 1
+    fi
+
+    # Delete branch
+    if $force; then
+        git branch -D "$name"
+    else
+        git branch -d "$name"
+    fi
+
+    local exit_code=$?
+
+    if (( exit_code == 0 )); then
+        log-success "Deleted branch: $name"
+        _git-emit-event "$GIT_EVENT_BRANCH_DELETE" "$name"
+    else
+        log-error "Failed to delete branch: $name"
+    fi
+
+    return $exit_code
+}
+
+# Switch to branch
+# Usage: git-checkout <name>
+git-checkout() {
+    local name="${1}"
+
+    # Validate input
+    if [[ -z "$name" ]]; then
+        log-error "Branch name required"
+        return 1
+    fi
+
+    if ! git-require-repo; then
+        return 1
+    fi
+
+    git checkout "$name"
+    local exit_code=$?
+
+    if (( exit_code == 0 )); then
+        log-success "Switched to branch: $name"
+        _git-emit-event "$GIT_EVENT_BRANCH_SWITCH" "$name"
+    else
+        log-error "Failed to switch to branch: $name"
+    fi
+
+    return $exit_code
+}
+
+# Cleanup merged branches
+# Usage: git-cleanup-branches [--older-than <days>] [--dry-run]
+git-cleanup-branches() {
+    local older_than=""
+    local dry_run=false
+
+    # Parse options
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --older-than)
+                older_than="${2}"
+                shift 2
+                ;;
+            --dry-run)
+                dry_run=true
+                shift
+                ;;
+            *)
+                shift
+                ;;
+        esac
+    done
+
+    if ! git-require-repo; then
+        return 1
+    fi
+
+    local current_branch=$(git-current-branch)
+    local -a branches_to_delete=()
+
+    # Find merged branches
+    for branch in $(git branch --merged | grep -v '^\*' | grep -v "$current_branch" | grep -v "$GIT_DEFAULT_BRANCH" | tr -d ' '); do
+        if [[ -n "$older_than" ]]; then
+            # Check age
+            local last_commit_date=$(git log -1 --format=%ci "$branch" 2>/dev/null)
+            if [[ -z "$last_commit_date" ]]; then
+                continue
+            fi
+
+            local age_days=$(( ($(date +%s) - $(date -d "$last_commit_date" +%s 2>/dev/null || echo 0)) / 86400 ))
+
+            if (( age_days > older_than )); then
+                branches_to_delete+=("$branch")
+            fi
+        else
+            branches_to_delete+=("$branch")
+        fi
+    done
+
+    # Delete branches
+    for branch in "${branches_to_delete[@]}"; do
+        if $dry_run; then
+            echo "Would delete: $branch"
+        else
+            git branch -d "$branch" 2>/dev/null
+            log-success "Deleted merged branch: $branch"
+        fi
+    done
+
+    if (( ${#branches_to_delete[@]} == 0 )); then
+        log-info "No branches to cleanup"
+    fi
+}
+
+# ------------------------------
+# Remote Operations
+# ------------------------------
+
+# Fetch from remote
+# Usage: git-fetch [--all] [--prune]
+git-fetch() {
+    local fetch_all=false
+    local prune=false
+
+    # Parse options
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --all|-a)
+                fetch_all=true
+                shift
+                ;;
+            --prune|-p)
+                prune=true
+                shift
+                ;;
+            *)
+                shift
+                ;;
+        esac
+    done
+
+    if ! git-require-repo; then
+        return 1
+    fi
+
+    local -a cmd=(git fetch)
+    $fetch_all && cmd+=(--all)
+    $prune && cmd+=(--prune)
+
+    "${cmd[@]}"
+    local exit_code=$?
+
+    if (( exit_code == 0 )); then
+        log-success "Fetched from remote"
+        _git-emit-event "$GIT_EVENT_FETCH"
+    else
+        log-error "Fetch failed"
+    fi
+
+    return $exit_code
+}
+
+# Push to remote
+# Usage: git-push [--force] [--set-upstream] [--tags]
+git-push() {
+    local force=false
+    local set_upstream=false
+    local push_tags=false
+
+    # Parse options
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --force|-f)
+                force=true
+                shift
+                ;;
+            --set-upstream|-u)
+                set_upstream=true
+                shift
+                ;;
+            --tags|-t)
+                push_tags=true
+                shift
+                ;;
+            *)
+                shift
+                ;;
+        esac
+    done
+
+    if ! git-require-repo; then
+        return 1
+    fi
+
+    local -a cmd=(git push)
+
+    if $set_upstream; then
+        cmd+=(-u origin $(git-current-branch))
+    fi
+
+    if $force; then
+        cmd+=(--force-with-lease)
+    fi
+
+    if $push_tags; then
+        cmd+=(--tags)
+    fi
+
+    "${cmd[@]}"
+    local exit_code=$?
+
+    if (( exit_code == 0 )); then
+        log-success "Pushed to remote"
+        _git-emit-event "$GIT_EVENT_PUSH" "$(git-current-branch)"
+    else
+        log-error "Push failed"
+    fi
+
+    return $exit_code
+}
+
+# Pull from remote
+# Usage: git-pull [--rebase]
+git-pull() {
+    local rebase=false
+
+    # Parse options
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --rebase|-r)
+                rebase=true
+                shift
+                ;;
+            *)
+                shift
+                ;;
+        esac
+    done
+
+    if ! git-require-repo; then
+        return 1
+    fi
+
+    # Auto-fetch if enabled
+    if [[ "$GIT_AUTO_FETCH" == "true" ]]; then
+        git-fetch
+    fi
+
+    local -a cmd=(git pull)
+    $rebase && cmd+=(--rebase)
+
+    "${cmd[@]}"
+    local exit_code=$?
+
+    if (( exit_code == 0 )); then
+        log-success "Pulled from remote"
+        _git-emit-event "$GIT_EVENT_PULL" "$(git-current-branch)"
+    else
+        log-error "Pull failed"
+    fi
+
+    return $exit_code
+}
+
+# ------------------------------
+# Log and History
+# ------------------------------
+
+# Show git log
+# Usage: git-log [--limit <n>] [--oneline] [--graph]
+git-log() {
+    local limit=""
+    local oneline=false
+    local graph=false
+
+    # Parse options
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --limit|-n)
+                limit="${2}"
+                shift 2
+                ;;
+            --oneline)
+                oneline=true
+                shift
+                ;;
+            --graph|-g)
+                graph=true
+                shift
+                ;;
+            *)
+                shift
+                ;;
+        esac
+    done
+
+    if ! git-require-repo; then
+        return 1
+    fi
+
+    local -a cmd=(git log)
+
+    if $oneline; then
+        cmd+=(--oneline)
+    else
+        cmd+=(--pretty=format:"$GIT_LOG_FORMAT" --date="$GIT_LOG_DATE_FORMAT")
+    fi
+
+    $graph && cmd+=(--graph --all)
+    [[ -n "$limit" ]] && cmd+=(-n "$limit")
+
+    "${cmd[@]}"
+}
+
+# Show diff
+# Usage: git-diff [--staged] [--stat] [file]
+git-diff() {
+    local staged=false
+    local stat=false
+    local file=""
+
+    # Parse options
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --staged|--cached)
+                staged=true
+                shift
+                ;;
+            --stat)
+                stat=true
+                shift
+                ;;
+            *)
+                file="${1}"
+                shift
+                ;;
+        esac
+    done
+
+    if ! git-require-repo; then
+        return 1
+    fi
+
+    local -a cmd=(git diff)
+    $staged && cmd+=(--staged)
+    $stat && cmd+=(--stat)
+    [[ -n "$file" ]] && cmd+=("$file")
+
+    "${cmd[@]}"
+}
+
+# ------------------------------
+# Tagging
+# ------------------------------
+
+# Create tag
+# Usage: git-tag-create <name> [--message <msg>] [--annotated]
+git-tag-create() {
+    local name="${1}"
+    shift
+    local message=""
+    local annotated=false
+
+    # Parse options
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --message|-m)
+                message="${2}"
+                annotated=true
+                shift 2
+                ;;
+            --annotated|-a)
+                annotated=true
+                shift
+                ;;
+            *)
+                shift
+                ;;
+        esac
+    done
+
+    # Validate input
+    if [[ -z "$name" ]]; then
+        log-error "Tag name required"
+        return 1
+    fi
+
+    if ! git-require-repo; then
+        return 1
+    fi
+
+    # Create tag
+    if $annotated; then
+        if [[ -n "$message" ]]; then
+            git tag -a "$name" -m "$message"
+        else
+            git tag -a "$name"
+        fi
+    else
+        git tag "$name"
+    fi
+
+    local exit_code=$?
+
+    if (( exit_code == 0 )); then
+        log-success "Created tag: $name"
+        _git-emit-event "$GIT_EVENT_TAG_CREATE" "$name"
+    else
+        log-error "Failed to create tag: $name"
+    fi
+
+    return $exit_code
+}
+
+# Delete tag
+# Usage: git-tag-delete <name>
+git-tag-delete() {
+    local name="${1}"
+
+    # Validate input
+    if [[ -z "$name" ]]; then
+        log-error "Tag name required"
+        return 1
+    fi
+
+    if ! git-require-repo; then
+        return 1
+    fi
+
+    git tag -d "$name"
+    local exit_code=$?
+
+    if (( exit_code == 0 )); then
+        log-success "Deleted tag: $name"
+        _git-emit-event "$GIT_EVENT_TAG_DELETE" "$name"
+    else
+        log-error "Failed to delete tag: $name"
+    fi
+
+    return $exit_code
+}
+
+# List tags
+# Usage: git-tag-list [--contains <commit>]
+git-tag-list() {
+    local contains=""
+
+    # Parse options
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --contains)
+                contains="${2}"
+                shift 2
+                ;;
+            *)
+                shift
+                ;;
+        esac
+    done
+
+    if ! git-require-repo; then
+        return 1
+    fi
+
+    if [[ -n "$contains" ]]; then
+        git tag --contains "$contains"
+    else
+        git tag -l
+    fi
+}
+
+# ------------------------------
+# Hooks
+# ------------------------------
+
+# Install hook
+# Usage: git-install-hook <hook_name> <script_path>
+git-install-hook() {
+    local hook_name="${1}"
+    local script_path="${2}"
+
+    # Validate inputs
+    if [[ -z "$hook_name" ]] || [[ -z "$script_path" ]]; then
+        log-error "Hook name and script path required"
+        return 1
+    fi
+
+    if [[ ! -f "$script_path" ]]; then
+        log-error "Script not found: $script_path"
+        return 2
+    fi
+
+    if ! git-require-repo; then
+        return 1
+    fi
+
+    local hooks_dir="$(git-root)/.git/hooks"
+    local hook_file="${hooks_dir}/${hook_name}"
+
+    # Create hooks directory if needed
+    mkdir -p "$hooks_dir"
+
+    # Install hook
+    cp "$script_path" "$hook_file"
+    chmod +x "$hook_file"
+
+    log-success "Installed hook: $hook_name"
+    _git-emit-event "$GIT_EVENT_HOOK_INSTALL" "$hook_name"
+}
+
+# Remove hook
+# Usage: git-remove-hook <hook_name>
+git-remove-hook() {
+    local hook_name="${1}"
+
+    # Validate input
+    if [[ -z "$hook_name" ]]; then
+        log-error "Hook name required"
+        return 1
+    fi
+
+    if ! git-require-repo; then
+        return 1
+    fi
+
+    local hooks_dir="$(git-root)/.git/hooks"
+    local hook_file="${hooks_dir}/${hook_name}"
+
+    if [[ ! -f "$hook_file" ]]; then
+        log-warn "Hook not found: $hook_name"
+        return 0
+    fi
+
+    rm -f "$hook_file"
+
+    log-success "Removed hook: $hook_name"
+    _git-emit-event "$GIT_EVENT_HOOK_REMOVE" "$hook_name"
+}
+
+# List installed hooks
+# Usage: git-list-hooks
+git-list-hooks() {
+    if ! git-require-repo; then
+        return 1
+    fi
+
+    local hooks_dir="$(git-root)/.git/hooks"
+
+    if [[ ! -d "$hooks_dir" ]]; then
+        log-info "No hooks directory found"
+        return 0
+    fi
+
+    echo "Installed hooks:"
+    for hook in "$hooks_dir"/*; do
+        if [[ -x "$hook" ]] && [[ ! "$hook" =~ \.sample$ ]]; then
+            echo "  $(basename "$hook")"
+        fi
+    done
+}
+
+# ------------------------------
+# Self-Test
+# ------------------------------
+
+# Test git functions
+# Usage: git-self-test
+git-self-test() {
+    echo "=== _git v${GIT_VERSION} Self-Test ==="
+    echo ""
+
+    local tests_passed=0
+    local tests_failed=0
+
+    # Test 1: Check git availability
+    echo -n "Test 1: Git availability... "
+    if git-check; then
+        echo "PASS"
+        ((tests_passed++))
+    else
+        echo "FAIL"
+        ((tests_failed++))
+        echo "  Git not found - git functions will not work"
+        echo ""
+        echo "=== Self-Test Summary ==="
+        echo "Passed: $tests_passed"
+        echo "Failed: $tests_failed"
+        return 1
+    fi
+
+    # Test 2: Check if in git repo
+    echo -n "Test 2: Repository detection... "
+    if git-is-repo; then
+        echo "PASS (in repository)"
+        ((tests_passed++))
+    else
+        echo "SKIP (not in repository)"
+        # Not a failure, just skip repo-dependent tests
+        echo ""
+        echo "=== Self-Test Summary ==="
+        echo "Passed: $tests_passed"
+        echo "Failed: $tests_failed"
+        echo "Skipped: Repository-dependent tests"
+        return 0
+    fi
+
+    # Test 3: Get git root
+    echo -n "Test 3: Get git root... "
+    local root=$(git-root)
+    if [[ -n "$root" ]] && [[ -d "$root" ]]; then
+        echo "PASS (root: $root)"
+        ((tests_passed++))
+    else
+        echo "FAIL"
+        ((tests_failed++))
+    fi
+
+    # Test 4: Get current branch
+    echo -n "Test 4: Get current branch... "
+    local branch=$(git-current-branch)
+    if [[ -n "$branch" ]]; then
+        echo "PASS (branch: $branch)"
+        ((tests_passed++))
+    else
+        echo "FAIL"
+        ((tests_failed++))
+    fi
+
+    # Test 5: Check clean status
+    echo -n "Test 5: Check clean status... "
+    if git-is-clean; then
+        echo "PASS (clean)"
+        ((tests_passed++))
+    elif git-has-changes; then
+        echo "PASS (has changes)"
+        ((tests_passed++))
+    else
+        echo "FAIL"
+        ((tests_failed++))
+    fi
+
+    # Test 6: Status JSON format
+    echo -n "Test 6: Status JSON format... "
+    local status=$(git-status --format json 2>/dev/null)
+    if echo "$status" | grep -q '"branch"'; then
+        echo "PASS"
+        ((tests_passed++))
+    else
+        echo "FAIL"
+        ((tests_failed++))
+    fi
+
+    echo ""
+    echo "=== Self-Test Summary ==="
+    echo "Passed: $tests_passed"
+    echo "Failed: $tests_failed"
+    echo ""
+
+    if (( tests_failed == 0 )); then
+        echo "All tests passed!"
+        return 0
+    else
+        echo "Some tests failed."
+        return 1
+    fi
+}
+
+# ------------------------------
+# Version Info
+# ------------------------------
+
+# Print version information
+# Usage: git-version
+git-version() {
+    echo "_git v${GIT_VERSION}"
+}
+
+# ------------------------------
+# Auto-run self-test if executed directly
+# ------------------------------
+
+if [[ "${ZSH_EVAL_CONTEXT}" == "toplevel" ]] || [[ "${(%):-%x}" == "${0}" ]]; then
+    git-self-test
+fi

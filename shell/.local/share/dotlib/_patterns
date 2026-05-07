@@ -1,0 +1,595 @@
+#!/usr/bin/env zsh
+
+# _patterns - Advanced pattern matching and bulk operation utilities
+# Part of the dotfiles library v2.0
+# Version: 1.0.0
+#
+# Purpose:
+#   Provides comprehensive pattern matching utilities for bulk operations.
+#   Supports glob patterns, comma-separated lists, exact matching, and
+#   functional operations (map, filter, foreach) over matched items.
+#
+# Usage:
+#   source "${DOTLIB}/_patterns" || return 6
+#
+#   matched=($(patterns-match "audio*" "${all_items[@]}"))
+#   patterns-foreach "*.txt" "${files[@]}" -- process-file
+#
+# Provides:
+#   - Glob pattern matching
+#   - Comma-separated list expansion
+#   - Pattern validation
+#   - Bulk operations (foreach, map, filter)
+#   - Pattern type detection
+#   - Match counting and querying
+#
+# Dependencies:
+#   - _common v2.0 (required)
+#   - _log v2.0 (optional, for structured logging)
+
+# ------------------------------
+# Source Guard
+# ------------------------------
+
+[[ -n "${_PATTERNS_LOADED}" ]] && return 0
+declare -gr _PATTERNS_LOADED=1
+
+# ------------------------------
+# Version
+# ------------------------------
+
+declare -gr PATTERNS_VERSION="1.0.0"
+
+# ------------------------------
+# Load Dependencies
+# ------------------------------
+
+# Required: _common
+if ! source "${DOTLIB}/_common" 2>/dev/null; then
+    echo "[ERROR] _patterns requires _common - cannot load" >&2
+    return 6
+fi
+
+# Optional: _log (use fallbacks if unavailable)
+if ! source "${DOTLIB}/_log" 2>/dev/null; then
+    log-debug() { : ; }
+    log-info() { echo "[INFO] $*" >&2; }
+    log-warning() { echo "[WARNING] $*" >&2; }
+    log-error() { echo "[ERROR] $*" >&2; }
+fi
+
+# ------------------------------
+# Constants
+# ------------------------------
+
+# Return codes
+declare -gr PATTERNS_SUCCESS=0
+declare -gr PATTERNS_ERROR=1
+declare -gr PATTERNS_ERROR_NO_MATCH=2
+declare -gr PATTERNS_ERROR_MULTIPLE_MATCH=3
+declare -gr PATTERNS_ERROR_INVALID_PATTERN=4
+
+# Pattern types
+declare -gr PATTERNS_TYPE_WILDCARD="wildcard"
+declare -gr PATTERNS_TYPE_LIST="list"
+declare -gr PATTERNS_TYPE_GLOB="glob"
+declare -gr PATTERNS_TYPE_EXACT="exact"
+
+# ------------------------------
+# Pattern Matching Functions
+# ------------------------------
+
+# Match items against a pattern
+# Supports:
+#   - Wildcard: "*" matches all
+#   - Glob: "item*" uses shell globbing
+#   - List: "item1,item2,item3" matches any in list
+#   - Exact: "item" exact match only
+# Args: pattern, items...
+# Usage: matched=($(patterns-match "audio*" "${items[@]}"))
+# Returns: matched items (space-separated)
+patterns-match() {
+    local pattern="${1:?Pattern required}"
+    shift
+    local -a items=("$@")
+    local -a matched=()
+
+    # Empty pattern or wildcard = all items
+    if [[ -z "$pattern" || "$pattern" == "*" ]]; then
+        echo "${items[@]}"
+        return $PATTERNS_SUCCESS
+    fi
+
+    # Comma-separated list
+    if [[ "$pattern" == *","* ]]; then
+        local -a patterns=("${(@s/,/)pattern}")  # ZSH split on comma
+        for item in "${items[@]}"; do
+            for p in "${patterns[@]}"; do
+                # Trim whitespace from pattern
+                p="${p## }"
+                p="${p%% }"
+                # Use ZSH glob matching with ${~p} to expand pattern
+                case "$item" in
+                    ${~p}) matched+=("$item"); break ;;
+                esac
+            done
+        done
+        echo "${matched[@]}"
+        return $PATTERNS_SUCCESS
+    fi
+
+    # Single pattern (exact or glob)
+    for item in "${items[@]}"; do
+        case "$item" in
+            ${~pattern}) matched+=("$item") ;;
+        esac
+    done
+
+    echo "${matched[@]}"
+    return $PATTERNS_SUCCESS
+}
+
+# Match items and return one per line
+# Args: pattern, items...
+# Usage: patterns-match-lines "*.txt" "${files[@]}"
+# Returns: matched items (one per line)
+patterns-match-lines() {
+    local pattern="${1:?Pattern required}"
+    shift
+    local -a matched=($(patterns-match "$pattern" "$@"))
+
+    for item in "${matched[@]}"; do
+        echo "$item"
+    done
+}
+
+# Count number of matches
+# Args: pattern, items...
+# Usage: count=$(patterns-count-matches "*.log" "${files[@]}")
+# Returns: number of matches
+patterns-count-matches() {
+    local pattern="${1:?Pattern required}"
+    shift
+    local -a matched=($(patterns-match "$pattern" "$@"))
+    echo "${#matched[@]}"
+}
+
+# Check if pattern has any matches
+# Args: pattern, items...
+# Usage: patterns-has-matches "*.txt" "${files[@]}" && echo "Found"
+# Returns: 0 if matches found, 1 if none
+patterns-has-matches() {
+    local count=$(patterns-count-matches "$@")
+    [[ $count -gt 0 ]]
+}
+
+# Get first match
+# Args: pattern, items...
+# Usage: first=$(patterns-get-first "*.txt" "${files[@]}")
+# Returns: first matched item or empty
+patterns-get-first() {
+    local pattern="${1:?Pattern required}"
+    shift
+    local -a matched=($(patterns-match "$pattern" "$@"))
+
+    if [[ ${#matched[@]} -gt 0 ]]; then
+        echo "${matched[1]}"
+        return $PATTERNS_SUCCESS
+    fi
+    return $PATTERNS_ERROR_NO_MATCH
+}
+
+# Get last match
+# Args: pattern, items...
+# Usage: last=$(patterns-get-last "*.txt" "${files[@]}")
+# Returns: last matched item or empty
+patterns-get-last() {
+    local pattern="${1:?Pattern required}"
+    shift
+    local -a matched=($(patterns-match "$pattern" "$@"))
+
+    if [[ ${#matched[@]} -gt 0 ]]; then
+        echo "${matched[-1]}"
+        return $PATTERNS_SUCCESS
+    fi
+    return $PATTERNS_ERROR_NO_MATCH
+}
+
+# ------------------------------
+# Pattern Validation
+# ------------------------------
+
+# Validate pattern syntax
+# Checks for potentially dangerous or invalid characters
+# Args: pattern
+# Usage: patterns-validate "*.txt" || echo "Invalid pattern"
+# Returns: 0 if valid, 1 if invalid
+patterns-validate() {
+    local pattern="${1:?Pattern required}"
+
+    # Allow alphanumeric, underscore, hyphen, period, asterisk, comma, slash, tilde
+    if [[ "$pattern" =~ [^a-zA-Z0-9_*,./-~] ]]; then
+        log-error "Invalid pattern: $pattern"
+        log-error "Allowed characters: a-z A-Z 0-9 _ * , . / - ~"
+        return $PATTERNS_ERROR_INVALID_PATTERN
+    fi
+
+    return $PATTERNS_SUCCESS
+}
+
+# Validate that pattern matches at least one item
+# Args: pattern, items...
+# Usage: patterns-validate-matches "*.txt" "${files[@]}" || echo "No matches"
+# Returns: 0 if matches found, 1 if none
+patterns-validate-matches() {
+    if ! patterns-has-matches "$@"; then
+        local pattern="$1"
+        log-error "No items match pattern: $pattern"
+        return $PATTERNS_ERROR_NO_MATCH
+    fi
+    return $PATTERNS_SUCCESS
+}
+
+# Require exact single match (pattern must match exactly one item)
+# Args: pattern, items...
+# Usage: patterns-require-exact "config.json" "${files[@]}" || echo "Not unique"
+# Returns: 0 if exactly one match, 1 if zero, 2 if multiple
+patterns-require-exact() {
+    local pattern="$1"
+    shift
+    local count=$(patterns-count-matches "$pattern" "$@")
+
+    if [[ $count -eq 0 ]]; then
+        log-error "No items match pattern: $pattern"
+        return $PATTERNS_ERROR_NO_MATCH
+    elif [[ $count -gt 1 ]]; then
+        log-error "Pattern matches multiple items: $pattern ($count matches)"
+        return $PATTERNS_ERROR_MULTIPLE_MATCH
+    fi
+
+    return $PATTERNS_SUCCESS
+}
+
+# ------------------------------
+# Pattern Operations
+# ------------------------------
+
+# Filter out matching items (returns non-matching items)
+# Args: pattern, items...
+# Usage: remaining=($(patterns-filter "*.txt" "${items[@]}"))
+# Returns: non-matched items
+patterns-filter() {
+    local pattern="${1:?Pattern required}"
+    shift
+    local -a items=("$@")
+    local -a matched=($(patterns-match "$pattern" "${items[@]}"))
+    local -a filtered=()
+
+    for item in "${items[@]}"; do
+        local found=false
+        for match in "${matched[@]}"; do
+            if [[ "$item" == "$match" ]]; then
+                found=true
+                break
+            fi
+        done
+        [[ "$found" == "false" ]] && filtered+=("$item")
+    done
+
+    echo "${filtered[@]}"
+}
+
+# Check if pattern is a wildcard (matches all)
+# Args: pattern
+# Usage: patterns-is-wildcard "*" && echo "Wildcard"
+# Returns: 0 if wildcard, 1 otherwise
+patterns-is-wildcard() {
+    local pattern="${1:?Pattern required}"
+    [[ "$pattern" == "*" ]]
+}
+
+# Check if pattern is a comma-separated list
+# Args: pattern
+# Usage: patterns-is-list "a,b,c" && echo "List"
+# Returns: 0 if list, 1 otherwise
+patterns-is-list() {
+    local pattern="${1:?Pattern required}"
+    [[ "$pattern" == *","* ]]
+}
+
+# Check if pattern is exact (no wildcards or commas)
+# Args: pattern
+# Usage: patterns-is-exact "config.json" && echo "Exact"
+# Returns: 0 if exact, 1 otherwise
+patterns-is-exact() {
+    local pattern="${1:?Pattern required}"
+    [[ "$pattern" != *"*"* && "$pattern" != *","* ]]
+}
+
+# Split comma-separated pattern into array
+# Args: pattern
+# Usage: items=($(patterns-split "a,b,c"))
+# Returns: individual patterns (one per line)
+patterns-split() {
+    local pattern="${1:?Pattern required}"
+    local -a patterns=("${(@s/,/)pattern}")
+
+    for p in "${patterns[@]}"; do
+        # Trim whitespace
+        p="${p## }"
+        p="${p%% }"
+        echo "$p"
+    done
+}
+
+# ------------------------------
+# Bulk Operations
+# ------------------------------
+
+# Execute command for each matched item
+# Separator "--" divides items from command
+# Args: pattern, items..., --, command [args...]
+# Usage: patterns-foreach "*.txt" "${files[@]}" -- process-file
+# Returns: 0 on success, 1 if any command fails
+patterns-foreach() {
+    local pattern="${1:?Pattern required}"
+    shift
+
+    # Collect items until we hit "--"
+    local -a items=()
+    while [[ "$1" != "--" && $# -gt 0 ]]; do
+        items+=("$1")
+        shift
+    done
+
+    if [[ "$1" != "--" ]]; then
+        log-error "patterns-foreach requires '--' separator before command"
+        return $PATTERNS_ERROR
+    fi
+    shift  # Skip the "--"
+
+    if [[ $# -eq 0 ]]; then
+        log-error "patterns-foreach requires command after '--'"
+        return $PATTERNS_ERROR
+    fi
+
+    # Get matched items
+    local -a matched=($(patterns-match "$pattern" "${items[@]}"))
+
+    if [[ ${#matched[@]} -eq 0 ]]; then
+        log-warning "No items matched pattern: $pattern"
+        return $PATTERNS_SUCCESS
+    fi
+
+    # Execute command for each match
+    local failed=0
+    for item in "${matched[@]}"; do
+        log-debug "Executing for: $item"
+        if ! "$@" "$item"; then
+            log-error "Command failed for: $item"
+            failed=1
+        fi
+    done
+
+    return $failed
+}
+
+# Map function over matched items (collect results)
+# Args: pattern, items..., --, command [args...]
+# Usage: results=($(patterns-map "*.txt" "${files[@]}" -- basename))
+# Returns: command output for each match
+patterns-map() {
+    local pattern="${1:?Pattern required}"
+    shift
+
+    # Collect items until we hit "--"
+    local -a items=()
+    while [[ "$1" != "--" && $# -gt 0 ]]; do
+        items+=("$1")
+        shift
+    done
+
+    if [[ "$1" != "--" ]]; then
+        log-error "patterns-map requires '--' separator before command"
+        return $PATTERNS_ERROR
+    fi
+    shift  # Skip the "--"
+
+    if [[ $# -eq 0 ]]; then
+        log-error "patterns-map requires command after '--'"
+        return $PATTERNS_ERROR
+    fi
+
+    # Get matched items
+    local -a matched=($(patterns-match "$pattern" "${items[@]}"))
+
+    if [[ ${#matched[@]} -eq 0 ]]; then
+        log-warning "No items matched pattern: $pattern"
+        return $PATTERNS_SUCCESS
+    fi
+
+    # Execute command for each match and collect results
+    for item in "${matched[@]}"; do
+        "$@" "$item"
+    done
+}
+
+# ------------------------------
+# Pattern Information
+# ------------------------------
+
+# Get pattern type
+# Args: pattern
+# Usage: type=$(patterns-get-type "*.txt")
+# Returns: type name (wildcard, list, glob, exact)
+patterns-get-type() {
+    local pattern="${1:?Pattern required}"
+
+    if patterns-is-wildcard "$pattern"; then
+        echo "$PATTERNS_TYPE_WILDCARD"
+    elif patterns-is-list "$pattern"; then
+        echo "$PATTERNS_TYPE_LIST"
+    elif patterns-is-exact "$pattern"; then
+        echo "$PATTERNS_TYPE_EXACT"
+    else
+        echo "$PATTERNS_TYPE_GLOB"
+    fi
+}
+
+# Show pattern information
+# Args: pattern, items...
+# Usage: patterns-info "*.txt" "${files[@]}"
+patterns-info() {
+    local pattern="${1:?Pattern required}"
+    shift
+    local -a items=("$@")
+
+    echo "Pattern: $pattern"
+    echo "Type: $(patterns-get-type "$pattern")"
+    echo "Total items: ${#items[@]}"
+    echo "Matches: $(patterns-count-matches "$pattern" "${items[@]}")"
+}
+
+# ------------------------------
+# Self-Test Function
+# ------------------------------
+
+# Comprehensive self-test for _patterns
+# Usage: patterns-self-test
+# Returns: 0 if all tests pass, 1 if any fail
+patterns-self-test() {
+    echo "=== Testing _patterns v$PATTERNS_VERSION ==="
+    echo ""
+
+    local failed=0
+
+    # Test data
+    local -a TEST_ITEMS=(
+        "audio"
+        "video"
+        "photos"
+        "documents"
+        "audio-backup"
+        "video-hd"
+        "config.json"
+        "data.json"
+    )
+
+    echo "[TEST] Test items (${#TEST_ITEMS[@]})"
+    echo "  ${TEST_ITEMS[@]}"
+    echo "  PASS"
+    echo ""
+
+    # Test 1: Wildcard pattern
+    echo "[TEST] Wildcard pattern '*'"
+    local -a matched=($(patterns-match "*" "${TEST_ITEMS[@]}"))
+    [[ ${#matched[@]} -eq ${#TEST_ITEMS[@]} ]] || { echo "  FAIL: Wildcard didn't match all"; failed=1; }
+    echo "  PASS (matched: ${#matched[@]})"
+    echo ""
+
+    # Test 2: Glob pattern
+    echo "[TEST] Glob pattern 'audio*'"
+    matched=($(patterns-match "audio*" "${TEST_ITEMS[@]}"))
+    [[ ${#matched[@]} -eq 2 ]] || { echo "  FAIL: Expected 2 matches, got ${#matched[@]}"; failed=1; }
+    [[ "${matched[1]}" == "audio" ]] || { echo "  FAIL: First match should be 'audio'"; failed=1; }
+    [[ "${matched[2]}" == "audio-backup" ]] || { echo "  FAIL: Second match should be 'audio-backup'"; failed=1; }
+    echo "  PASS (matched: ${matched[@]})"
+    echo ""
+
+    # Test 3: Exact match
+    echo "[TEST] Exact match 'photos'"
+    matched=($(patterns-match "photos" "${TEST_ITEMS[@]}"))
+    [[ ${#matched[@]} -eq 1 ]] || { echo "  FAIL: Expected 1 match, got ${#matched[@]}"; failed=1; }
+    [[ "${matched[1]}" == "photos" ]] || { echo "  FAIL: Should match 'photos'"; failed=1; }
+    echo "  PASS"
+    echo ""
+
+    # Test 4: Comma-separated list
+    echo "[TEST] List pattern 'audio,video,photos'"
+    matched=($(patterns-match "audio,video,photos" "${TEST_ITEMS[@]}"))
+    [[ ${#matched[@]} -eq 3 ]] || { echo "  FAIL: Expected 3 matches, got ${#matched[@]}"; failed=1; }
+    echo "  PASS (matched: ${matched[@]})"
+    echo ""
+
+    # Test 5: Count matches
+    echo "[TEST] Count matches"
+    local count=$(patterns-count-matches "*.json" "${TEST_ITEMS[@]}")
+    [[ $count -eq 2 ]] || { echo "  FAIL: Expected 2 JSON files, got $count"; failed=1; }
+    echo "  PASS (count: $count)"
+    echo ""
+
+    # Test 6: Has matches
+    echo "[TEST] Has matches"
+    patterns-has-matches "audio*" "${TEST_ITEMS[@]}" || { echo "  FAIL: Should have matches"; failed=1; }
+    ! patterns-has-matches "nonexistent*" "${TEST_ITEMS[@]}" || { echo "  FAIL: Should not have matches"; failed=1; }
+    echo "  PASS"
+    echo ""
+
+    # Test 7: Get first/last
+    echo "[TEST] Get first/last"
+    local first=$(patterns-get-first "*.json" "${TEST_ITEMS[@]}")
+    local last=$(patterns-get-last "*.json" "${TEST_ITEMS[@]}")
+    [[ "$first" == "config.json" ]] || { echo "  FAIL: First should be config.json"; failed=1; }
+    [[ "$last" == "data.json" ]] || { echo "  FAIL: Last should be data.json"; failed=1; }
+    echo "  PASS (first: $first, last: $last)"
+    echo ""
+
+    # Test 8: Pattern validation
+    echo "[TEST] Pattern validation"
+    patterns-validate "audio*" || { echo "  FAIL: Valid pattern rejected"; failed=1; }
+    patterns-validate-matches "audio*" "${TEST_ITEMS[@]}" || { echo "  FAIL: Should validate matches"; failed=1; }
+    ! patterns-validate "invalid\$pattern" 2>/dev/null || { echo "  FAIL: Invalid pattern accepted"; failed=1; }
+    echo "  PASS"
+    echo ""
+
+    # Test 9: Pattern type detection
+    echo "[TEST] Pattern type detection"
+    [[ "$(patterns-get-type "*")" == "$PATTERNS_TYPE_WILDCARD" ]] || { echo "  FAIL: Wildcard type"; failed=1; }
+    [[ "$(patterns-get-type "audio*")" == "$PATTERNS_TYPE_GLOB" ]] || { echo "  FAIL: Glob type"; failed=1; }
+    [[ "$(patterns-get-type "a,b,c")" == "$PATTERNS_TYPE_LIST" ]] || { echo "  FAIL: List type"; failed=1; }
+    [[ "$(patterns-get-type "exact")" == "$PATTERNS_TYPE_EXACT" ]] || { echo "  FAIL: Exact type"; failed=1; }
+    echo "  PASS"
+    echo ""
+
+    # Test 10: Filter (inverse match)
+    echo "[TEST] Filter (inverse match)"
+    local -a filtered=($(patterns-filter "audio*" "${TEST_ITEMS[@]}"))
+    [[ ${#filtered[@]} -eq 6 ]] || { echo "  FAIL: Expected 6 remaining, got ${#filtered[@]}"; failed=1; }
+    echo "  PASS (remaining: ${#filtered[@]})"
+    echo ""
+
+    # Test 11: Split list
+    echo "[TEST] Split comma-separated list"
+    local -a split=($(patterns-split "a, b, c"))
+    [[ ${#split[@]} -eq 3 ]] || { echo "  FAIL: Expected 3 items, got ${#split[@]}"; failed=1; }
+    [[ "${split[1]}" == "a" ]] || { echo "  FAIL: First should be 'a'"; failed=1; }
+    echo "  PASS (split: ${split[@]})"
+    echo ""
+
+    # Test 12: Foreach operation
+    echo "[TEST] Foreach operation"
+    local foreach_count=0
+    patterns-foreach "audio*" "${TEST_ITEMS[@]}" -- eval 'foreach_count=$((foreach_count + 1))' || \
+        { echo "  FAIL: Foreach failed"; failed=1; }
+    [[ $foreach_count -eq 2 ]] || { echo "  FAIL: Expected 2 iterations, got $foreach_count"; failed=1; }
+    echo "  PASS (iterations: $foreach_count)"
+    echo ""
+
+    # Test 13: Map operation
+    echo "[TEST] Map operation"
+    local -a mapped=($(patterns-map "*.json" "${TEST_ITEMS[@]}" -- echo))
+    [[ ${#mapped[@]} -eq 2 ]] || { echo "  FAIL: Expected 2 results, got ${#mapped[@]}"; failed=1; }
+    echo "  PASS (results: ${#mapped[@]})"
+    echo ""
+
+    # Summary
+    if [[ $failed -eq 0 ]]; then
+        echo "=== All tests PASSED ==="
+        echo "_patterns v$PATTERNS_VERSION"
+        return $PATTERNS_SUCCESS
+    else
+        echo "=== Some tests FAILED ==="
+        return $PATTERNS_ERROR
+    fi
+}
+

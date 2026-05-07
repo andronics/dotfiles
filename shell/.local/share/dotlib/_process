@@ -1,0 +1,958 @@
+#!/usr/bin/env zsh
+
+# _process - Process management and monitoring utilities
+# Part of the dotfiles library v2.0
+# Version: 1.0.0
+#
+# Usage:
+#   source "${DOTLIB}/_process"
+#
+# Provides:
+#   - Process detection and validation
+#   - Process information (CPU, memory, status)
+#   - Process control (start, stop, restart, signal)
+#   - PID file management
+#   - Process monitoring and alerts
+#   - Process groups management
+#   - Process tree operations
+#   - Background job tracking
+#   - Health checking
+#   - Auto-restart on failure
+#
+# Dependencies:
+#   Required:
+#     - _common v2.0: Core utilities
+#     - ps, kill: Process utilities
+#   Optional (gracefully degraded):
+#     - _log v2.0: Logging functions
+#     - _events v2.0: Event emission
+#     - _lifecycle v3.0: Cleanup registration
+#     - _cache v2.0: Process info caching
+
+# ------------------------------
+# Source Guard
+# ------------------------------
+
+[[ -n "${_PROCESS_LOADED}" ]] && return 0
+declare -gr _PROCESS_LOADED=1
+
+# ------------------------------
+# Version
+# ------------------------------
+
+declare -gr PROCESS_VERSION="1.0.0"
+
+# ------------------------------
+# Dependency Loading
+# ------------------------------
+
+# Load foundation (required)
+if ! source "${DOTLIB}/_common" 2>/dev/null; then
+    echo "[ERROR] _process requires _common - cannot load" >&2
+    return 1
+fi
+
+# Load infrastructure (optional with fallbacks)
+if ! source "${DOTLIB}/_log" 2>/dev/null; then
+    log-info() { echo "[INFO] $*"; }
+    log-error() { echo "[ERROR] $*" >&2; }
+    log-warn() { echo "[WARN] $*" >&2; }
+    log-debug() { [[ "${PROCESS_DEBUG:-false}" == "true" ]] && echo "[DEBUG] $*" >&2 || true; }
+    log-success() { echo "[SUCCESS] $*"; }
+fi
+
+# Load optional dependencies
+source "${DOTLIB}/_events" 2>/dev/null || true
+declare -g PROCESS_EVENTS_AVAILABLE=$(common-command-exists "events-emit" && echo "true" || echo "false")
+
+source "${DOTLIB}/_cache" 2>/dev/null || true
+declare -g PROCESS_CACHE_AVAILABLE=$(common-command-exists "cache-set" && echo "true" || echo "false")
+
+source "${DOTLIB}/_lifecycle" 2>/dev/null || true
+declare -g PROCESS_LIFECYCLE_AVAILABLE=$(common-command-exists "lifecycle-add-cleanup" && echo "true" || echo "false")
+
+# ------------------------------
+# Configuration
+# ------------------------------
+
+# PID file directory
+declare -g PROCESS_PID_DIR="${PROCESS_PID_DIR:-$(common-xdg-runtime-dir)/process}"
+
+# State directory
+declare -g PROCESS_STATE_DIR="${PROCESS_STATE_DIR:-$(common-lib-state-dir)/process}"
+
+# Log directory
+declare -g PROCESS_LOG_DIR="${PROCESS_LOG_DIR:-$(common-lib-state-dir)/process/logs}"
+
+# Default timeout for graceful shutdown (seconds)
+declare -g PROCESS_DEFAULT_TIMEOUT="${PROCESS_DEFAULT_TIMEOUT:-10}"
+
+# Monitor interval (seconds)
+declare -g PROCESS_MONITOR_INTERVAL="${PROCESS_MONITOR_INTERVAL:-5}"
+
+# Max restart attempts
+declare -g PROCESS_MAX_RESTARTS="${PROCESS_MAX_RESTARTS:-3}"
+
+# Restart delay (seconds)
+declare -g PROCESS_RESTART_DELAY="${PROCESS_RESTART_DELAY:-5}"
+
+# Debug mode
+declare -g PROCESS_DEBUG="${PROCESS_DEBUG:-false}"
+
+# Cache TTL for process info (seconds)
+declare -g PROCESS_CACHE_TTL="${PROCESS_CACHE_TTL:-2}"
+
+# Create directories
+mkdir -p "$PROCESS_PID_DIR" "$PROCESS_STATE_DIR" "$PROCESS_LOG_DIR" 2>/dev/null
+
+# Internal state
+declare -g -A _PROCESS_REGISTRY=()        # PID => metadata
+declare -g -A _PROCESS_GROUPS=()          # group_name => space-separated PIDs
+
+# ------------------------------
+# Event Constants
+# ------------------------------
+
+declare -gr PROCESS_EVENT_START="process.start"
+declare -gr PROCESS_EVENT_STOP="process.stop"
+declare -gr PROCESS_EVENT_KILL="process.kill"
+declare -gr PROCESS_EVENT_RESTART="process.restart"
+declare -gr PROCESS_EVENT_DIED="process.died"
+declare -gr PROCESS_EVENT_MONITOR="process.monitor"
+declare -gr PROCESS_EVENT_ALERT="process.alert"
+
+# ------------------------------
+# Internal Functions
+# ------------------------------
+
+# Emit event if events available
+_process-emit-event() {
+    local event_name="${1}"
+    shift
+
+    if [[ "$PROCESS_EVENTS_AVAILABLE" == "true" ]]; then
+        events-emit "$event_name" "$@"
+    fi
+}
+
+# Get PID file path
+_process-get-pid-file() {
+    local name="${1}"
+    echo "${PROCESS_PID_DIR}/${name}.pid"
+}
+
+# Get log file path
+_process-get-log-file() {
+    local name="${1}"
+    echo "${PROCESS_LOG_DIR}/${name}.log"
+}
+
+# ------------------------------
+# Process Detection
+# ------------------------------
+
+# Check if PID exists
+# Usage: process-exists <pid>
+process-exists() {
+    local pid="${1}"
+
+    if [[ -z "$pid" ]] || ! [[ "$pid" =~ ^[0-9]+$ ]]; then
+        return 1
+    fi
+
+    kill -0 "$pid" 2>/dev/null
+}
+
+# Check if PID is running (alias for process-exists)
+# Usage: process-is-running <pid>
+process-is-running() {
+    process-exists "$@"
+}
+
+# Find process by name
+# Usage: pid=$(process-find-by-name <name>)
+process-find-by-name() {
+    local name="${1}"
+
+    if [[ -z "$name" ]]; then
+        log-error "Process name required"
+        return 1
+    fi
+
+    pgrep -x "$name" 2>/dev/null | head -1
+}
+
+# Find all processes by name
+# Usage: pids=($(process-find-all-by-name <name>))
+process-find-all-by-name() {
+    local name="${1}"
+
+    if [[ -z "$name" ]]; then
+        log-error "Process name required"
+        return 1
+    fi
+
+    pgrep -x "$name" 2>/dev/null
+}
+
+# Find process by port
+# Usage: pid=$(process-find-by-port <port>)
+process-find-by-port() {
+    local port="${1}"
+
+    if [[ -z "$port" ]] || ! [[ "$port" =~ ^[0-9]+$ ]]; then
+        log-error "Invalid port: $port"
+        return 1
+    fi
+
+    # Try different methods
+    if common-command-exists "lsof"; then
+        lsof -ti ":$port" 2>/dev/null | head -1
+    elif common-command-exists "ss"; then
+        ss -lpn "sport = :$port" 2>/dev/null | grep -oP 'pid=\K[0-9]+' | head -1
+    elif common-command-exists "netstat"; then
+        netstat -lnp 2>/dev/null | grep ":$port " | awk '{print $7}' | cut -d'/' -f1 | head -1
+    else
+        log-error "No suitable tool found (lsof, ss, or netstat required)"
+        return 6
+    fi
+}
+
+# ------------------------------
+# PID File Management
+# ------------------------------
+
+# Write PID to file
+# Usage: process-write-pid <name> <pid>
+process-write-pid() {
+    local name="${1}"
+    local pid="${2}"
+
+    if [[ -z "$name" ]] || [[ -z "$pid" ]]; then
+        log-error "Name and PID required"
+        return 1
+    fi
+
+    if ! [[ "$pid" =~ ^[0-9]+$ ]]; then
+        log-error "Invalid PID: $pid"
+        return 1
+    fi
+
+    local pid_file=$(_process-get-pid-file "$name")
+    echo "$pid" > "$pid_file"
+
+    log-debug "Wrote PID $pid to $pid_file"
+}
+
+# Read PID from file
+# Usage: pid=$(process-read-pid <name>)
+process-read-pid() {
+    local name="${1}"
+
+    if [[ -z "$name" ]]; then
+        log-error "Name required"
+        return 1
+    fi
+
+    local pid_file=$(_process-get-pid-file "$name")
+
+    if [[ -f "$pid_file" ]]; then
+        cat "$pid_file" 2>/dev/null
+    else
+        return 1
+    fi
+}
+
+# Remove PID file
+# Usage: process-remove-pid <name>
+process-remove-pid() {
+    local name="${1}"
+
+    if [[ -z "$name" ]]; then
+        log-error "Name required"
+        return 1
+    fi
+
+    local pid_file=$(_process-get-pid-file "$name")
+    rm -f "$pid_file"
+
+    log-debug "Removed PID file: $pid_file"
+}
+
+# Check if PID file exists and process is running
+# Usage: process-check-pid-file <name>
+process-check-pid-file() {
+    local name="${1}"
+
+    if [[ -z "$name" ]]; then
+        log-error "Name required"
+        return 1
+    fi
+
+    local pid=$(process-read-pid "$name")
+
+    if [[ -z "$pid" ]]; then
+        return 1
+    fi
+
+    if ! process-exists "$pid"; then
+        log-debug "Stale PID file for $name (PID $pid)"
+        process-remove-pid "$name"
+        return 1
+    fi
+
+    return 0
+}
+
+# ------------------------------
+# Process Information
+# ------------------------------
+
+# Get process CPU usage
+# Usage: cpu=$(process-get-cpu <pid>)
+process-get-cpu() {
+    local pid="${1}"
+
+    if ! process-exists "$pid"; then
+        echo "0"
+        return 1
+    fi
+
+    # Check cache if available
+    if [[ "$PROCESS_CACHE_AVAILABLE" == "true" ]]; then
+        local cache_key="process:cpu:$pid"
+        local cached=$(cache-get "$cache_key" 2>/dev/null)
+        if [[ -n "$cached" ]]; then
+            echo "$cached"
+            return 0
+        fi
+    fi
+
+    local cpu=$(ps -p "$pid" -o %cpu= 2>/dev/null | tr -d ' ')
+
+    # Cache result
+    if [[ "$PROCESS_CACHE_AVAILABLE" == "true" ]] && [[ -n "$cpu" ]]; then
+        cache-set "process:cpu:$pid" "$cpu" "$PROCESS_CACHE_TTL" 2>/dev/null
+    fi
+
+    echo "${cpu:-0}"
+}
+
+# Get process memory usage (in KB)
+# Usage: mem=$(process-get-memory <pid>)
+process-get-memory() {
+    local pid="${1}"
+
+    if ! process-exists "$pid"; then
+        echo "0"
+        return 1
+    fi
+
+    # Check cache if available
+    if [[ "$PROCESS_CACHE_AVAILABLE" == "true" ]]; then
+        local cache_key="process:mem:$pid"
+        local cached=$(cache-get "$cache_key" 2>/dev/null)
+        if [[ -n "$cached" ]]; then
+            echo "$cached"
+            return 0
+        fi
+    fi
+
+    local mem=$(ps -p "$pid" -o rss= 2>/dev/null | tr -d ' ')
+
+    # Cache result
+    if [[ "$PROCESS_CACHE_AVAILABLE" == "true" ]] && [[ -n "$mem" ]]; then
+        cache-set "process:mem:$pid" "$mem" "$PROCESS_CACHE_TTL" 2>/dev/null
+    fi
+
+    echo "${mem:-0}"
+}
+
+# Get process command
+# Usage: cmd=$(process-get-command <pid>)
+process-get-command() {
+    local pid="${1}"
+
+    if ! process-exists "$pid"; then
+        return 1
+    fi
+
+    ps -p "$pid" -o comm= 2>/dev/null
+}
+
+# Get process info
+# Usage: process-get-info <pid>
+process-get-info() {
+    local pid="${1}"
+
+    if [[ -z "$pid" ]]; then
+        log-error "PID required"
+        return 1
+    fi
+
+    if ! process-exists "$pid"; then
+        log-error "Process not running: $pid"
+        return 1
+    fi
+
+    echo "PID:         $pid"
+    echo "CPU:         $(process-get-cpu $pid)%"
+    echo "Memory:      $(process-get-memory $pid) KB"
+    echo "Command:     $(process-get-command $pid)"
+    echo "Start Time:  $(ps -p $pid -o lstart= 2>/dev/null)"
+}
+
+# ------------------------------
+# Process Control
+# ------------------------------
+
+# Stop process gracefully
+# Usage: process-stop <name_or_pid> [--timeout <seconds>] [--force]
+process-stop() {
+    local target="${1}"
+    shift
+    local timeout="$PROCESS_DEFAULT_TIMEOUT"
+    local force=false
+
+    # Parse options
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --timeout|-t)
+                timeout="${2}"
+                shift 2
+                ;;
+            --force|-f)
+                force=true
+                shift
+                ;;
+            *)
+                shift
+                ;;
+        esac
+    done
+
+    # Validate target
+    if [[ -z "$target" ]]; then
+        log-error "Process name or PID required"
+        return 1
+    fi
+
+    # Resolve PID
+    local pid
+    if [[ "$target" =~ ^[0-9]+$ ]]; then
+        pid="$target"
+    else
+        pid=$(process-read-pid "$target")
+    fi
+
+    if [[ -z "$pid" ]]; then
+        log-error "Process not found: $target"
+        return 1
+    fi
+
+    if ! process-exists "$pid"; then
+        log-warn "Process already dead: $pid"
+        [[ ! "$target" =~ ^[0-9]+$ ]] && process-remove-pid "$target"
+        return 0
+    fi
+
+    # Try graceful shutdown
+    log-info "Stopping process $pid (timeout: ${timeout}s)"
+    kill -TERM "$pid" 2>/dev/null
+
+    _process-emit-event "$PROCESS_EVENT_STOP" "$target" "$pid"
+
+    # Wait for process to exit
+    local elapsed=0
+    while process-exists "$pid" && (( elapsed < timeout )); do
+        sleep 1
+        ((elapsed++))
+    done
+
+    # Force kill if still running
+    if process-exists "$pid"; then
+        if $force; then
+            log-warn "Force killing process $pid"
+            kill -KILL "$pid" 2>/dev/null
+            _process-emit-event "$PROCESS_EVENT_KILL" "$target" "$pid"
+        else
+            log-error "Process $pid did not stop within timeout"
+            return 1
+        fi
+    fi
+
+    # Cleanup
+    [[ ! "$target" =~ ^[0-9]+$ ]] && process-remove-pid "$target"
+    unset "_PROCESS_REGISTRY[$pid]"
+
+    log-success "Process stopped: $pid"
+    return 0
+}
+
+# Send signal to process
+# Usage: process-signal <name_or_pid> <signal>
+process-signal() {
+    local target="${1}"
+    local signal="${2}"
+
+    # Validate inputs
+    if [[ -z "$target" ]] || [[ -z "$signal" ]]; then
+        log-error "Process and signal required"
+        return 1
+    fi
+
+    # Resolve PID
+    local pid
+    if [[ "$target" =~ ^[0-9]+$ ]]; then
+        pid="$target"
+    else
+        pid=$(process-read-pid "$target")
+    fi
+
+    if [[ -z "$pid" ]]; then
+        log-error "Process not found: $target"
+        return 1
+    fi
+
+    if ! process-exists "$pid"; then
+        log-error "Process not running: $pid"
+        return 1
+    fi
+
+    log-debug "Sending signal $signal to $pid"
+    kill "-$signal" "$pid" 2>/dev/null
+}
+
+# Restart process
+# Usage: process-restart <name> <command>
+process-restart() {
+    local name="${1}"
+    local command="${2}"
+
+    # Validate inputs
+    if [[ -z "$name" ]] || [[ -z "$command" ]]; then
+        log-error "Name and command required"
+        return 1
+    fi
+
+    # Stop process if running
+    if process-check-pid-file "$name"; then
+        log-info "Stopping existing process: $name"
+        process-stop "$name" --force
+    fi
+
+    # Wait a moment
+    sleep 1
+
+    # Start process
+    log-info "Starting process: $name"
+    eval "$command" >> "$(_process-get-log-file "$name")" 2>&1 &
+    local pid=$!
+
+    # Track process
+    process-write-pid "$name" "$pid"
+    _PROCESS_REGISTRY[$pid]="$name|$command|$(date +%s)"
+
+    log-success "Process restarted: $name (PID: $pid)"
+    _process-emit-event "$PROCESS_EVENT_RESTART" "$name" "$pid"
+
+    echo "$pid"
+}
+
+# ------------------------------
+# Process Monitoring
+# ------------------------------
+
+# Monitor process resources
+# Usage: process-monitor <name_or_pid> [--alert-cpu <percent>] [--alert-mem <kb>] [--interval <seconds>]
+process-monitor() {
+    local target="${1}"
+    shift
+    local alert_cpu=""
+    local alert_mem=""
+    local interval="$PROCESS_MONITOR_INTERVAL"
+
+    # Parse options
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --alert-cpu)
+                alert_cpu="${2}"
+                shift 2
+                ;;
+            --alert-mem)
+                alert_mem="${2}"
+                shift 2
+                ;;
+            --interval|-i)
+                interval="${2}"
+                shift 2
+                ;;
+            *)
+                shift
+                ;;
+        esac
+    done
+
+    # Resolve PID
+    local pid
+    if [[ "$target" =~ ^[0-9]+$ ]]; then
+        pid="$target"
+    else
+        pid=$(process-read-pid "$target")
+    fi
+
+    if [[ -z "$pid" ]]; then
+        log-error "Process not found: $target"
+        return 1
+    fi
+
+    log-info "Monitoring process $pid (interval: ${interval}s)"
+
+    while process-exists "$pid"; do
+        local cpu=$(process-get-cpu "$pid")
+        local mem=$(process-get-memory "$pid")
+
+        _process-emit-event "$PROCESS_EVENT_MONITOR" "$target" "$pid" "$cpu" "$mem"
+
+        # Check alerts
+        if [[ -n "$alert_cpu" ]] && (( $(echo "$cpu > $alert_cpu" | bc -l 2>/dev/null || echo 0) )); then
+            log-warn "High CPU usage: $cpu% (threshold: $alert_cpu%)"
+            _process-emit-event "$PROCESS_EVENT_ALERT" "$target" "$pid" "cpu" "$cpu"
+        fi
+
+        if [[ -n "$alert_mem" ]] && (( mem > alert_mem )); then
+            log-warn "High memory usage: $mem KB (threshold: $alert_mem KB)"
+            _process-emit-event "$PROCESS_EVENT_ALERT" "$target" "$pid" "memory" "$mem"
+        fi
+
+        sleep "$interval"
+    done
+
+    log-info "Process $pid has exited"
+    _process-emit-event "$PROCESS_EVENT_DIED" "$target" "$pid"
+}
+
+# ------------------------------
+# Process Groups
+# ------------------------------
+
+# Add process to group
+# Usage: process-group-add <group> <name_or_pid>
+process-group-add() {
+    local group="${1}"
+    local target="${2}"
+
+    # Validate inputs
+    if [[ -z "$group" ]] || [[ -z "$target" ]]; then
+        log-error "Group and process required"
+        return 1
+    fi
+
+    # Resolve PID
+    local pid
+    if [[ "$target" =~ ^[0-9]+$ ]]; then
+        pid="$target"
+    else
+        pid=$(process-read-pid "$target")
+    fi
+
+    if [[ -z "$pid" ]]; then
+        log-error "Process not found: $target"
+        return 1
+    fi
+
+    # Add to group
+    local pids="${_PROCESS_GROUPS[$group]}"
+    if [[ -z "$pids" ]]; then
+        _PROCESS_GROUPS[$group]="$pid"
+    else
+        _PROCESS_GROUPS[$group]="$pids $pid"
+    fi
+
+    log-debug "Added PID $pid to group $group"
+}
+
+# Stop all processes in group
+# Usage: process-group-stop <group> [--timeout <seconds>] [--force]
+process-group-stop() {
+    local group="${1}"
+    shift
+
+    local pids="${_PROCESS_GROUPS[$group]}"
+    if [[ -z "$pids" ]]; then
+        log-warn "Process group empty or not found: $group"
+        return 1
+    fi
+
+    log-info "Stopping process group: $group"
+
+    for pid in $pids; do
+        if process-exists "$pid"; then
+            process-stop "$pid" "$@"
+        fi
+    done
+
+    unset "_PROCESS_GROUPS[$group]"
+}
+
+# List processes in group
+# Usage: process-group-list <group>
+process-group-list() {
+    local group="${1}"
+
+    # Validate input
+    if [[ -z "$group" ]]; then
+        log-error "Group name required"
+        return 1
+    fi
+
+    local pids="${_PROCESS_GROUPS[$group]}"
+    if [[ -z "$pids" ]]; then
+        log-warn "Process group empty or not found: $group"
+        return 1
+    fi
+
+    echo "Processes in group $group:"
+    for pid in $pids; do
+        if process-exists "$pid"; then
+            echo "  PID $pid: $(process-get-command $pid)"
+        else
+            echo "  PID $pid: (dead)"
+        fi
+    done
+}
+
+# ------------------------------
+# Process Tree Operations
+# ------------------------------
+
+# Get child processes
+# Usage: children=($(process-get-children <pid>))
+process-get-children() {
+    local pid="${1}"
+
+    if [[ -z "$pid" ]]; then
+        log-error "PID required"
+        return 1
+    fi
+
+    pgrep -P "$pid" 2>/dev/null
+}
+
+# Kill process tree
+# Usage: process-kill-tree <pid> [--signal <signal>]
+process-kill-tree() {
+    local pid="${1}"
+    shift
+    local signal="TERM"
+
+    # Parse options
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --signal|-s)
+                signal="${2}"
+                shift 2
+                ;;
+            *)
+                shift
+                ;;
+        esac
+    done
+
+    # Validate input
+    if [[ -z "$pid" ]]; then
+        log-error "PID required"
+        return 1
+    fi
+
+    # Get all descendants
+    local children=$(process-get-children "$pid")
+
+    # Kill children first (recursively)
+    for child in $children; do
+        process-kill-tree "$child" --signal "$signal"
+    done
+
+    # Kill parent
+    if process-exists "$pid"; then
+        log-debug "Killing PID $pid with signal $signal"
+        kill "-$signal" "$pid" 2>/dev/null
+    fi
+}
+
+# ------------------------------
+# Utility Functions
+# ------------------------------
+
+# List all tracked processes
+# Usage: process-list
+process-list() {
+    echo "Tracked processes:"
+
+    local found=false
+    for pid in "${(@k)_PROCESS_REGISTRY}"; do
+        if process-exists "$pid"; then
+            local info="${_PROCESS_REGISTRY[$pid]}"
+            local name=$(echo "$info" | cut -d'|' -f1)
+            local command=$(echo "$info" | cut -d'|' -f2)
+            echo "  [$pid] $name: $command"
+            found=true
+        fi
+    done
+
+    if ! $found; then
+        echo "  (none)"
+    fi
+}
+
+# Cleanup dead processes
+# Usage: process-cleanup
+process-cleanup() {
+    log-info "Cleaning up dead processes"
+
+    local cleaned=0
+    for pid in "${(@k)_PROCESS_REGISTRY}"; do
+        if ! process-exists "$pid"; then
+            local info="${_PROCESS_REGISTRY[$pid]}"
+            local name=$(echo "$info" | cut -d'|' -f1)
+            process-remove-pid "$name" 2>/dev/null
+            unset "_PROCESS_REGISTRY[$pid]"
+            ((cleaned++))
+        fi
+    done
+
+    log-success "Cleaned $cleaned dead process(es)"
+}
+
+# ------------------------------
+# Self-Test
+# ------------------------------
+
+# Test process functions
+# Usage: process-self-test
+process-self-test() {
+    echo "=== _process v${PROCESS_VERSION} Self-Test ==="
+    echo ""
+
+    local tests_passed=0
+    local tests_failed=0
+
+    # Test 1: Check ps availability
+    echo -n "Test 1: ps availability... "
+    if common-command-exists "ps"; then
+        echo "PASS"
+        ((tests_passed++))
+    else
+        echo "FAIL"
+        ((tests_failed++))
+        echo "  ps not found - process functions will not work"
+        echo ""
+        echo "=== Self-Test Summary ==="
+        echo "Passed: $tests_passed"
+        echo "Failed: $tests_failed"
+        return 1
+    fi
+
+    # Test 2: Check kill availability
+    echo -n "Test 2: kill availability... "
+    if common-command-exists "kill"; then
+        echo "PASS"
+        ((tests_passed++))
+    else
+        echo "FAIL"
+        ((tests_failed++))
+    fi
+
+    # Test 3: Process detection (current shell)
+    echo -n "Test 3: Process detection... "
+    if process-exists $$; then
+        echo "PASS (current PID: $$)"
+        ((tests_passed++))
+    else
+        echo "FAIL"
+        ((tests_failed++))
+    fi
+
+    # Test 4: Get CPU usage
+    echo -n "Test 4: Get CPU usage... "
+    local cpu=$(process-get-cpu $$)
+    if [[ -n "$cpu" ]] && [[ "$cpu" =~ ^[0-9.]+$ ]]; then
+        echo "PASS (CPU: $cpu%)"
+        ((tests_passed++))
+    else
+        echo "FAIL"
+        ((tests_failed++))
+    fi
+
+    # Test 5: Get memory usage
+    echo -n "Test 5: Get memory usage... "
+    local mem=$(process-get-memory $$)
+    if [[ -n "$mem" ]] && [[ "$mem" =~ ^[0-9]+$ ]]; then
+        echo "PASS (Memory: $mem KB)"
+        ((tests_passed++))
+    else
+        echo "FAIL"
+        ((tests_failed++))
+    fi
+
+    # Test 6: Get command
+    echo -n "Test 6: Get command... "
+    local cmd=$(process-get-command $$)
+    if [[ -n "$cmd" ]]; then
+        echo "PASS (Command: $cmd)"
+        ((tests_passed++))
+    else
+        echo "FAIL"
+        ((tests_failed++))
+    fi
+
+    # Test 7: PID file operations
+    echo -n "Test 7: PID file operations... "
+    process-write-pid "test_process" $$
+    local read_pid=$(process-read-pid "test_process")
+    process-remove-pid "test_process"
+    if [[ "$read_pid" == "$$" ]]; then
+        echo "PASS"
+        ((tests_passed++))
+    else
+        echo "FAIL"
+        ((tests_failed++))
+    fi
+
+    # Test 8: Process group operations
+    echo -n "Test 8: Process group operations... "
+    process-group-add "test_group" $$
+    local group_pids="${_PROCESS_GROUPS[test_group]}"
+    unset "_PROCESS_GROUPS[test_group]"
+    if [[ "$group_pids" == "$$" ]]; then
+        echo "PASS"
+        ((tests_passed++))
+    else
+        echo "FAIL"
+        ((tests_failed++))
+    fi
+
+    echo ""
+    echo "=== Self-Test Summary ==="
+    echo "Passed: $tests_passed"
+    echo "Failed: $tests_failed"
+    echo ""
+
+    if (( tests_failed == 0 )); then
+        echo "All tests passed!"
+        return 0
+    else
+        echo "Some tests failed."
+        return 1
+    fi
+}
+
+# ------------------------------
+# Version Info
+# ------------------------------
+
+# Print version information
+# Usage: process-version
+process-version() {
+    echo "_process v${PROCESS_VERSION}"
+}

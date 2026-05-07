@@ -1,0 +1,2 @@
+_dotlib="${XDG_DATA_HOME:-$HOME/.local/share}/dotlib" 
+[[ -d "${_dotlib}" ]] && export DOTLIB=${_dotlib}

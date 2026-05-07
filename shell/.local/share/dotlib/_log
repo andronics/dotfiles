@@ -1,0 +1,776 @@
+#!/usr/bin/env zsh
+
+# _log - Modern logging extension
+# Part of the dotfiles extensions library
+# Version: 1.0.0
+#
+# Usage:
+#   source "${DOTLIB}/_log"
+#
+# Provides:
+#   - Multi-mode logging (CLI, daemon, hybrid, file)
+#   - Colored console output for CLI tools
+#   - Systemd journal integration for daemons
+#   - Log level filtering
+#   - Timestamp support
+#   - JSON output format
+#   - Dry-run detection
+
+# ------------------------------
+# Source Guard
+# ------------------------------
+
+[[ -n "${LOG_LOADED:-}" ]] && return 0
+declare -g LOG_LOADED=1
+
+# ------------------------------
+# Version
+# ------------------------------
+
+declare -r LOG_VERSION="1.0.0"
+
+# ------------------------------
+# Load Dependencies
+# ------------------------------
+
+# Load _common for colors (optional)
+source "${DOTLIB}/_common" >/dev/null 2>&1 || true
+
+# ------------------------------
+# Configuration Variables
+# ------------------------------
+# All configurable via environment variables
+
+# LOG_MODE: Logging mode
+#   - auto: Detect based on TTY and parent process (default)
+#   - cli: Console only, colored output, no systemd
+#   - daemon: Systemd journal + optional console
+#   - hybrid: Both console and journal
+#   - file: File-based logging
+declare -g LOG_MODE="${LOG_MODE:-auto}"
+
+# LOG_LEVEL: Minimum log level to display
+#   - trace: Most verbose (level 0)
+#   - debug: Debug messages (level 1)
+#   - info: Informational messages (level 2) [default]
+#   - warning: Warning messages (level 3)
+#   - error: Error messages (level 4)
+#   - fatal: Fatal errors (level 5)
+declare -g LOG_LEVEL="${LOG_LEVEL:-info}"
+
+# LOG_TIMESTAMPS: Enable timestamps in output
+declare -g LOG_TIMESTAMPS="${LOG_TIMESTAMPS:-false}"
+
+# LOG_TIMESTAMP_FORMAT: strftime format for timestamps
+declare -g LOG_TIMESTAMP_FORMAT="${LOG_TIMESTAMP_FORMAT:-%Y-%m-%d %H:%M:%S}"
+
+# LOG_OUTPUT_FORMAT: Output format
+#   - text: Human-readable text (default)
+#   - json: JSON-formatted logs
+declare -g LOG_OUTPUT_FORMAT="${LOG_OUTPUT_FORMAT:-text}"
+
+# LOG_FILE: Path to log file (for file mode)
+declare -g LOG_FILE="${LOG_FILE:-}"
+
+# LOG_SYSTEMD_TAG: Tag for systemd journal entries
+declare -g LOG_SYSTEMD_TAG="${LOG_SYSTEMD_TAG:-${name:-log}}"
+
+# LOG_COLOR: Color output control
+#   - auto: Enable if TTY detected (default)
+#   - always: Always use colors
+#   - never: Never use colors
+declare -g LOG_COLOR="${LOG_COLOR:-auto}"
+
+# LOG_SHOW_FUNCTION: Include calling function name
+declare -g LOG_SHOW_FUNCTION="${LOG_SHOW_FUNCTION:-false}"
+
+# ------------------------------
+# Internal State
+# ------------------------------
+
+# Log level values for comparison
+declare -g -A _LOG_LEVEL_VALUES=(
+    [trace]=0
+    [debug]=1
+    [info]=2
+    [warning]=3
+    [error]=4
+    [fatal]=5
+)
+
+# Color definitions (use _common colors or fallback)
+declare -g LOG_COLOR_TRACE="${CYAN:-\033[0;36m}"
+declare -g LOG_COLOR_DEBUG="${BLUE:-\033[0;34m}"
+declare -g LOG_COLOR_INFO="${GREEN:-\033[0;32m}"
+declare -g LOG_COLOR_SUCCESS="${GREEN:-\033[0;32m}"
+declare -g LOG_COLOR_WARNING="${YELLOW:-\033[1;33m}"
+declare -g LOG_COLOR_ERROR="${RED:-\033[0;31m}"
+declare -g LOG_COLOR_FATAL="${RED:-\033[0;31m}${BOLD:-\033[1m}"
+declare -g LOG_COLOR_RESET="${NC:-\033[0m}"
+declare -g LOG_COLOR_BOLD="${BOLD:-\033[1m}"
+
+# Icon/prefix per level
+declare -g -A _LOG_LEVEL_PREFIX=(
+    [trace]="TRACE"
+    [debug]="DEBUG"
+    [info]="INFO"
+    [success]="SUCCESS"
+    [warning]="WARNING"
+    [error]="ERROR"
+    [fatal]="FATAL"
+)
+
+# ------------------------------
+# Mode Detection
+# ------------------------------
+
+# Auto-detect appropriate logging mode
+log-detect-mode() {
+    if [[ "$LOG_MODE" == "auto" ]]; then
+        # Check if we have a TTY
+        if [[ -t 1 ]] || [[ -t 2 ]]; then
+            # Interactive terminal - use CLI mode
+            LOG_MODE="cli"
+        else
+            # No TTY - check if parent is systemd
+            local ppid_comm=$(cat /proc/$PPID/comm 2>/dev/null || echo "")
+            if [[ "$ppid_comm" == "systemd" ]]; then
+                # Running as systemd service - use daemon mode
+                LOG_MODE="daemon"
+            else
+                # Piped/redirected - use CLI mode
+                LOG_MODE="cli"
+            fi
+        fi
+    fi
+}
+
+# Initialize logging system
+log-init() {
+    # Detect mode if auto
+    log-detect-mode
+
+    # Set color output based on configuration and TTY
+    if [[ "$LOG_COLOR" == "auto" ]]; then
+        if [[ -t 1 ]]; then
+            LOG_COLOR="always"
+        else
+            LOG_COLOR="never"
+        fi
+    fi
+
+    # Create log file directory if needed
+    if [[ "$LOG_MODE" == "file" ]] && [[ -n "$LOG_FILE" ]]; then
+        local log_dir=$(dirname "$LOG_FILE")
+        if [[ ! -d "$log_dir" ]]; then
+            mkdir -p "$log_dir" 2>/dev/null || true
+        fi
+        # Touch log file
+        touch "$LOG_FILE" 2>/dev/null || true
+    fi
+}
+
+# Check if log level should be shown
+log-should-log() {
+    local level="$1"
+    local level_value="${_LOG_LEVEL_VALUES[$level]:-999}"
+    local threshold_value="${_LOG_LEVEL_VALUES[${LOG_LEVEL}]:-2}"
+
+    [[ $level_value -ge $threshold_value ]]
+}
+
+# ------------------------------
+# Message Formatting
+# ------------------------------
+
+# Format log message with optional timestamp, color, level prefix
+_log-format-message() {
+    local level="$1"
+    local color="$2"
+    shift 2
+    local message="$*"
+
+    local output=""
+
+    # JSON format
+    if [[ "$LOG_OUTPUT_FORMAT" == "json" ]]; then
+        local timestamp=$(date -Iseconds 2>/dev/null || date +%Y-%m-%dT%H:%M:%S)
+        local func_name=""
+        if [[ "$LOG_SHOW_FUNCTION" == "true" ]] && [[ ${#funcstack[@]} -gt 2 ]]; then
+            func_name="${funcstack[3]}"
+        fi
+
+        # Build JSON (handle jq availability)
+        if command -v jq &>/dev/null; then
+            output=$(jq -n \
+                --arg level "$level" \
+                --arg message "$message" \
+                --arg timestamp "$timestamp" \
+                --arg function "$func_name" \
+                '{level: $level, message: $message, timestamp: $timestamp, function: $function}')
+        else
+            # Fallback JSON formatting
+            output="{\"level\":\"$level\",\"message\":\"$message\",\"timestamp\":\"$timestamp\""
+            [[ -n "$func_name" ]] && output="$output,\"function\":\"$func_name\""
+            output="$output}"
+        fi
+        echo "$output"
+        return
+    fi
+
+    # Text format
+
+    # Add timestamp
+    if [[ "$LOG_TIMESTAMPS" == "true" ]]; then
+        local timestamp=$(date +"$LOG_TIMESTAMP_FORMAT" 2>/dev/null)
+        output="[$timestamp] "
+    fi
+
+    # Add function name
+    if [[ "$LOG_SHOW_FUNCTION" == "true" ]] && [[ ${#funcstack[@]} -gt 2 ]]; then
+        output="${output}${funcstack[3]} | "
+    fi
+
+    # Add level prefix with color
+    local prefix="${_LOG_LEVEL_PREFIX[$level]}"
+    if [[ "$LOG_COLOR" == "always" ]]; then
+        output="${output}${color}[${prefix}]${LOG_COLOR_RESET} ${message}"
+    else
+        output="${output}[${prefix}] ${message}"
+    fi
+
+    echo "$output"
+}
+
+# ------------------------------
+# Output Routing
+# ------------------------------
+
+# Route log message to appropriate destination(s)
+_log-output() {
+    local level="$1"
+    local systemd_priority="$2"
+    shift 2
+    local message="$*"
+
+    case "$LOG_MODE" in
+        cli)
+            # Console only - stderr for errors/warnings, stdout for others
+            if [[ "$level" == "error" ]] || [[ "$level" == "fatal" ]] || [[ "$level" == "warning" ]]; then
+                echo "$message" >&2
+            else
+                echo "$message"
+            fi
+            ;;
+
+        daemon)
+            # Systemd journal (primary) + console if TTY available
+            if command -v systemd-cat &>/dev/null; then
+                echo "$message" | systemd-cat -t "$LOG_SYSTEMD_TAG" -p "$systemd_priority" 2>/dev/null
+            fi
+
+            # Also output to console if TTY is available (for debugging)
+            if [[ -t 1 ]] || [[ -t 2 ]]; then
+                if [[ "$level" == "error" ]] || [[ "$level" == "fatal" ]] || [[ "$level" == "warning" ]]; then
+                    echo "$message" >&2
+                else
+                    echo "$message"
+                fi
+            fi
+            ;;
+
+        hybrid)
+            # Both systemd journal and console
+            if command -v systemd-cat &>/dev/null; then
+                echo "$message" | systemd-cat -t "$LOG_SYSTEMD_TAG" -p "$systemd_priority" 2>/dev/null
+            fi
+
+            # Always output to console
+            if [[ "$level" == "error" ]] || [[ "$level" == "fatal" ]] || [[ "$level" == "warning" ]]; then
+                echo "$message" >&2
+            else
+                echo "$message"
+            fi
+            ;;
+
+        file)
+            # File logging (primary) + console for errors
+            if [[ -n "$LOG_FILE" ]] && [[ -w "$(dirname "$LOG_FILE")" ]]; then
+                echo "$message" >> "$LOG_FILE" 2>/dev/null
+            fi
+
+            # Always show errors/fatals on console
+            if [[ "$level" == "error" ]] || [[ "$level" == "fatal" ]]; then
+                echo "$message" >&2
+            fi
+            ;;
+    esac
+}
+
+# ------------------------------
+# Public Logging Functions
+# ------------------------------
+
+# Log trace message (most verbose)
+log-trace() {
+    log-should-log "trace" || return 0
+    local msg=$(_log-format-message "trace" "$LOG_COLOR_TRACE" "$@")
+    _log-output "trace" "debug" "$msg"
+}
+
+# Log debug message
+log-debug() {
+    log-should-log "debug" || return 0
+    local msg=$(_log-format-message "debug" "$LOG_COLOR_DEBUG" "$@")
+    _log-output "debug" "debug" "$msg"
+}
+
+# Log info message
+log-info() {
+    log-should-log "info" || return 0
+    local msg=$(_log-format-message "info" "$LOG_COLOR_INFO" "$@")
+    _log-output "info" "info" "$msg"
+}
+
+# Log success message (info level with success styling)
+log-success() {
+    log-should-log "info" || return 0
+    local msg=$(_log-format-message "success" "$LOG_COLOR_SUCCESS" "$@")
+    _log-output "info" "info" "$msg"
+}
+
+# Log warning message
+log-warning() {
+    log-should-log "warning" || return 0
+    local msg=$(_log-format-message "warning" "$LOG_COLOR_WARNING" "$@")
+    _log-output "warning" "warning" "$msg"
+}
+
+# Log error message
+log-error() {
+    log-should-log "error" || return 0
+    local msg=$(_log-format-message "error" "$LOG_COLOR_ERROR" "$@")
+    _log-output "error" "err" "$msg"
+}
+
+# Log fatal error message
+log-fatal() {
+    log-should-log "fatal" || return 0
+    local msg=$(_log-format-message "fatal" "$LOG_COLOR_FATAL" "$@")
+    _log-output "fatal" "crit" "$msg"
+}
+
+# ------------------------------
+# Structured Logging (key=value)
+# ------------------------------
+
+# Parse structured fields from arguments
+# Fields are in format: key=value key2="value with spaces"
+_log-parse-fields() {
+    local -A fields=()
+    local message=""
+    local in_message=false
+
+    for arg in "$@"; do
+        # Check if it's a key=value pair
+        if [[ "$arg" =~ ^[a-zA-Z_][a-zA-Z0-9_]*= ]]; then
+            local key="${arg%%=*}"
+            local value="${arg#*=}"
+            # Remove quotes if present
+            value="${value#\"}"
+            value="${value%\"}"
+            fields[$key]="$value"
+        else
+            # Part of the message
+            if [[ -z "$message" ]]; then
+                message="$arg"
+            else
+                message="$message $arg"
+            fi
+        fi
+    done
+
+    # Export for caller
+    echo "MESSAGE:$message"
+    for key in "${(@k)fields}"; do
+        echo "FIELD:$key:${fields[$key]}"
+    done
+}
+
+# Format structured log entry
+_log-format-structured() {
+    local level="$1"
+    local color="$2"
+    shift 2
+
+    # Parse fields
+    local message=""
+    local -A fields=()
+
+    while IFS= read -r line; do
+        if [[ "$line" =~ ^MESSAGE: ]]; then
+            message="${line#MESSAGE:}"
+        elif [[ "$line" =~ ^FIELD: ]]; then
+            local rest="${line#FIELD:}"
+            local key="${rest%%:*}"
+            local value="${rest#*:}"
+            fields[$key]="$value"
+        fi
+    done < <(_log-parse-fields "$@")
+
+    # JSON format with fields
+    if [[ "$LOG_OUTPUT_FORMAT" == "json" ]]; then
+        local timestamp=$(date -Iseconds 2>/dev/null || date +%Y-%m-%dT%H:%M:%S)
+        local func_name=""
+        if [[ "$LOG_SHOW_FUNCTION" == "true" ]] && [[ ${#funcstack[@]} -gt 3 ]]; then
+            func_name="${funcstack[4]}"
+        fi
+
+        # Build JSON with fields
+        if command -v jq &>/dev/null; then
+            local jq_args=(
+                -n
+                --arg level "$level"
+                --arg message "$message"
+                --arg timestamp "$timestamp"
+            )
+            [[ -n "$func_name" ]] && jq_args+=(--arg function "$func_name")
+
+            # Add fields
+            for key in "${(@k)fields}"; do
+                jq_args+=(--arg "$key" "${fields[$key]}")
+            done
+
+            # Build object
+            local obj="{level: \$level, message: \$message, timestamp: \$timestamp"
+            [[ -n "$func_name" ]] && obj="$obj, function: \$function"
+            for key in "${(@k)fields}"; do
+                obj="$obj, $key: \$$key"
+            done
+            obj="$obj}"
+
+            jq "${jq_args[@]}" "$obj"
+        else
+            # Fallback JSON
+            local output="{\"level\":\"$level\",\"message\":\"$message\",\"timestamp\":\"$timestamp\""
+            [[ -n "$func_name" ]] && output="$output,\"function\":\"$func_name\""
+            for key in "${(@k)fields}"; do
+                # Basic JSON escaping
+                local escaped_value="${fields[$key]//\\/\\\\}"
+                escaped_value="${escaped_value//\"/\\\"}"
+                output="$output,\"$key\":\"$escaped_value\""
+            done
+            output="$output}"
+            echo "$output"
+        fi
+        return
+    fi
+
+    # Text format with fields
+    local output=""
+
+    # Add timestamp
+    if [[ "$LOG_TIMESTAMPS" == "true" ]]; then
+        local timestamp=$(date +"$LOG_TIMESTAMP_FORMAT" 2>/dev/null)
+        output="[$timestamp] "
+    fi
+
+    # Add function name
+    if [[ "$LOG_SHOW_FUNCTION" == "true" ]] && [[ ${#funcstack[@]} -gt 3 ]]; then
+        output="${output}${funcstack[4]} | "
+    fi
+
+    # Add level prefix with color
+    local prefix="${_LOG_LEVEL_PREFIX[$level]}"
+    if [[ "$LOG_COLOR" == "always" ]]; then
+        output="${output}${color}[${prefix}]${LOG_COLOR_RESET} ${message}"
+    else
+        output="${output}[${prefix}] ${message}"
+    fi
+
+    # Add fields
+    if [[ ${#fields[@]} -gt 0 ]]; then
+        local field_str=""
+        for key in "${(@k)fields}"; do
+            if [[ -n "$field_str" ]]; then
+                field_str="$field_str "
+            fi
+            field_str="${field_str}${key}=${fields[$key]}"
+        done
+
+        if [[ "$LOG_COLOR" == "always" ]]; then
+            output="$output ${LOG_COLOR_BOLD}[$field_str]${LOG_COLOR_RESET}"
+        else
+            output="$output [$field_str]"
+        fi
+    fi
+
+    echo "$output"
+}
+
+# Structured logging functions with field support
+# Usage: log-info-with "Message" key=value key2="value with spaces"
+
+log-trace-with() {
+    log-should-log "trace" || return 0
+    local msg=$(_log-format-structured "trace" "$LOG_COLOR_TRACE" "$@")
+    _log-output "trace" "debug" "$msg"
+}
+
+log-debug-with() {
+    log-should-log "debug" || return 0
+    local msg=$(_log-format-structured "debug" "$LOG_COLOR_DEBUG" "$@")
+    _log-output "debug" "info" "$msg"
+}
+
+log-info-with() {
+    log-should-log "info" || return 0
+    local msg=$(_log-format-structured "info" "$LOG_COLOR_INFO" "$@")
+    _log-output "info" "info" "$msg"
+}
+
+log-success-with() {
+    log-should-log "info" || return 0
+    local msg=$(_log-format-structured "success" "$LOG_COLOR_SUCCESS" "$@")
+    _log-output "info" "info" "$msg"
+}
+
+log-warning-with() {
+    log-should-log "warning" || return 0
+    local msg=$(_log-format-structured "warning" "$LOG_COLOR_WARNING" "$@")
+    _log-output "warning" "warning" "$msg"
+}
+
+log-error-with() {
+    log-should-log "error" || return 0
+    local msg=$(_log-format-structured "error" "$LOG_COLOR_ERROR" "$@")
+    _log-output "error" "err" "$msg"
+}
+
+log-fatal-with() {
+    log-should-log "fatal" || return 0
+    local msg=$(_log-format-structured "fatal" "$LOG_COLOR_FATAL" "$@")
+    _log-output "fatal" "crit" "$msg"
+}
+
+# ------------------------------
+# Configuration Functions
+# ------------------------------
+
+# Set log level
+# Usage: log-set-level "debug"
+log-set-level() {
+    local level="$1"
+    if [[ -n "${_LOG_LEVEL_VALUES[$level]}" ]]; then
+        LOG_LEVEL="$level"
+        return 0
+    else
+        log-error "Invalid log level: $level (valid: trace, debug, info, warning, error, fatal)"
+        return 1
+    fi
+}
+
+# Set log mode
+# Usage: log-set-mode "daemon"
+log-set-mode() {
+    local mode="$1"
+    case "$mode" in
+        auto|cli|daemon|hybrid|file)
+            LOG_MODE="$mode"
+            log-init
+            return 0
+            ;;
+        *)
+            log-error "Invalid log mode: $mode (valid: auto, cli, daemon, hybrid, file)"
+            return 1
+            ;;
+    esac
+}
+
+# Enable timestamps
+log-enable-timestamps() {
+    LOG_TIMESTAMPS="true"
+}
+
+# Disable timestamps
+log-disable-timestamps() {
+    LOG_TIMESTAMPS="false"
+}
+
+# Set timestamp format
+# Usage: log-set-timestamp-format "%H:%M:%S"
+log-set-timestamp-format() {
+    LOG_TIMESTAMP_FORMAT="$1"
+}
+
+# Enable JSON output
+log-enable-json() {
+    LOG_OUTPUT_FORMAT="json"
+}
+
+# Disable JSON output
+log-disable-json() {
+    LOG_OUTPUT_FORMAT="text"
+}
+
+# Set log file path
+# Usage: log-set-file "/var/log/myapp.log"
+log-set-file() {
+    LOG_FILE="$1"
+    if [[ -n "$LOG_FILE" ]]; then
+        mkdir -p "$(dirname "$LOG_FILE")" 2>/dev/null || true
+    fi
+}
+
+# Set systemd tag
+# Usage: log-set-systemd-tag "my-daemon"
+log-set-systemd-tag() {
+    LOG_SYSTEMD_TAG="$1"
+}
+
+# Enable function names in logs
+log-enable-function-names() {
+    LOG_SHOW_FUNCTION="true"
+}
+
+# Disable function names in logs
+log-disable-function-names() {
+    LOG_SHOW_FUNCTION="false"
+}
+
+# ------------------------------
+# Dry-Run Helpers
+# ------------------------------
+
+# Check if running in dry-run mode
+log-is-dry-run() {
+    [[ "${DRY_RUN:-false}" == "true" ]] || \
+    [[ "${TORRENT_DRY_RUN:-false}" == "true" ]] || \
+    [[ "${REMOTE_DRY_RUN:-false}" == "true" ]] || \
+    [[ "${DOCKER_DRY_RUN:-false}" == "true" ]]
+}
+
+# Get dry-run prefix string
+log-dry-run-prefix() {
+    if log-is-dry-run; then
+        echo "[DRY-RUN] "
+    fi
+}
+
+# ------------------------------
+# Journal/File Viewing
+# ------------------------------
+
+# View systemd journal (daemon/hybrid mode)
+# Usage: log-view [lines] [priority]
+log-view() {
+    local lines="${1:-50}"
+    local priority="${2:-info}"
+
+    if ! command -v journalctl &>/dev/null; then
+        log-error "journalctl not available"
+        return 1
+    fi
+
+    journalctl --user -t "$LOG_SYSTEMD_TAG" -n "$lines" -p "$priority" --no-pager
+}
+
+# Follow systemd journal in real-time
+# Usage: log-watch [priority]
+log-watch() {
+    local priority="${1:-info}"
+
+    if ! command -v journalctl &>/dev/null; then
+        log-error "journalctl not available"
+        return 1
+    fi
+
+    journalctl --user -f -t "$LOG_SYSTEMD_TAG" -p "$priority"
+}
+
+# View log file (file mode)
+# Usage: log-view-file [lines]
+log-view-file() {
+    local lines="${1:-50}"
+
+    if [[ -z "$LOG_FILE" ]]; then
+        log-error "LOG_FILE not set"
+        return 1
+    fi
+
+    if [[ ! -f "$LOG_FILE" ]]; then
+        log-error "Log file not found: $LOG_FILE"
+        return 1
+    fi
+
+    tail -n "$lines" "$LOG_FILE"
+}
+
+# Follow log file in real-time
+# Usage: log-watch-file
+log-watch-file() {
+    if [[ -z "$LOG_FILE" ]]; then
+        log-error "LOG_FILE not set"
+        return 1
+    fi
+
+    if [[ ! -f "$LOG_FILE" ]]; then
+        log-error "Log file not found: $LOG_FILE"
+        return 1
+    fi
+
+    tail -f "$LOG_FILE"
+}
+
+# Clear log file
+log-clear-file() {
+    if [[ -z "$LOG_FILE" ]]; then
+        log-error "LOG_FILE not set"
+        return 1
+    fi
+
+    if [[ -f "$LOG_FILE" ]]; then
+        : > "$LOG_FILE"
+        log-info "Cleared log file: $LOG_FILE"
+    fi
+}
+
+# ------------------------------
+# Information Functions
+# ------------------------------
+
+# Get current log mode
+log-get-mode() {
+    echo "$LOG_MODE"
+}
+
+# Get current log level
+log-get-level() {
+    echo "$LOG_LEVEL"
+}
+
+# Show current configuration
+log-show-config() {
+    echo "Logging Configuration:"
+    echo "  Mode:              $LOG_MODE"
+    echo "  Level:             $LOG_LEVEL"
+    echo "  Timestamps:        $LOG_TIMESTAMPS"
+    echo "  Output Format:     $LOG_OUTPUT_FORMAT"
+    echo "  Color:             $LOG_COLOR"
+    echo "  Show Functions:    $LOG_SHOW_FUNCTION"
+
+    if [[ -n "$LOG_FILE" ]]; then
+        echo "  Log File:          $LOG_FILE"
+    fi
+
+    if [[ "$LOG_MODE" == "daemon" ]] || [[ "$LOG_MODE" == "hybrid" ]]; then
+        echo "  Systemd Tag:       $LOG_SYSTEMD_TAG"
+    fi
+}
+
+# ------------------------------
+# Initialization
+# ------------------------------
+
+# Initialize logging system on load
+log-init
