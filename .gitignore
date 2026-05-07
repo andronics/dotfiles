@@ -26,3 +26,6 @@ mambembe/.config/mambembe/tokens.json
 # tmux: tpm clones plugins into ~/.config/tmux/plugins/ at runtime;
 # tmux.conf bootstraps tpm itself, no need to track plugins.
 shell/.config/tmux/plugins/
+
+# Claude Code per-host runtime state (counters, tip-shown flags, UI flags)
+optional/.claude.json
