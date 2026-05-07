@@ -44,7 +44,7 @@ Then stow the profiles you want:
 ./dotfiles install shell desktop optional       # everything
 ```
 
-`./dotfiles` is a thin stow wrapper. Subcommands: `install` (`i`), `uninstall` (`u`), `reinstall` (`r`), `pass` (`p`). With no args, acts on every package.
+`./dotfiles` is a thin stow wrapper. Subcommands: `install` (`i`), `uninstall` (`u`), `reinstall` (`r`). With no args, acts on every package.
 
 ### After updates
 
@@ -66,9 +66,6 @@ A clone without `--recurse-submodules` will leave these empty. Fix with:
 git submodule update --init --recursive
 ```
 
-## tpm
-
-`tmux` plugins are not tracked. `shell/.config/tmux/tmux.conf` auto-clones [tpm](https://github.com/tmux-plugins/tpm) into `~/.config/tmux/plugins/tpm/` on first launch and runs `install_plugins`. Press `prefix + I` inside tmux any time you change `@plugin` lines.
 
 ## Conventions
 

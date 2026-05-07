@@ -1,4 +1,4 @@
-#!/usr/bin/env sh
+#!/usr/bin/env bash
 
 # ------------------------------
 
@@ -30,7 +30,6 @@ _dotfiles() {
    case ${_command} in
       
       i|install) _dotfiles_install "$@" ;;
-      p|pass) _dotfiles_pass "$@" ;;
       r|reinstall) _dotfiles_reinstall "$@" ;;
       u|uninstall) _dotfiles_uninstall "$@" ;;
       
@@ -60,7 +59,7 @@ _dotfiles_install() {
       }
       
       
-      [[ ${_pkg} =~ /^./ ]] && {
+      [[ ${_pkg} =~ ^\. ]] && {
          warn "package '${_pkg}' prefixed with a period... ignoring"
          continue
       }
@@ -161,7 +160,7 @@ _dotfiles_uninstall() {
          continue
       }
 
-      [[ ${_pkg} =~ /^./ ]] && {
+      [[ ${_pkg} =~ ^\. ]] && {
          warn "package '${_pkg}' prefixed with a period... ignoring"
          continue
       }
@@ -182,7 +181,7 @@ _dotfiles_uninstall() {
          info "package '${_pkg}' is being uninstalled by stow"
          stow -t "${dotfiles_target_root}" -D ${_pkg} --ignore="${dotfiles_ignore}" ${_no_folding}
 
-         [[ $? -ne 0 ]] && err "... failed to install"
+         [[ $? -ne 0 ]] && err "... failed to uninstall"
 
       }
 
