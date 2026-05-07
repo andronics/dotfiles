@@ -7,7 +7,7 @@ node_modules
 # logs / traces
 *.log
 *.traces
-themes/.local/share/icons/hicolor/icon-theme.cache
+desktop/.local/share/icons/hicolor/icon-theme.cache
 
 # credentials and secrets
 **/credentials.json

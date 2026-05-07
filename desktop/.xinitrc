@@ -52,4 +52,4 @@ _xinitrc() {
 
 # ------------------------------
 
-_xinitrc &> ~/.xlog
+_xinitrc &> ${XDG_STATE_HOME}/.xinit.log
