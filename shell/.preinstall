@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# Sourced by ./dotfiles before stowing the shell package.
+# Verifies secret-bearing submodules are populated; fetches them on demand.
+# Aborts the wrapper on auth/network failure so the user can fix and re-run.
+# shellcheck disable=SC2154  # err/warn/ok and dotfiles_source_root come from the wrapper
+
+_ensure_submodule() {
+   local _path="${dotfiles_source_root}/$1"
+
+   [[ -d "${_path}" ]] && [[ -n "$(ls -A "${_path}" 2>/dev/null)" ]] && return 0
+
+   warn "submodule '$1' empty — fetching"
+   git -C "${dotfiles_source_root}" submodule update --init --recursive -- "$1" || {
+      err "submodule '$1' fetch failed"
+      err "  authenticate first: gh auth login"
+      err "  then re-run:        ./dotfiles install shell"
+      exit 1
+   }
+
+   ok "submodule '$1' fetched"
+}
+
+_ensure_submodule "shell/.gnupg"
+_ensure_submodule "shell/.ssh"

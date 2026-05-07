@@ -12,18 +12,38 @@ Stow-managed dotfiles organized into three composable profiles.
 
 ## Bootstrap
 
-### Fresh machine
+The SSH and GnuPG keys live in **private** submodules at `shell/.ssh` and `shell/.gnupg`. The clone is therefore a 4-step dance:
+
+### 1. Clone-time deps
+
+The minimum you need to authenticate and clone:
+
+```sh
+sudo pacman -S --needed git stow github-cli
+```
+
+### 2. Authenticate to GitHub
+
+```sh
+gh auth login    # browser OAuth; configures git's credential helper
+```
+
+This wires the credential helper into git so the submodule clone in step 3 works without a PAT prompt. On a headless server, use `gh auth login --with-token < pat.txt`.
+
+### 3. Clone
 
 ```sh
 git clone --recurse-submodules https://github.com/andronics/dotfiles ~/.dotfiles
 cd ~/.dotfiles
 ```
 
-Install the system packages first (Arch / pacman shown; translate as needed):
+If you forgot `--recurse-submodules`, the `shell` package's `.preinstall` hook will detect and fetch them on first install.
+
+### 4. Install everything else, then stow
 
 ```sh
 # core (always)
-sudo pacman -S --needed zsh git tmux gnupg pass github-cli git-crypt stow \
+sudo pacman -S --needed zsh tmux gnupg pass git-crypt \
                         zoxide starship fzf eza bat \
                         zsh-autosuggestions zsh-syntax-highlighting
 paru   -S --needed fzf-tab
@@ -36,35 +56,39 @@ sudo pacman -S --needed bspwm sxhkd polybar picom dunst rofi gtk3 \
 sudo pacman -S --needed neofetch ranger spotifyd
 ```
 
-Then stow the profiles you want:
-
 ```sh
 ./dotfiles install shell                        # server
 ./dotfiles install shell desktop                # workstation
 ./dotfiles install shell desktop optional       # everything
 ```
 
-`./dotfiles` is a thin stow wrapper. Subcommands: `install` (`i`), `uninstall` (`u`), `reinstall` (`r`). With no args, acts on every package.
+`./dotfiles` is a thin stow wrapper. Subcommands: `install` (`i`), `uninstall` (`u`), `reinstall` (`r`). With no args, acts on every package. Per-package `.preinstall` / `.postinstall` hooks run automatically when present.
+
+### 5. (Optional) Switch this repo to SSH
+
+Now that the SSH key is on disk, future `git pull`s can use SSH instead of HTTPS:
+
+```sh
+git -C ~/.dotfiles remote set-url origin git@github.com:andronics/dotfiles
+```
 
 ### After updates
 
 ```sh
-git pull --recurse-submodules
+git -C ~/.dotfiles pull --recurse-submodules
 ./dotfiles reinstall shell desktop
 ```
 
 ## Submodules
 
-Two secrets repos are tracked as submodules. They live inside `shell/`:
+Two private secrets repos are tracked as submodules:
 
 - `shell/.gnupg` → personal GPG keyring
 - `shell/.ssh`   → SSH keys + `~/.ssh/config`
 
-A clone without `--recurse-submodules` will leave these empty. Fix with:
+`shell/.preinstall` validates they are populated before stow runs and will attempt `git submodule update --init --recursive` to fetch them. If that fails, you almost certainly need to `gh auth login` first.
 
-```sh
-git submodule update --init --recursive
-```
+`shell/.postinstall` enforces `chmod 700` on `~/.ssh` and `~/.gnupg` (sshd and gpg refuse loose-perm dirs) and runs `gpg-connect-agent reloadagent` so any newly-imported keys are picked up.
 
 
 ## Conventions
