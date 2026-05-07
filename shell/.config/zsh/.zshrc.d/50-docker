@@ -79,58 +79,33 @@ dcrua() {
 
 # docker network
 
-dnc() {
-
-    # Check if argument is provided
-    if [ $# -eq 0 ]; then
-        echo "Usage: create_docker_network <subnet_mask>"
-        echo "Example: create_docker_network 10.0.4.0/24"
+# Print the `docker network create` invocation for a subnet, using the last
+# IP in the range as the gateway. Was named `dnc` and shadowed by the
+# `dnc` alias below — and the original sed/IFS implementation was broken
+# under zsh anyway (sed `\{N\}` in the replacement isn't a quantifier;
+# `IFS=. read` doesn't split into an array). Rewritten with zsh integer
+# bit-ops so it actually works.
+docker-network-create-with-gateway() {
+    [[ $# -eq 0 ]] && {
+        echo "Usage: ${0} <subnet>"
+        echo "Example: ${0} 10.0.4.0/24"
         return 1
-    fi
+    }
 
-    # # Validate subnet mask format
-    if [[ ! "$1" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}/[0-9]{1,2}$ ]]; then
-        echo "Invalid subnet mask format. Use x.x.x.x/x"
+    [[ ! "$1" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}/[0-9]{1,2}$ ]] && {
+        echo "Invalid subnet format. Use x.x.x.x/y"
         return 1
-    fi
+    }
 
-    # Extract subnet and CIDR
-    subnet="$1"
-    network=$(echo "$subnet" | cut -d'/' -f1)
-    cidr=$(echo "$subnet" | cut -d'/' -f2)
+    local subnet="$1"
+    local network="${subnet%/*}"
+    local cidr="${subnet#*/}"
+    local host_bits=$(( 32 - cidr ))
+    local -a octets=( "${(@s:.:)network}" )
+    local ip_int=$(( (octets[1] << 24) | (octets[2] << 16) | (octets[3] << 8) | octets[4] ))
+    local last_int=$(( ip_int | ((1 << host_bits) - 1) ))
+    local gateway="$(( (last_int >> 24) & 0xff )).$(( (last_int >> 16) & 0xff )).$(( (last_int >> 8) & 0xff )).$(( last_int & 0xff ))"
 
-    # Calculate the last IP address as gateway
-    # First, convert IP to binary
-    IFS='.' read -r octets <<< "$network"
-    binary_ip=""
-    for octet in "${octets[@]}"; do
-        # Convert each octet to 8-bit binary
-        binary_octet=$(printf "%08d" $(echo "obase=2;$octet" | bc))
-        binary_ip+="$binary_octet"
-    done
-
-    # Calculate number of host bits
-    host_bits=$((32 - cidr))
-
-    # Set all host bits to 1 to get the last IP
-    last_binary_ip=$(echo "$binary_ip" | sed "s/0\{$host_bits\}$/1\{$host_bits\}/")
-
-    # Convert back to decimal IP
-    gateway=""
-    for ((i=0; i<4; i++)); do
-        # Extract 8 bits for each octet
-        binary_octet="${last_binary_ip:$((i*8)):8}"
-        # Convert binary to decimal
-        decimal_octet=$(echo "ibase=2;$binary_octet" | bc)
-        # Append to gateway, with dot except for last octet
-        if [ $i -lt 3 ]; then
-            gateway+="${decimal_octet}."
-        else
-            gateway+="${decimal_octet}"
-        fi
-    done
-
-    # Output Docker network create command
     echo "docker network create --subnet=${subnet} --gateway=${gateway} backend"
 }
 

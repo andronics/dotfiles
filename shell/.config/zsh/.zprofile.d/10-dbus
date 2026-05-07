@@ -1,1 +1,6 @@
-export DBUS_SESSION_BUS_ADDRESS="unix:path=${XDG_RUNTIME_DIR}/bus" # Temporary Patch 
+# dbus-broker (default on Arch) creates its session socket at
+# ${XDG_RUNTIME_DIR}/bus and dbus-launch exports DBUS_SESSION_BUS_ADDRESS
+# only into the X session it spawns. Shells that don't inherit from that
+# tree (SSH logins, tmux outside X, systemd user services) need the
+# address set explicitly so they can reach the bus.
+export DBUS_SESSION_BUS_ADDRESS="unix:path=${XDG_RUNTIME_DIR}/bus"
