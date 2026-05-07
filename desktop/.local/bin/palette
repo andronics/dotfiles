@@ -4,25 +4,29 @@ name=$(basename $0)
 
 # ------------------------------
 
-source "$(which _xdg)" >/dev/null 2>&1 || true
+if ! source "${DOTLIB}/_xdg" 2>/dev/null; then
+    echo "[ERROR] _xdg requires _xdg v2.0 - cannot load" >&2
+    return 1
+fi
+
 
 # Setup XDG directories using extension library
-xdg-setup-dirs "${name}"
+xdg-config-dir "${name}"
 
 # Backward-compatible aliases
-palette_cache_dir="${XDG_CACHE_DIR}"
-palette_config_dir="${XDG_CONFIG_DIR}"
-palette_data_dir="${XDG_DATA_DIR}"
+palette_cache_dir=$(xdg-cache-dir "${name}")
+palette_config_dir=$(xdg-config-dir "${name}")
+palette_data_dir=$(xdg-data-dir "${name}")
 
 # ------------------------------
 
-source "$(which _args)"
+
 
 # ------------------------------
 
 _palette() {
-    _filter=$1
-    cat "${palette_config_dir}/palette.conf" | awk  "/^${_filter}/{ print \$2 }"
+    local _filter=$1
+    awk -v f="${_filter}" '$1==f {print $2}' "$(xdg-config-dir "${name}")/palette.conf"
 }
 
 # ------------------------------

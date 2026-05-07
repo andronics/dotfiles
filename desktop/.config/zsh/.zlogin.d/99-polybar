@@ -1,10 +1,16 @@
 [[ -n "${DISPLAY}" || "${WAYLAND_DISPLAY}" ]] && {
-	(
-		while true; do
-			[[ `pgrep -x "bspwm"` ]] && {
-				pgrep -x "polybar" > /dev/null || polybar -q -r main &
-				break
-			} || sleep 0.25
-		done
-	) &
+    (
+        # Wait up to 10s for bspwm; bail rather than poll forever.
+        _attempts=40
+        while (( _attempts-- > 0 )); do
+            pgrep -x bspwm >/dev/null && break
+            sleep 0.25
+        done
+
+        pgrep -x bspwm   >/dev/null || exit 1
+        pgrep -x polybar >/dev/null && exit 0
+
+        export HOST_MONITOR="$(bspc query -M --names | head -1)"
+        polybar -q -r "${POLYBAR_BAR:-main}" &
+    ) &
 }
