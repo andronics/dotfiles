@@ -1,0 +1,9 @@
+[Unit]
+Description=Remote Cloud Syncronisation
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/remote sync "%i"
+
+[Install]
+WantedBy=timers.target

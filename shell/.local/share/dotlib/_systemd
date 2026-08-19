@@ -142,7 +142,16 @@ systemd-get-state() {
     local unit="$1"
     local scope="${2:-$SYSTEMD_DEFAULT_SCOPE}"
 
-    systemctl $scope is-active "$unit" 2>/dev/null || echo "inactive"
+    # `systemctl is-active` already prints the state word (active, inactive,
+    # failed, ...) on both success and failure exit codes - it only ever
+    # prints nothing if systemctl itself couldn't run. The `|| true` matters
+    # under callers running with `set -e` (e.g. dotlib wrappers): is-active
+    # exits non-zero for every non-active unit as a matter of course, and
+    # without the guard that would abort the caller's script right here,
+    # before this function ever reaches its own echo.
+    local state
+    state=$(systemctl $scope is-active "$unit" 2>/dev/null) || true
+    echo "${state:-inactive}"
 }
 
 # Check if service exists (unit file is present)

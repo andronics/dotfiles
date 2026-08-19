@@ -1,0 +1,29 @@
+{
+    "(banner|coverart|fanart|poster).jpg$": [
+        ["mimetype", "eq", "image/jpeg"]
+    ],
+    "(movie|tvshow).nfo$": [
+        ["mimetype", "eq", "text/xml"]
+    ],
+    ".(srt|sub)$": [
+        ["mimetype", "eq", "application/x-subrip"]
+    ],
+    ".m4b$": [
+        ["audio_format", "eq", "MPEG"],
+        ["audio_bitrate", "le", 128000],
+        ["mimetype", "eq", "video/mp4"]
+    ],
+    ".mp3$": [
+        ["audio_format", "eq", "MPEG"],
+        ["audio_bitrate", "le", 128000],
+        ["mimetype", "eq", "audio/mpeg"]
+    ],
+    ".mp4$": [
+        ["audio_format", "in", "AAC|AC-3|E-AC-3"],
+        ["audio_bitrate", "le", 256000],
+        ["mimetype", "eq", "video/mp4"],
+        ["video_bitdepth", "in", "8|10"],
+        ["video_bitrate", "lt", 1280000],
+        ["video_bitrate", "gt", 640000]
+    ]
+}

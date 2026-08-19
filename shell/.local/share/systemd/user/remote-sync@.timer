@@ -1,0 +1,10 @@
+[Unit]
+Description=Remote Cloud Syncronisation
+
+[Timer]
+OnCalendar=*-*-* 0/4:00:00
+Persistent=true
+RandomDelaySec=5min
+
+[Install]
+WantedBy=timers.target

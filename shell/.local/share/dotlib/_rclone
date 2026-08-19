@@ -922,6 +922,8 @@ rclone-copy() {
 rclone-move() {
     local src="$1"
     local dst="$2"
+    shift 2
+    local -a extra_opts=("$@")
 
     common-validate-required "$src" "source path" || return 2
     common-validate-required "$dst" "destination path" || return 2
@@ -931,6 +933,10 @@ rclone-move() {
     fi
 
     local -a args=($(_rclone-build-args))
+
+    if [[ ${#extra_opts[@]} -gt 0 ]]; then
+        args+=("${extra_opts[@]}")
+    fi
 
     log-info "Moving" "src=$src" "dst=$dst"
     _rclone-emit "$RCLONE_EVENT_TRANSFER_START" "operation=move" "src=$src" "dst=$dst"

@@ -1,0 +1,141 @@
+#!/usr/bin/env zsh
+
+# _remote_config - units/credentials/roots/filters config model for _remote
+# Part of the dotfiles library v2.0
+#
+# Loads the four JSON config files under $XDG_CONFIG_HOME/remote/ once at
+# source time and exposes typed getters over them. credentials.json holds
+# live OAuth client secrets + refresh tokens - see .gitignore's
+# **/credentials.json entry, it must never be tracked.
+#
+# Usage:
+#   source "${DOTLIB}/_remote_config"
+#
+# Dependencies:
+#   Required:
+#     - _common, _jq, _xdg: core utilities / JSON queries / XDG paths
+
+[[ -n "${REMOTE_CONFIG_LOADED:-}" ]] && return 0
+declare -gr REMOTE_CONFIG_LOADED=1
+
+source "${DOTLIB}/_common" || { echo "[ERROR] _remote_config requires _common" >&2; return 1; }
+source "${DOTLIB}/_log"    2>/dev/null || true
+source "${DOTLIB}/_jq"     || { echo "[ERROR] _remote_config requires _jq" >&2; return 1; }
+source "${DOTLIB}/_xdg"    || { echo "[ERROR] _remote_config requires _xdg" >&2; return 1; }
+
+declare -g _REMOTE_CONFIG_DIR="$(xdg-config-dir "remote")"
+declare -g _REMOTE_CONFIG_CREDENTIALS="$(cat "${_REMOTE_CONFIG_DIR}/credentials.json")"
+declare -g _REMOTE_CONFIG_FILTERS="$(cat "${_REMOTE_CONFIG_DIR}/filters2.json")"
+declare -g _REMOTE_CONFIG_ROOTS="$(cat "${_REMOTE_CONFIG_DIR}/roots.json")"
+declare -g _REMOTE_CONFIG_UNITS="$(cat "${_REMOTE_CONFIG_DIR}/units.json")"
+
+# Usage: _remote-config-query <credentials|filters|roots|units> "<jq filter>"
+# Generic escape hatch for the dynamic-index queries filter evaluation needs.
+_remote-config-query() {
+    case "$1" in
+        credentials) echo "${_REMOTE_CONFIG_CREDENTIALS}" | jq-query "$2" ;;
+        filters)     echo "${_REMOTE_CONFIG_FILTERS}"     | jq-query "$2" ;;
+        roots)       echo "${_REMOTE_CONFIG_ROOTS}"       | jq-query "$2" ;;
+        units)       echo "${_REMOTE_CONFIG_UNITS}"       | jq-query "$2" ;;
+        *)
+            log-error "_remote-config-query: unknown domain: $1"
+            return 1
+            ;;
+    esac
+}
+
+_remote-config-units() {
+    _remote-config-query "units" ". | keys[]"
+}
+
+_remote-config-unit() {
+    _remote-config-query "units" ".\"$1\""
+}
+
+_remote-config-unit-exists() {
+    [[ "$(_remote-config-unit "$1")" != "null" ]]
+}
+
+_remote-config-unit-mountpoint() {
+    _remote-config-query "units" ".\"$1\".mountpoint"
+}
+
+_remote-config-unit-credentials() {
+    _remote-config-query "units" ".\"$1\".credentials"
+}
+
+_remote-config-unit-drive-id() {
+    local _v
+    _v=$(_remote-config-query "units" ".\"$1\".drive_id")
+    [[ "${_v}" == "null" ]] && _v=""
+    echo "${_v}"
+}
+
+_remote-config-unit-root-folder-id() {
+    local _v
+    _v=$(_remote-config-query "units" ".\"$1\".root_folder_id")
+    [[ "${_v}" == "null" ]] && _v=""
+    echo "${_v}"
+}
+
+_remote-config-unit-uid() {
+    local _v
+    _v=$(_remote-config-query "units" ".\"$1\".uid")
+    [[ "${_v}" == "null" ]] && _v="1000"
+    echo "${_v}"
+}
+
+_remote-config-unit-gid() {
+    local _v
+    _v=$(_remote-config-query "units" ".\"$1\".gid")
+    [[ "${_v}" == "null" ]] && _v="984"
+    echo "${_v}"
+}
+
+# Usage: _remote-config-root local|remote
+_remote-config-root() {
+    _remote-config-query "roots" ".$1"
+}
+
+_remote-config-credentials-for() {
+    _remote-config-query "credentials" ".\"$1\""
+}
+
+_remote-config-filter-rules() {
+    _remote-config-query "filters" ".\"$1\""
+}
+
+_remote-config-filter-patterns() {
+    _remote-config-query "filters" ". | keys[]"
+}
+
+# Usage: _remote-config-render-rclone-conf <unit>
+# Renders an rclone.conf [unit] stanza from units.json + credentials.json.
+# Kept custom (not delegated to _rclone's rclone-create-remote, which shells
+# out to the interactive `rclone config` TUI - unsuitable for unattended,
+# multi-account mounts).
+_remote-config-render-rclone-conf() {
+    local _unit_name="$1"
+    local _unit_credentials _unit_drive_id _unit_root_folder_id
+    local _client_id _client_secret _scope _token
+
+    _unit_credentials=$(_remote-config-unit-credentials "${_unit_name}")
+    _unit_drive_id=$(_remote-config-unit-drive-id "${_unit_name}")
+    _unit_root_folder_id=$(_remote-config-unit-root-folder-id "${_unit_name}")
+
+    _client_id=$(_remote-config-query "credentials" ".\"${_unit_credentials}\".client_id")
+    _client_secret=$(_remote-config-query "credentials" ".\"${_unit_credentials}\".client_secret")
+    _scope=$(_remote-config-query "credentials" ".\"${_unit_credentials}\".scope")
+    _token=$(_remote-config-query "credentials" ".\"${_unit_credentials}\".token" | tr -d '\n|[:space:]')
+
+    cat <<EOF
+[${_unit_name}]
+type = drive
+client_id = ${_client_id}
+client_secret = ${_client_secret}
+root_folder_id = ${_unit_root_folder_id}
+scope = ${_scope}
+team_drive = ${_unit_drive_id}
+token = ${_token}
+EOF
+}

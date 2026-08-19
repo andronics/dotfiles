@@ -1,0 +1,97 @@
+#!/usr/bin/env zsh
+
+# _remote_filters - media-property filter evaluation engine for _remote
+# Part of the dotfiles library v2.0
+#
+# Filter rules live in filters2.json: { "<filename regex>": [[prop, op, value], ...] }
+# Media properties beyond mimetype are extracted with mediainfo.
+#
+# Usage:
+#   source "${DOTLIB}/_remote_filters"
+#
+# Dependencies:
+#   Required:
+#     - _common, _jq: core utilities / JSON queries
+#     - _remote_config: filter rule source
+
+[[ -n "${REMOTE_FILTERS_LOADED:-}" ]] && return 0
+declare -gr REMOTE_FILTERS_LOADED=1
+
+source "${DOTLIB}/_common"        || { echo "[ERROR] _remote_filters requires _common" >&2; return 1; }
+source "${DOTLIB}/_log"           2>/dev/null || true
+source "${DOTLIB}/_jq"            || { echo "[ERROR] _remote_filters requires _jq" >&2; return 1; }
+source "${DOTLIB}/_remote_config" || { echo "[ERROR] _remote_filters requires _remote_config" >&2; return 1; }
+
+# mediainfo JSON for whatever file was last inspected by
+# _remote-filters-check-file, cached per-file to avoid re-invoking mediainfo
+# for each property a filter rule checks.
+declare -g _REMOTE_FILTERS_MEDIA="{}"
+
+_remote-filters-media-query() {
+    echo "${_REMOTE_FILTERS_MEDIA}" | jq-query "$1"
+}
+
+# Usage: _remote-filters-evaluate "property" "operator" "expected" "actual"
+# operators: eq ne lt le gt ge in (pipe-separated option list)
+_remote-filters-evaluate() {
+    local _prop="$1" _op="$2" _expected="$3" _actual="$4"
+
+    case "${_op}" in
+        eq) [[ "${_actual}" == "${_expected}" ]] ;;
+        ne) [[ "${_actual}" != "${_expected}" ]] ;;
+        lt) [[ "${_actual}" -lt "${_expected}" ]] 2>/dev/null ;;
+        le) [[ "${_actual}" -le "${_expected}" ]] 2>/dev/null ;;
+        gt) [[ "${_actual}" -gt "${_expected}" ]] 2>/dev/null ;;
+        ge) [[ "${_actual}" -ge "${_expected}" ]] 2>/dev/null ;;
+        in) [[ "${_expected}" =~ (^|\|)"${_actual}"(\||$) ]] ;;
+        *)
+            log-warning "_remote-filters-evaluate: unknown operator: ${_op}"
+            return 1
+            ;;
+    esac
+}
+
+# Usage: _remote-filters-check-file "filename_pattern" "filepath"
+# Returns 0 if every rule for that pattern passes.
+_remote-filters-check-file() {
+    local _pattern="$1" _filepath="$2"
+
+    local _filter_rules
+    _filter_rules=$(_remote-config-filter-rules "${_pattern}")
+    [[ "${_filter_rules}" == "null" ]] && return 1
+
+    local _filter_count
+    _filter_count=$(_remote-config-query "filters" ".\"${_pattern}\" | length")
+
+    local _i _prop _op _expected _actual
+    for ((_i = 0; _i < _filter_count; _i++)); do
+        _prop=$(_remote-config-query "filters" ".\"${_pattern}\"[${_i}][0]")
+        _op=$(_remote-config-query "filters" ".\"${_pattern}\"[${_i}][1]")
+        _expected=$(_remote-config-query "filters" ".\"${_pattern}\"[${_i}][2]")
+        _actual=""
+
+        case "${_prop}" in
+            mimetype)
+                _actual=$(file -b --mime-type "${_filepath}")
+                ;;
+            audio_format|audio_bitrate|video_bitdepth|video_bitrate|video_height|video_width)
+                _REMOTE_FILTERS_MEDIA=$(mediainfo --Output=JSON "${_filepath}" 2>/dev/null)
+                case "${_prop}" in
+                    audio_format)   _actual=$(_remote-filters-media-query 'first(.media.track[]? | select(.["@type"]=="Audio") | .Format // "")') ;;
+                    audio_bitrate)  _actual=$(_remote-filters-media-query 'first(.media.track[]? | select(.["@type"]=="Audio") | .BitRate // "0")') ;;
+                    video_bitdepth) _actual=$(_remote-filters-media-query 'first(.media.track[]? | select(.["@type"]=="Video") | .BitDepth // "0")') ;;
+                    video_bitrate)  _actual=$(_remote-filters-media-query 'first(.media.track[]? | select(.["@type"]=="Video") | .BitRate // "0")') ;;
+                    video_height)   _actual=$(_remote-filters-media-query 'first(.media.track[]? | select(.["@type"]=="Video") | .Height // "0")') ;;
+                    video_width)    _actual=$(_remote-filters-media-query 'first(.media.track[]? | select(.["@type"]=="Video") | .Width // "0")') ;;
+                esac
+                ;;
+        esac
+
+        if ! _remote-filters-evaluate "${_prop}" "${_op}" "${_expected}" "${_actual}"; then
+            log-debug "Filter failed: ${_prop} ${_op} ${_expected} (got: ${_actual})"
+            return 1
+        fi
+    done
+
+    return 0
+}
