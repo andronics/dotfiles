@@ -73,45 +73,38 @@ plugin-discover() {
         paths=("${PLUGINS_SEARCH_PATHS[@]}")
     fi
 
-    echo "[DEBUG plugin-discover] Search paths: ${paths[@]}" >&2
 
     local discovered=0
-    for path in "${paths[@]}"; do
-        echo "[DEBUG plugin-discover] Checking path: $path" >&2
-        if [[ ! -d "$path" ]]; then
-            echo "[DEBUG plugin-discover] Path does not exist: $path" >&2
+    local plugin_file
+    local search_dir
+    for search_dir in "${paths[@]}"; do
+        if [[ ! -d "$search_dir" ]]; then
             continue
         fi
-        echo "[DEBUG plugin-discover] Path exists, searching for plugin files..." >&2
 
         # Find all plugin.yaml/yml files using zsh globs
-        local plugin_file
-        for plugin_file in "$path"/**/plugin.{yaml,yml}(N); do
-            echo "[DEBUG plugin-discover] Found candidate: $plugin_file" >&2
+        for plugin_file in "$search_dir"/**/plugin.{yaml,yml}(N); do
             [[ ! -f "$plugin_file" ]] && continue
 
             # Use zsh parameter expansion instead of external commands
             local plugin_dir="${plugin_file:h}"      # :h removes filename (dirname)
             local plugin_name="${plugin_dir:t}"      # :t gets tail (basename)
 
-            echo "[DEBUG plugin-discover] Loading metadata for: $plugin_name from $plugin_file" >&2
             if _plugin-load-metadata "$plugin_name" "$plugin_file"; then
                 ((discovered++)) || true
                 _PLUGINS_STATE[$plugin_name]="discovered"
                 _PLUGINS_PATHS[$plugin_name]="$plugin_dir"
 
-                echo "[DEBUG plugin-discover] Successfully loaded plugin: $plugin_name" >&2
-                [[ -n "${_LOG_LOADED:-}" ]] && \
+                [[ -n "${LOG_LOADED:-}" ]] && \
                     log-debug "Discovered plugin: $plugin_name at $plugin_dir"
             else
-                echo "[DEBUG plugin-discover] Failed to load metadata for: $plugin_name" >&2
-                [[ -n "${_LOG_LOADED:-}" ]] && \
-                    log-warn "Failed to load plugin metadata: $plugin_name"
+                [[ -n "${LOG_LOADED:-}" ]] && \
+                    log-warning "Failed to load plugin metadata: $plugin_name"
             fi
         done
     done
 
-    [[ -n "${_LOG_LOADED:-}" ]] && \
+    [[ -n "${LOG_LOADED:-}" ]] && \
         log-info "Discovered $discovered plugins"
 
     return 0
@@ -134,7 +127,7 @@ _plugin-load-metadata() {
     version="$(echo "$metadata" | /usr/bin/jq -r '.version // empty')"
 
     if [[ -z "$plugin_name" || -z "$version" ]]; then
-        [[ -n "${_LOG_LOADED:-}" ]] && \
+        [[ -n "${LOG_LOADED:-}" ]] && \
             log-error "Plugin metadata missing required fields: name, version"
         return 1
     fi
@@ -162,7 +155,7 @@ plugin-get-metadata() {
     local name="$1"
 
     if [[ -z "${_PLUGINS_REGISTRY[$name]:-}" ]]; then
-        [[ -n "${_LOG_LOADED:-}" ]] && \
+        [[ -n "${LOG_LOADED:-}" ]] && \
             log-error "Plugin not found: $name"
         return 1
     fi
@@ -241,7 +234,7 @@ plugin-enable() {
     local name="$1"
 
     if [[ ! -v "_PLUGINS_REGISTRY[$name]" ]]; then
-        [[ -n "${_LOG_LOADED:-}" ]] && \
+        [[ -n "${LOG_LOADED:-}" ]] && \
             log-error "Cannot enable unknown plugin: $name"
         return 1
     fi
@@ -249,7 +242,7 @@ plugin-enable() {
     /bin/mkdir -p "$PLUGINS_CONFIG_DIR"
     rm -f "$PLUGINS_CONFIG_DIR/$name.disabled"
 
-    [[ -n "${_LOG_LOADED:-}" ]] && \
+    [[ -n "${LOG_LOADED:-}" ]] && \
         log-info "Enabled plugin: $name"
 
     return 0
@@ -261,7 +254,7 @@ plugin-disable() {
     local name="$1"
 
     if [[ ! -v "_PLUGINS_REGISTRY[$name]" ]]; then
-        [[ -n "${_LOG_LOADED:-}" ]] && \
+        [[ -n "${LOG_LOADED:-}" ]] && \
             log-error "Cannot disable unknown plugin: $name"
         return 1
     fi
@@ -269,7 +262,7 @@ plugin-disable() {
     /bin/mkdir -p "$PLUGINS_CONFIG_DIR"
     touch "$PLUGINS_CONFIG_DIR/$name.disabled"
 
-    [[ -n "${_LOG_LOADED:-}" ]] && \
+    [[ -n "${LOG_LOADED:-}" ]] && \
         log-info "Disabled plugin: $name"
 
     return 0
@@ -285,76 +278,63 @@ plugin-disable() {
 plugin-load() {
     local name="$1"
 
-    echo "[DEBUG plugin-load] Loading plugin: $name" >&2
 
     # Check if already loaded or initialized
     local state="${_PLUGINS_STATE[$name]:-}"
-    echo "[DEBUG plugin-load] Current state: '$state'" >&2
     if [[ "$state" == "loaded" || "$state" == "initialized" ]]; then
-        [[ -n "${_LOG_LOADED:-}" ]] && \
+        [[ -n "${LOG_LOADED:-}" ]] && \
             log-debug "Plugin already loaded: $name"
-        echo "[DEBUG plugin-load] Already loaded, returning 0" >&2
         return 0
     fi
 
     # Check if discovered
     if [[ "$state" != "discovered" ]]; then
-        [[ -n "${_LOG_LOADED:-}" ]] && \
+        [[ -n "${LOG_LOADED:-}" ]] && \
             log-error "Cannot load plugin not yet discovered: $name"
-        echo "[DEBUG plugin-load] State is not 'discovered', failing" >&2
         return 1
     fi
 
     # Check if enabled
-    echo "[DEBUG plugin-load] Checking if enabled..." >&2
     if ! plugin-is-enabled "$name"; then
-        [[ -n "${_LOG_LOADED:-}" ]] && \
+        [[ -n "${LOG_LOADED:-}" ]] && \
             log-info "Skipping disabled plugin: $name"
         _PLUGINS_STATE[$name]="disabled"
-        echo "[DEBUG plugin-load] Plugin is disabled" >&2
         return 0
     fi
-    echo "[DEBUG plugin-load] Plugin is enabled" >&2
 
     # Get plugin directory
     local plugin_dir="${_PLUGINS_PATHS[$name]:-}"
-    echo "[DEBUG plugin-load] Plugin dir: '$plugin_dir'" >&2
     if [[ -z "$plugin_dir" || ! -d "$plugin_dir" ]]; then
-        [[ -n "${_LOG_LOADED:-}" ]] && \
+        [[ -n "${LOG_LOADED:-}" ]] && \
             log-error "Plugin directory not found: $name"
         _PLUGINS_STATE[$name]="failed"
-        echo "[DEBUG plugin-load] Plugin directory not found or not a directory" >&2
         return 1
     fi
 
     # Find plugin code file
     local plugin_code="$plugin_dir/plugin.zsh"
-    echo "[DEBUG plugin-load] Plugin code path: '$plugin_code'" >&2
     if [[ ! -f "$plugin_code" ]]; then
-        [[ -n "${_LOG_LOADED:-}" ]] && \
+        [[ -n "${LOG_LOADED:-}" ]] && \
             log-error "Plugin code not found: $plugin_code"
         _PLUGINS_STATE[$name]="failed"
-        echo "[DEBUG plugin-load] Plugin code file not found" >&2
         return 1
     fi
 
     # Source plugin code
-    echo "[DEBUG plugin-load] Sourcing plugin code..." >&2
     # Temporarily allow stderr to see what's failing
     if source "$plugin_code" >&2; then
         _PLUGINS_STATE[$name]="loaded"
-        [[ -n "${_LOG_LOADED:-}" ]] && \
+        [[ -n "${LOG_LOADED:-}" ]] && \
             log-info "Loaded plugin: $name"
-        echo "[DEBUG plugin-load] Successfully sourced plugin code" >&2
 
         # Emit event
-        [[ -n "${_EVENTS_LOADED:-}" ]] && \
-            event-emit "plugin.loaded" "$name"
+        [[ -n "${EVENTS_LOADED:-}" ]] && \
+            events-emit "plugin.loaded" "$name"
 
         return 0
     else
         _PLUGINS_STATE[$name]="failed"
-        [[ -n "${_LOG_LOADED:-}" ]] && \
+        [[ -n "${LOG_LOADED:-}" ]] && \
             log-error "Failed to load plugin code: $name"
         return 1
     fi
@@ -370,25 +350,19 @@ plugin-load() {
 plugin-init() {
     local name="$1"
 
-    echo "[DEBUG plugin-init] Initializing plugin: $name" >&2
 
     # Ensure plugin is loaded
     local state="${_PLUGINS_STATE[$name]:-}"
-    echo "[DEBUG plugin-init] Current state: '$state'" >&2
     if [[ "$state" == "initialized" ]]; then
-        [[ -n "${_LOG_LOADED:-}" ]] && \
+        [[ -n "${LOG_LOADED:-}" ]] && \
             log-debug "Plugin already initialized: $name"
-        echo "[DEBUG plugin-init] Already initialized, returning 0" >&2
         return 0
     fi
 
     if [[ "$state" != "loaded" ]]; then
-        echo "[DEBUG plugin-init] Plugin not loaded, calling plugin-load..." >&2
         if ! plugin-load "$name"; then
-            echo "[DEBUG plugin-init] plugin-load FAILED" >&2
             return 1
         fi
-        echo "[DEBUG plugin-init] plugin-load succeeded" >&2
     fi
 
     # Check if plugin has init function
@@ -402,17 +376,17 @@ plugin-init() {
     # Call init function
     if "$init_func"; then
         _PLUGINS_STATE[$name]="initialized"
-        [[ -n "${_LOG_LOADED:-}" ]] && \
+        [[ -n "${LOG_LOADED:-}" ]] && \
             log-info "Initialized plugin: $name"
 
         # Emit event
-        [[ -n "${_EVENTS_LOADED:-}" ]] && \
-            event-emit "plugin.initialized" "$name"
+        [[ -n "${EVENTS_LOADED:-}" ]] && \
+            events-emit "plugin.initialized" "$name"
 
         return 0
     else
         _PLUGINS_STATE[$name]="failed"
-        [[ -n "${_LOG_LOADED:-}" ]] && \
+        [[ -n "${LOG_LOADED:-}" ]] && \
             log-error "Plugin initialization failed: $name"
         return 1
     fi
@@ -431,7 +405,6 @@ _plugin-get-dep-list() {
     shift
     local -a visited=("$@")
 
-    echo "[DEBUG _plugin-get-dep-list] Called for: $name, visited so far: ${visited[@]}" >&2
 
     # Check for circular dependency
     if (( ${visited[(I)$name]} )); then
@@ -444,7 +417,6 @@ _plugin-get-dep-list() {
 
     # Get dependencies
     local deps="${_PLUGINS_DEPS[$name]:-}"
-    echo "[DEBUG _plugin-get-dep-list] Dependencies for $name: '$deps'" >&2
 
     # Recursively resolve each dependency first
     if [[ -n "$deps" ]]; then
@@ -475,7 +447,6 @@ _plugin-resolve-deps() {
     local name="$1"
     local visited_var="$2"
 
-    echo "[DEBUG _plugin-resolve-deps] Called for plugin: $name, visited_var: $visited_var" >&2
 
     # Create visited array if it doesn't exist
     if ! typeset -p "$visited_var" &>/dev/null; then
@@ -484,9 +455,8 @@ _plugin-resolve-deps() {
 
     # Check for circular dependency
     local -a visited=("${(@P)visited_var}")
-    echo "[DEBUG _plugin-resolve-deps] Current visited before adding: ${visited[@]}" >&2
     if (( ${visited[(I)$name]} )); then
-        [[ -n "${_LOG_LOADED:-}" ]] && \
+        [[ -n "${LOG_LOADED:-}" ]] && \
             log-error "Circular dependency detected: ${visited[*]} -> $name"
         return 1
     fi
@@ -496,16 +466,12 @@ _plugin-resolve-deps() {
     # Use typeset -g to ensure we're modifying the global variable
     typeset -g -a "$visited_var"
     eval "$visited_var=(\"\${visited[@]}\")"
-    echo "[DEBUG _plugin-resolve-deps] After adding $name to visited (local): ${visited[@]}" >&2
     # Verify the parent variable was updated
     local -a check_visited=("${(@P)visited_var}")
-    echo "[DEBUG _plugin-resolve-deps] Parent $visited_var after update: ${check_visited[@]}" >&2
 
     # Get dependencies
     local deps="${_PLUGINS_DEPS[$name]:-}"
-    echo "[DEBUG _plugin-resolve-deps] Dependencies for $name: '$deps'" >&2
     if [[ -z "$deps" ]]; then
-        echo "[DEBUG _plugin-resolve-deps] No dependencies, returning 0" >&2
         return 0
     fi
 
@@ -516,7 +482,7 @@ _plugin-resolve-deps() {
 
         # Check if dependency exists
         if [[ ! -v "_PLUGINS_REGISTRY[$dep]" ]]; then
-            [[ -n "${_LOG_LOADED:-}" ]] && \
+            [[ -n "${LOG_LOADED:-}" ]] && \
                 log-error "Plugin $name depends on unknown plugin: $dep"
             return 1
         fi
@@ -534,46 +500,34 @@ _plugin-resolve-deps() {
 plugin-init-all() {
     local -a init_order=()
     local -a processed=()
-
-    echo "[DEBUG plugin-init-all] _PLUGINS_REGISTRY keys: ${(k)_PLUGINS_REGISTRY[@]}" >&2
+    local dep_list dep
 
     # Build dependency-ordered initialization list
     for name in "${(@k)_PLUGINS_REGISTRY}"; do
-        echo "[DEBUG plugin-init-all] Processing plugin: $name" >&2
         # Skip if already processed
         if (( ${processed[(I)$name]} )); then
-            echo "[DEBUG plugin-init-all] Already processed: $name" >&2
             continue
         fi
 
         # Skip if disabled
-        echo "[DEBUG plugin-init-all] Checking if enabled: $name" >&2
         if ! plugin-is-enabled "$name"; then
-            echo "[DEBUG plugin-init-all] Plugin is DISABLED: $name" >&2
-            [[ -n "${_LOG_LOADED:-}" ]] && \
+            [[ -n "${LOG_LOADED:-}" ]] && \
                 log-debug "Skipping disabled plugin: $name"
             _PLUGINS_STATE[$name]="disabled"
             continue
         fi
-        echo "[DEBUG plugin-init-all] Plugin is enabled: $name" >&2
 
         # Resolve dependencies - get list of dependencies in order
-        echo "[DEBUG plugin-init-all] Resolving dependencies for: $name" >&2
-        local dep_list
         dep_list=$(_plugin-get-dep-list "$name") || {
-            echo "[DEBUG plugin-init-all] Dependency resolution FAILED for: $name" >&2
-            [[ -n "${_LOG_LOADED:-}" ]] && \
+            [[ -n "${LOG_LOADED:-}" ]] && \
                 log-error "Failed to resolve dependencies for: $name"
             _PLUGINS_STATE[$name]="failed"
             continue
         }
-        echo "[DEBUG plugin-init-all] Dependencies resolved for: $name, list: $dep_list" >&2
 
         # Add plugin and its dependencies to init order
-        local dep
         for dep in ${(f)dep_list}; do
             [[ -z "$dep" ]] && continue
-            echo "[DEBUG plugin-init-all] Adding dep to init_order: $dep" >&2
             # Skip if already in init order
             (( ${init_order[(I)$dep]} )) && continue
             init_order+=("$dep")
@@ -584,31 +538,26 @@ plugin-init-all() {
     # Store init order
     _PLUGINS_INIT_ORDER=("${init_order[@]}")
 
-    echo "[DEBUG plugin-init-all] Init order: ${init_order[*]}" >&2
-    [[ -n "${_LOG_LOADED:-}" ]] && \
+    [[ -n "${LOG_LOADED:-}" ]] && \
         log-info "Plugin initialization order: ${init_order[*]}"
 
     # Initialize each plugin in order
     local failed=0
     for name in "${init_order[@]}"; do
-        echo "[DEBUG plugin-init-all] Initializing plugin: $name" >&2
         if ! plugin-init "$name"; then
             ((failed++)) || true
-            echo "[DEBUG plugin-init-all] Plugin initialization FAILED: $name" >&2
-            [[ -n "${_LOG_LOADED:-}" ]] && \
+            [[ -n "${LOG_LOADED:-}" ]] && \
                 log-error "Failed to initialize plugin: $name"
-        else
-            echo "[DEBUG plugin-init-all] Plugin initialization SUCCESS: $name" >&2
         fi
     done
 
     if (( failed > 0 )); then
-        [[ -n "${_LOG_LOADED:-}" ]] && \
-            log-warn "Plugin initialization completed with $failed failures"
+        [[ -n "${LOG_LOADED:-}" ]] && \
+            log-warning "Plugin initialization completed with $failed failures"
         return 1
     fi
 
-    [[ -n "${_LOG_LOADED:-}" ]] && \
+    [[ -n "${LOG_LOADED:-}" ]] && \
         log-info "Successfully initialized ${#init_order[@]} plugins"
 
     return 0
@@ -654,10 +603,9 @@ plugin-validate() {
 
     # Check required fields
     local required_fields=("name" "version" "description")
-    local field
+    local field value
     for field in "${required_fields[@]}"; do
-        local value
-        value="$(echo "$metadata" | jq -r ".$field // empty")"
+        value="$(echo "$metadata" | /usr/bin/jq -r ".$field // empty")"
         if [[ -z "$value" ]]; then
             echo "Missing required field '$field' in plugin: $name"
             return 1
@@ -706,7 +654,7 @@ plugin-info() {
     echo "Path: ${_PLUGINS_PATHS[$name]:-unknown}"
     echo ""
     echo "Metadata:"
-    echo "$metadata" | jq '.'
+    echo "$metadata" | /usr/bin/jq '.'
 
     local deps="${_PLUGINS_DEPS[$name]:-}"
     if [[ -n "$deps" ]]; then
@@ -726,30 +674,24 @@ plugin-info() {
 # Discover and initialize all plugins (convenience function)
 # Returns: 0 on success, 1 on error
 plugin-bootstrap() {
-    [[ -n "${_LOG_LOADED:-}" ]] && \
+    [[ -n "${LOG_LOADED:-}" ]] && \
         log-info "Bootstrapping plugin system..."
 
     # Discover all plugins
-    echo "[DEBUG plugin-bootstrap] Calling plugin-discover..." >&2
     plugin-discover || {
-        [[ -n "${_LOG_LOADED:-}" ]] && \
+        [[ -n "${LOG_LOADED:-}" ]] && \
             log-error "Plugin discovery failed"
-        echo "[DEBUG plugin-bootstrap] plugin-discover failed!" >&2
         return 1
     }
-    echo "[DEBUG plugin-bootstrap] plugin-discover succeeded, found plugins: ${(k)_PLUGINS_METADATA[@]}" >&2
 
     # Initialize all plugins
-    echo "[DEBUG plugin-bootstrap] Calling plugin-init-all..." >&2
     plugin-init-all || {
-        [[ -n "${_LOG_LOADED:-}" ]] && \
-            log-warn "Some plugins failed to initialize"
-        echo "[DEBUG plugin-bootstrap] plugin-init-all failed!" >&2
+        [[ -n "${LOG_LOADED:-}" ]] && \
+            log-warning "Some plugins failed to initialize"
         return 1
     }
-    echo "[DEBUG plugin-bootstrap] plugin-init-all succeeded" >&2
 
-    [[ -n "${_LOG_LOADED:-}" ]] && \
+    [[ -n "${LOG_LOADED:-}" ]] && \
         log-info "Plugin system ready"
 
     return 0
@@ -762,7 +704,7 @@ plugin-bootstrap() {
 # Note: In zsh, functions are automatically available to subshells
 # export -f is not needed and causes errors
 
-[[ -n "${_LOG_LOADED:-}" ]] && \
+[[ -n "${LOG_LOADED:-}" ]] && \
     log-debug "Plugin system loaded (v1.0.0)"
 
 return 0

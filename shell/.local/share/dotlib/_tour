@@ -9,15 +9,15 @@
 # Most of dotlib's modules are written but never exercised by a real
 # wrapper (see the dotlib README's "Module status" note). This module
 # runs real demos through them -- _ui, _format, _string, _validation,
-# _events, _async, _rules, _crypto, _schema, _actions, _notify, _test
-# -- using each module's actual public functions. Business logic
-# stays in those modules; this file only supplies narration, sample
-# data, and pacing.
+# _events, _async, _rules, _crypto, _schema, _actions, _plugins,
+# _notify, _test -- using each module's actual public functions.
+# Business logic stays in those modules; this file only supplies
+# narration, sample data, and pacing.
 #
 # Dependencies:
 #   Required:
 #     - _common, _ui, _format, _string, _validation, _events, _async,
-#       _rules, _crypto, _schema, _actions, _notify, _test
+#       _rules, _crypto, _schema, _actions, _plugins, _notify, _test
 #   Optional:
 #     - _log
 
@@ -37,6 +37,7 @@ source "${DOTLIB}/_rules"      || { echo "[ERROR] _tour requires _rules" >&2; re
 source "${DOTLIB}/_crypto"     || { echo "[ERROR] _tour requires _crypto" >&2; return 1; }
 source "${DOTLIB}/_schema"     || { echo "[ERROR] _tour requires _schema" >&2; return 1; }
 source "${DOTLIB}/_actions"    || { echo "[ERROR] _tour requires _actions" >&2; return 1; }
+source "${DOTLIB}/_plugins"    || { echo "[ERROR] _tour requires _plugins" >&2; return 1; }
 source "${DOTLIB}/_notify"     || { echo "[ERROR] _tour requires _notify" >&2; return 1; }
 source "${DOTLIB}/_test"       || { echo "[ERROR] _tour requires _test" >&2; return 1; }
 
@@ -52,6 +53,7 @@ typeset -gA _TOUR_DESCRIPTIONS=(
     [crypto]="Tour _crypto: hashing, HMAC, and roundtrip encryption"
     [schema]="Tour _schema: action/v1 schema validation and querying"
     [actions]="Tour _actions: dependency-ordered action execution"
+    [plugins]="Tour _plugins: discovery, validation, and dependency-ordered init"
     [notify]="Tour _notify: a real desktop notification"
     [framework]="Tour _dispatcher's own help/commands/completion/dry-run"
     [run]="Run the full tour end to end (--fast skips pacing)"
@@ -402,6 +404,69 @@ YAML
     rm -rf "$workspace" "$schema_file"
 }
 
+tour-plugins() {
+    ui-header "_plugins — discovery, validation & dependency-ordered init"
+
+    local plugins_dir
+    plugins_dir="$(mktemp -d "${TMPDIR:-/tmp}/dotlib-tour-plugins.XXXXXX")"
+    mkdir -p "$plugins_dir/greeter" "$plugins_dir/farewell"
+
+    cat > "$plugins_dir/greeter/plugin.yaml" <<'YAML'
+name: greeter
+version: 1.0.0
+description: Demo plugin used by the dotlib tour
+YAML
+    cat > "$plugins_dir/greeter/plugin.zsh" <<'ZSH'
+greeter_init() {
+    echo "greeter plugin initialized"
+}
+ZSH
+
+    cat > "$plugins_dir/farewell/plugin.yaml" <<'YAML'
+name: farewell
+version: 1.0.0
+description: Demo plugin used by the dotlib tour
+dependencies:
+  - greeter
+YAML
+    cat > "$plugins_dir/farewell/plugin.zsh" <<'ZSH'
+farewell_init() {
+    echo "farewell plugin initialized"
+}
+ZSH
+
+    ui-info "discovering plugins in a scratch directory..."
+    plugin-discover "$plugins_dir" >/dev/null
+
+    local -a found
+    found=("${(@f)$(plugin-list)}")
+    ui-list "${found[@]}"
+
+    echo ""
+    ui-info "validating each plugin's metadata..."
+    local p
+    for p in "${found[@]}"; do
+        if plugin-validate "$p" >/dev/null 2>&1; then
+            ui-success "valid: $p"
+        else
+            ui-error "invalid: $p"
+        fi
+    done
+
+    echo ""
+    ui-info "initializing all plugins (dependency-ordered: farewell depends on greeter)..."
+    plugin-init-all
+
+    echo ""
+    ui-table-header "PLUGIN" "STATE" "" ""
+    ui-table-separator 60
+    for p in "${found[@]}"; do
+        printf "%-25s %s\n" "$p" "$(plugin-get-state "$p")"
+    done
+
+    rm -rf "$plugins_dir"
+}
+
 tour-notify() {
     ui-header "_notify — desktop notifications"
 
@@ -433,7 +498,7 @@ tour-run() {
     local fast=false
     [[ "$1" == "--fast" ]] && fast=true
 
-    local -a sections=(intro ui format string validate events async rules crypto schema actions notify framework)
+    local -a sections=(intro ui format string validate events async rules crypto schema actions plugins notify framework)
     local section
 
     for section in "${sections[@]}"; do
@@ -465,6 +530,7 @@ _tour-selftest-cases() {
     test-it "crypto section runs"   _tour-selftest-crypto
     test-it "schema section runs"   _tour-selftest-schema
     test-it "actions section runs"  _tour-selftest-actions
+    test-it "plugins section runs"  _tour-selftest-plugins
 }
 
 _tour-selftest-intro()    { test-assert-exit-code 0 _tour-quiet tour-intro; }
@@ -478,6 +544,7 @@ _tour-selftest-rules()    { test-assert-exit-code 0 _tour-quiet tour-rules; }
 _tour-selftest-crypto()   { test-assert-exit-code 0 _tour-quiet tour-crypto; }
 _tour-selftest-schema()   { test-assert-exit-code 0 _tour-quiet tour-schema; }
 _tour-selftest-actions()  { test-assert-exit-code 0 _tour-quiet tour-actions; }
+_tour-selftest-plugins()  { test-assert-exit-code 0 _tour-quiet tour-plugins; }
 
 tour-self-test() {
     test-describe "dotlib tour sections" _tour-selftest-cases
