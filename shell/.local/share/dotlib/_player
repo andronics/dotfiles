@@ -1044,6 +1044,28 @@ player-get-volume() {
     fi
 }
 
+# Get or set volume (CLI convenience combining the two above)
+#
+# Function: player-volume
+# Description: `player-volume` gets current volume; `player-volume set X
+#   [player]` sets it. X is passed straight through to player-set-volume.
+# Parameters:
+#   $1 - "set" (optional)
+#   $2 - Volume value, required if $1 is "set"
+#   $@ - remaining args forwarded to player-get-volume/player-set-volume
+# Example:
+#   player-volume
+#   player-volume set 0.75
+#
+player-volume() {
+    if [[ "$1" == "set" && -n "$2" ]]; then
+        shift
+        player-set-volume "$@"
+    else
+        player-get-volume "$@"
+    fi
+}
+
 # ------------------------------
 # Metadata Queries
 # ------------------------------
@@ -1357,6 +1379,50 @@ player-get-duration() {
     else
         log-debug "Failed to get duration"
         return 1
+    fi
+}
+
+# Get position formatted as mm:ss
+#
+# Function: player-get-position-formatted
+# Description: Get current playback position formatted as mm:ss
+# Parameters:
+#   $1 - Player name (optional, uses active player if omitted)
+# Output: Position as "mm:ss", or whatever player-get-position returned if
+#   it wasn't a plain integer (e.g. empty on failure)
+# Example:
+#   player-get-position-formatted
+#
+player-get-position-formatted() {
+    local pos_us pos_sec
+    pos_us=$(player-get-position "$@") || true
+    if [[ -n "$pos_us" && "$pos_us" =~ ^[0-9]+$ ]]; then
+        pos_sec=$((pos_us / 1000000))
+        printf "%02d:%02d\n" $((pos_sec / 60)) $((pos_sec % 60))
+    else
+        echo "$pos_us"
+    fi
+}
+
+# Get position as a percentage of duration
+#
+# Function: player-get-position-percent
+# Description: Get current playback position as a 0-100 percentage of
+#   track duration
+# Parameters:
+#   $1 - Player name (optional, uses active player if omitted)
+# Output: Integer percentage, or "0" if position/duration aren't available
+# Example:
+#   player-get-position-percent
+#
+player-get-position-percent() {
+    local pos_us dur_us
+    pos_us=$(player-get-position "$@") || true
+    dur_us=$(player-get-duration "$@") || true
+    if [[ -n "$pos_us" && "$pos_us" =~ ^[0-9]+$ && -n "$dur_us" && "$dur_us" =~ ^[0-9]+$ && "$dur_us" -gt 0 ]]; then
+        echo $((pos_us * 100 / dur_us))
+    else
+        echo "0"
     fi
 }
 

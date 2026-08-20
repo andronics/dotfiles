@@ -1442,16 +1442,16 @@ audio-self-test() {
     # Test 1: PulseAudio availability
     if audio-check-server; then
         log-info "✓ PulseAudio server is running"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         log-error "✗ PulseAudio server not running (expected if not available)"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
 
     # Test 2: Dependency checks
     if _audio-check-command "pactl" >/dev/null 2>&1; then
         log-info "✓ pactl command available"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         log-warn "✗ pactl command not available (will use pacmd)"
     fi
@@ -1459,14 +1459,14 @@ audio-self-test() {
     # Test 3: Configuration loading
     if [[ -n "$_AUDIO_DEVICES_DATA" ]]; then
         log-info "✓ Devices configuration loaded"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         log-warn "✗ Devices configuration not loaded (expected if file missing)"
     fi
 
     if [[ -n "$_AUDIO_LEVELS_DATA" ]]; then
         log-info "✓ Levels configuration loaded"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         log-warn "✗ Levels configuration not loaded (expected if file missing)"
     fi
@@ -1476,40 +1476,40 @@ audio-self-test() {
         local sink=$(audio-sink-get-current 2>/dev/null)
         if [[ -n "$sink" ]]; then
             log-info "✓ Can get current sink" "sink=$sink"
-            ((tests_passed++))
+            ((tests_passed++)) || true
 
             # Test 5: Get volume
             local volume=$(audio-volume-get "$sink" 2>/dev/null)
             if [[ -n "$volume" ]]; then
                 log-info "✓ Can get volume" "volume=$volume%"
-                ((tests_passed++))
+                ((tests_passed++)) || true
             else
                 log-error "✗ Failed to get volume"
-                ((tests_failed++))
+                ((tests_failed++)) || true
             fi
 
             # Test 6: Query mute
             local muted=$(audio-mute-query "$sink" 2>/dev/null)
             if [[ -n "$muted" ]]; then
                 log-info "✓ Can query mute state" "muted=$muted"
-                ((tests_passed++))
+                ((tests_passed++)) || true
             else
                 log-error "✗ Failed to query mute state"
-                ((tests_failed++))
+                ((tests_failed++)) || true
             fi
 
             # Test 7: Get level name
             local level=$(audio-level-get-name "$sink" 2>/dev/null)
             if [[ -n "$level" ]]; then
                 log-info "✓ Can get level name" "level=$level"
-                ((tests_passed++))
+                ((tests_passed++)) || true
             else
                 log-error "✗ Failed to get level name"
-                ((tests_failed++))
+                ((tests_failed++)) || true
             fi
         else
             log-error "✗ Failed to get current sink"
-            ((tests_failed++))
+            ((tests_failed++)) || true
         fi
     fi
 
@@ -1519,7 +1519,7 @@ audio-self-test() {
     log-info "  _config:    $AUDIO_CONFIG_AVAILABLE"
     log-info "  _lifecycle: $AUDIO_LIFECYCLE_AVAILABLE"
     log-info "  _events:    $AUDIO_EVENTS_AVAILABLE"
-    ((tests_passed++))
+    ((tests_passed++)) || true
 
     log-info ""
     log-info "Self-tests complete: $tests_passed passed, $tests_failed failed"
