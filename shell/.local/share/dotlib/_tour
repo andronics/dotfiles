@@ -61,6 +61,7 @@ source "${DOTLIB}/_rofi"       || { echo "[ERROR] _tour requires _rofi" >&2; ret
 source "${DOTLIB}/_acpi"       || { echo "[ERROR] _tour requires _acpi" >&2; return 1; }
 source "${DOTLIB}/_network"    || { echo "[ERROR] _tour requires _network" >&2; return 1; }
 source "${DOTLIB}/_patterns"   || { echo "[ERROR] _tour requires _patterns" >&2; return 1; }
+source "${DOTLIB}/_args"       || { echo "[ERROR] _tour requires _args" >&2; return 1; }
 source "${DOTLIB}/_notify"     || { echo "[ERROR] _tour requires _notify" >&2; return 1; }
 source "${DOTLIB}/_test"       || { echo "[ERROR] _tour requires _test" >&2; return 1; }
 
@@ -82,6 +83,7 @@ typeset -gA _TOUR_DESCRIPTIONS=(
     [acpi]="Tour _acpi: live battery/AC/thermal readout"
     [network]="Tour _network: connectivity, interfaces, and routing"
     [patterns]="Tour _patterns: glob matching and bulk operations"
+    [args]="Tour _args: declarative CLI arg parsing"
     [notify]="Tour _notify: a real desktop notification"
     [framework]="Tour _dispatcher's own help/commands/completion/dry-run"
     [run]="Run the full tour end to end (--fast skips pacing)"
@@ -680,6 +682,37 @@ tour-patterns() {
     patterns-foreach "audio-*" "${items[@]}" -- echo "matched:"
 }
 
+tour-args() {
+    ui-header "_args — declarative CLI argument parsing"
+
+    args-clear
+    args-set-program-name "backup"
+    args-set-description "A demo CLI defined and parsed by _args"
+    args-define-flag "verbose" "v" "Enable verbose output"
+    args-define-option "output" "o" "string" "Output directory" "/tmp/backup"
+    args-define-required "source" "s" "path" "Source directory to back up"
+    args-define-positional "extra" "Extra freeform args" false
+
+    ui-info "parsing: --verbose --source /home/user --output /mnt/backups extra1 extra2"
+    args-parse --verbose --source /home/user --output /mnt/backups extra1 extra2
+
+    echo ""
+    ui-list \
+        "verbose: $(args-is-set verbose && echo true || echo false)" \
+        "source:  $(args-get source)" \
+        "output:  $(args-get output)" \
+        "extra:   $(args-get-all-positional)"
+
+    echo ""
+    ui-info "args-show-help (auto-generated from the definitions above)..."
+    args-show-help
+
+    echo ""
+    args-stats
+
+    args-clear
+}
+
 tour-notify() {
     ui-header "_notify — desktop notifications"
 
@@ -711,7 +744,7 @@ tour-run() {
     local fast=false
     [[ "$1" == "--fast" ]] && fast=true
 
-    local -a sections=(intro ui format string validate events async rules crypto schema actions plugins bspwm rofi acpi network patterns notify framework)
+    local -a sections=(intro ui format string validate events async rules crypto schema actions plugins bspwm rofi acpi network patterns args notify framework)
     local section
 
     for section in "${sections[@]}"; do
@@ -749,6 +782,7 @@ _tour-selftest-cases() {
     test-it "acpi section runs"     _tour-selftest-acpi
     test-it "network section runs"  _tour-selftest-network
     test-it "patterns section runs" _tour-selftest-patterns
+    test-it "args section runs"     _tour-selftest-args
 }
 
 _tour-selftest-intro()    { test-assert-exit-code 0 _tour-quiet tour-intro; }
@@ -768,6 +802,7 @@ _tour-selftest-rofi()     { test-assert-exit-code 0 _tour-quiet tour-rofi; }
 _tour-selftest-acpi()     { test-assert-exit-code 0 _tour-quiet tour-acpi; }
 _tour-selftest-network()  { test-assert-exit-code 0 _tour-quiet tour-network; }
 _tour-selftest-patterns() { test-assert-exit-code 0 _tour-quiet tour-patterns; }
+_tour-selftest-args()     { test-assert-exit-code 0 _tour-quiet tour-args; }
 
 tour-self-test() {
     test-describe "dotlib tour sections" _tour-selftest-cases

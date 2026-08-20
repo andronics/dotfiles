@@ -186,7 +186,7 @@ _args-validate-enum() {
 
 _args-validate-json() {
     if common-command-exists "jq"; then
-        echo "$1" | jq empty 2>/dev/null
+        echo "$1" | /usr/bin/jq empty 2>/dev/null
     else
         # Basic JSON validation
         [[ "$1" =~ ^\{.*\}$ ]] || [[ "$1" =~ ^\[.*\]$ ]]
@@ -760,7 +760,7 @@ args-show-help() {
     if [[ -n "$_ARGS_HELP_HEADER" ]]; then
         echo "$_ARGS_HELP_HEADER"
     else
-        echo "Usage: ${ARGS_PROGRAM_NAME}"
+        echo -n "Usage: ${ARGS_PROGRAM_NAME}"
         [[ "$ARGS_ENABLE_SUBCOMMANDS" == "true" ]] && [[ ${#_ARGS_SUBCOMMANDS[@]} -gt 0 ]] && echo -n " <COMMAND>"
         echo -n " [OPTIONS]"
         [[ ${#_ARGS_POSITIONAL[@]} -gt 0 ]] && echo -n " <ARGS...>"
