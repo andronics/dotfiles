@@ -322,7 +322,7 @@ _wifi-parse-network-line() {
 
     # Output JSON
     if common-command-exists jq; then
-        jq -n \
+        /usr/bin/jq -n \
             --arg name "$name" \
             --arg security "$security" \
             --arg signal "$signal" \
@@ -366,7 +366,7 @@ wifi-init() {
 
     # Check if iwd daemon is running
     if ! _wifi-check-daemon; then
-        log-warn "iwd daemon is not running"
+        log-warning "iwd daemon is not running"
         log-info "Start daemon: systemctl start iwd"
         log-info "Enable daemon: systemctl enable iwd"
         # Don't fail - user might start it manually
@@ -454,8 +454,10 @@ wifi-device-list() {
     }
 
     # Parse output (skip header, extract device names)
+    # iwctl always emits ANSI color codes, even to a non-tty pipe, which
+    # corrupts field-based parsing unless stripped first.
     local devices
-    devices=$(echo "$output" | awk 'NR>3 && NF>0 {print $1}' | grep -v '^$')
+    devices=$(echo "$output" | sed 's/\x1b\[[0-9;]*m//g' | awk 'NR>4 && NF>0 {print $1}' | grep -v '^$')
 
     # Cache result
     WIFI_DEVICES_CACHE="$devices"
@@ -603,19 +605,22 @@ wifi-get-networks() {
         log-error "Failed to get networks" "device=$device"
         return 1
     }
+    # iwctl always emits ANSI color codes, even to a non-tty pipe, which
+    # breaks the header-skip regex and field parsing below unless stripped.
+    output=$(echo "$output" | sed 's/\x1b\[[0-9;]*m//g')
 
     # Return raw output or format it
     if [[ "$format" == "raw" ]]; then
         echo "$output"
     else
         # Parse and format each network line
+        local name security signal dbm
         echo "$output" | while IFS= read -r line; do
             # Skip header and separator lines
-            [[ "$line" =~ ^(Network|------) ]] && continue
+            [[ "$line" =~ ^[[:space:]]*(Network|Available|------) ]] && continue
             [[ -z "$line" ]] && continue
 
             # Parse network info
-            local name security signal
             signal=$(echo "$line" | awk '{print $NF}')
             security=$(echo "$line" | awk '{print $(NF-1)}')
             name=$(echo "$line" | awk '{$NF=""; $(NF-1)=""; print $0}' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
@@ -627,7 +632,6 @@ wifi-get-networks() {
                 printf "%-4s %-10s %s\n" "$signal" "$security" "$name"
             elif [[ "$format" == "dbms" ]]; then
                 # Convert bars to approximate dBm
-                local dbm
                 case "$signal" in
                     ****) dbm="-50" ;;
                     \*\*\*) dbm="-60" ;;
@@ -922,10 +926,14 @@ wifi-get-connected-ssid() {
 
     local output
     output=$(iwctl station "$device" show 2>/dev/null) || return 1
+    output=$(echo "$output" | sed 's/\x1b\[[0-9;]*m//g')
 
-    # Extract "Connected network" field
+    # Extract "Connected network" field. iwctl's `station show` output is a
+    # whitespace-padded property table ("Connected network     andronics"),
+    # not "key: value" pairs, so split on the literal property name instead
+    # of a colon.
     local ssid
-    ssid=$(echo "$output" | grep "Connected network" | awk -F': ' '{print $2}' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+    ssid=$(echo "$output" | grep "Connected network" | sed -E 's/^[[:space:]]*Connected network[[:space:]]*//' | sed 's/[[:space:]]*$//')
 
     if [[ -n "$ssid" ]]; then
         echo "$ssid"
@@ -1040,7 +1048,7 @@ wifi-known-forget() {
 wifi-known-forget-all() {
     wifi-require-available || return 1
 
-    log-warn "Forgetting all known networks"
+    log-warning "Forgetting all known networks"
 
     if [[ "$WIFI_DRY_RUN" == "true" ]]; then
         log-info "[DRY RUN] Would forget all networks"

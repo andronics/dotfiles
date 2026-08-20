@@ -64,6 +64,7 @@ source "${DOTLIB}/_patterns"   || { echo "[ERROR] _tour requires _patterns" >&2;
 source "${DOTLIB}/_args"       || { echo "[ERROR] _tour requires _args" >&2; return 1; }
 source "${DOTLIB}/_http"       || { echo "[ERROR] _tour requires _http" >&2; return 1; }
 source "${DOTLIB}/_server"     || { echo "[ERROR] _tour requires _server" >&2; return 1; }
+source "${DOTLIB}/_wifi"       || { echo "[ERROR] _tour requires _wifi" >&2; return 1; }
 source "${DOTLIB}/_notify"     || { echo "[ERROR] _tour requires _notify" >&2; return 1; }
 source "${DOTLIB}/_test"       || { echo "[ERROR] _tour requires _test" >&2; return 1; }
 
@@ -88,6 +89,7 @@ typeset -gA _TOUR_DESCRIPTIONS=(
     [args]="Tour _args: declarative CLI arg parsing"
     [http]="Tour _http: auth headers, URL encoding, query strings (no network calls)"
     [server]="Tour _server: port/type checks and status queries (never starts a server)"
+    [wifi]="Tour _wifi: live network/connection status (read-only, skips if unavailable)"
     [notify]="Tour _notify: a real desktop notification"
     [framework]="Tour _dispatcher's own help/commands/completion/dry-run"
     [run]="Run the full tour end to end (--fast skips pacing)"
@@ -775,6 +777,38 @@ tour-server() {
     server-info
 }
 
+tour-wifi() {
+    ui-header "_wifi — live network status (read-only)"
+
+    if ! wifi-check-available 2>/dev/null; then
+        ui-warning "iwd/iwctl not available on this host - skipping"
+        return 0
+    fi
+
+    local device
+    device="$(wifi-device-list | head -1)"
+    ui-info "device (wifi-device-list): $device"
+
+    echo ""
+    ui-info "connection status (wifi-is-connected / wifi-get-connected-ssid)..."
+    if wifi-is-connected "$device"; then
+        ui-success "connected to: $(wifi-get-connected-ssid "$device")"
+    else
+        ui-warning "not connected"
+    fi
+
+    echo ""
+    ui-info "visible networks (wifi-get-networks, signal bars)..."
+    wifi-get-networks "$device" bars 2>/dev/null | head -6
+
+    echo ""
+    ui-info "known/saved networks (wifi-known-list)..."
+    wifi-known-list 2>/dev/null
+
+    echo ""
+    wifi-info
+}
+
 tour-notify() {
     ui-header "_notify — desktop notifications"
 
@@ -806,7 +840,7 @@ tour-run() {
     local fast=false
     [[ "$1" == "--fast" ]] && fast=true
 
-    local -a sections=(intro ui format string validate events async rules crypto schema actions plugins bspwm rofi acpi network patterns args http server notify framework)
+    local -a sections=(intro ui format string validate events async rules crypto schema actions plugins bspwm rofi acpi network patterns args http server wifi notify framework)
     local section
 
     for section in "${sections[@]}"; do
@@ -847,6 +881,7 @@ _tour-selftest-cases() {
     test-it "args section runs"     _tour-selftest-args
     test-it "http section runs"     _tour-selftest-http
     test-it "server section runs"   _tour-selftest-server
+    test-it "wifi section runs"     _tour-selftest-wifi
 }
 
 _tour-selftest-intro()    { test-assert-exit-code 0 _tour-quiet tour-intro; }
@@ -869,6 +904,7 @@ _tour-selftest-patterns() { test-assert-exit-code 0 _tour-quiet tour-patterns; }
 _tour-selftest-args()     { test-assert-exit-code 0 _tour-quiet tour-args; }
 _tour-selftest-http()     { test-assert-exit-code 0 _tour-quiet tour-http; }
 _tour-selftest-server()   { test-assert-exit-code 0 _tour-quiet tour-server; }
+_tour-selftest-wifi()     { test-assert-exit-code 0 _tour-quiet tour-wifi; }
 
 tour-self-test() {
     test-describe "dotlib tour sections" _tour-selftest-cases
