@@ -66,6 +66,7 @@ source "${DOTLIB}/_http"       || { echo "[ERROR] _tour requires _http" >&2; ret
 source "${DOTLIB}/_server"     || { echo "[ERROR] _tour requires _server" >&2; return 1; }
 source "${DOTLIB}/_wifi"       || { echo "[ERROR] _tour requires _wifi" >&2; return 1; }
 source "${DOTLIB}/_docker"     || { echo "[ERROR] _tour requires _docker" >&2; return 1; }
+source "${DOTLIB}/_xidlehook"  || { echo "[ERROR] _tour requires _xidlehook" >&2; return 1; }
 source "${DOTLIB}/_notify"     || { echo "[ERROR] _tour requires _notify" >&2; return 1; }
 source "${DOTLIB}/_test"       || { echo "[ERROR] _tour requires _test" >&2; return 1; }
 
@@ -92,6 +93,7 @@ typeset -gA _TOUR_DESCRIPTIONS=(
     [server]="Tour _server: port/type checks and status queries (never starts a server)"
     [wifi]="Tour _wifi: live network/connection status (read-only, skips if unavailable)"
     [docker]="Tour _docker: live container/image/volume listing (read-only, skips if unavailable)"
+    [xidlehook]="Tour _xidlehook: idle-timer status (read-only, skips if unavailable)"
     [notify]="Tour _notify: a real desktop notification"
     [framework]="Tour _dispatcher's own help/commands/completion/dry-run"
     [run]="Run the full tour end to end (--fast skips pacing)"
@@ -844,6 +846,21 @@ tour-docker() {
         "networks: $(docker-network-list 2>/dev/null | /usr/bin/jq -r 'length' 2>/dev/null) total"
 }
 
+tour-xidlehook() {
+    ui-header "_xidlehook — idle-timer status (read-only)"
+
+    if ! xidlehook-check 2>/dev/null; then
+        ui-warning "xidlehook not available on this host - skipping"
+        return 0
+    fi
+
+    ui-info "current idle time (xidlehook-get-idle-time)..."
+    ui-list "idle for: $(xidlehook-get-idle-time)s"
+
+    echo ""
+    xidlehook-status
+}
+
 tour-notify() {
     ui-header "_notify — desktop notifications"
 
@@ -875,7 +892,7 @@ tour-run() {
     local fast=false
     [[ "$1" == "--fast" ]] && fast=true
 
-    local -a sections=(intro ui format string validate events async rules crypto schema actions plugins bspwm rofi acpi network patterns args http server wifi docker notify framework)
+    local -a sections=(intro ui format string validate events async rules crypto schema actions plugins bspwm rofi acpi network patterns args http server wifi docker xidlehook notify framework)
     local section
 
     for section in "${sections[@]}"; do
@@ -918,6 +935,7 @@ _tour-selftest-cases() {
     test-it "server section runs"   _tour-selftest-server
     test-it "wifi section runs"     _tour-selftest-wifi
     test-it "docker section runs"   _tour-selftest-docker
+    test-it "xidlehook section runs" _tour-selftest-xidlehook
 }
 
 _tour-selftest-intro()    { test-assert-exit-code 0 _tour-quiet tour-intro; }
@@ -942,6 +960,7 @@ _tour-selftest-http()     { test-assert-exit-code 0 _tour-quiet tour-http; }
 _tour-selftest-server()   { test-assert-exit-code 0 _tour-quiet tour-server; }
 _tour-selftest-wifi()     { test-assert-exit-code 0 _tour-quiet tour-wifi; }
 _tour-selftest-docker()   { test-assert-exit-code 0 _tour-quiet tour-docker; }
+_tour-selftest-xidlehook() { test-assert-exit-code 0 _tour-quiet tour-xidlehook; }
 
 tour-self-test() {
     test-describe "dotlib tour sections" _tour-selftest-cases
