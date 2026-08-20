@@ -10,14 +10,20 @@
 # wrapper (see the dotlib README's "Module status" note). This module
 # runs real demos through them -- _ui, _format, _string, _validation,
 # _events, _async, _rules, _crypto, _schema, _actions, _plugins,
-# _bspwm, _notify, _test -- using each module's actual public
+# _bspwm, _rofi, _notify, _test -- using each module's actual public
 # functions. Business logic stays in those modules; this file only
 # supplies narration, sample data, and pacing.
+#
+# tour-rofi deliberately never calls _rofi's interactive menu
+# functions (rofi-select, rofi-confirm, rofi-input, ...) -- they
+# block on real user input, which would hang `tour run` and
+# `tour self-test`. It sticks to config/query/format helpers.
 #
 # Dependencies:
 #   Required:
 #     - _common, _ui, _format, _string, _validation, _events, _async,
-#       _rules, _crypto, _schema, _actions, _plugins, _notify, _test
+#       _rules, _crypto, _schema, _actions, _plugins, _rofi, _notify,
+#       _test
 #   Optional:
 #     - _log
 #     - _bspwm (requires the bspc binary; tour-bspwm degrades
@@ -44,6 +50,7 @@ source "${DOTLIB}/_plugins"    || { echo "[ERROR] _tour requires _plugins" >&2; 
 # (and this tour) must still work on hosts with no desktop package installed,
 # so this stays optional and tour-bspwm checks availability itself.
 source "${DOTLIB}/_bspwm" 2>/dev/null || true
+source "${DOTLIB}/_rofi"       || { echo "[ERROR] _tour requires _rofi" >&2; return 1; }
 source "${DOTLIB}/_notify"     || { echo "[ERROR] _tour requires _notify" >&2; return 1; }
 source "${DOTLIB}/_test"       || { echo "[ERROR] _tour requires _test" >&2; return 1; }
 
@@ -61,6 +68,7 @@ typeset -gA _TOUR_DESCRIPTIONS=(
     [actions]="Tour _actions: dependency-ordered action execution"
     [plugins]="Tour _plugins: discovery, validation, and dependency-ordered init"
     [bspwm]="Tour _bspwm: live window manager introspection (read-only, skips if unavailable)"
+    [rofi]="Tour _rofi: config, theme discovery, and formatting (no menus popped)"
     [notify]="Tour _notify: a real desktop notification"
     [framework]="Tour _dispatcher's own help/commands/completion/dry-run"
     [run]="Run the full tour end to end (--fast skips pacing)"
@@ -518,6 +526,46 @@ tour-bspwm() {
     bspwm-info
 }
 
+tour-rofi() {
+    ui-header "_rofi — config, theme discovery & formatting"
+
+    if ! rofi-check; then
+        ui-warning "rofi not available on this host - skipping"
+        return 0
+    fi
+
+    ui-info "configuring rofi for this demo (theme/prompt/format setters)..."
+    rofi-set-theme "Arc-Dark"
+    rofi-set-prompt "tour"
+    rofi-set-lines 8
+    rofi-get-config
+
+    echo ""
+    ui-info "discovering installed themes (rofi-list-themes)..."
+    local -a themes
+    themes=("${(@f)$(rofi-list-themes)}")
+    ui-list "${themes[1]}" "${themes[2]}" "${themes[3]}" "... (${#themes[@]} total)"
+
+    echo ""
+    ui-info "available modi (rofi-list-modi, parsed from rofi -help)..."
+    local -a modi
+    modi=("${(@f)$(rofi-list-modi)}")
+    ui-list "${modi[@]}"
+
+    echo ""
+    ui-info "formatting helpers (pure string builders, no rofi invocation)..."
+    ui-list \
+        "$(rofi-format-icon "🚀" "Launch")" \
+        "$(rofi-format-markup "warning text" "#f38ba8" "bold")" \
+        "$(rofi-separator "─" 30)"
+
+    echo ""
+    ui-info "note: rofi-select/-confirm/-input/-menu/... exist and pop real"
+    ui-info "menus, but this tour never calls them - they'd block waiting"
+    ui-info "for you to click something, which would hang 'tour run'."
+    ui-info "try one yourself: rofi-select 'pick one' <<< \$'a\\\\nb\\\\nc'"
+}
+
 tour-notify() {
     ui-header "_notify — desktop notifications"
 
@@ -549,7 +597,7 @@ tour-run() {
     local fast=false
     [[ "$1" == "--fast" ]] && fast=true
 
-    local -a sections=(intro ui format string validate events async rules crypto schema actions plugins bspwm notify framework)
+    local -a sections=(intro ui format string validate events async rules crypto schema actions plugins bspwm rofi notify framework)
     local section
 
     for section in "${sections[@]}"; do
@@ -583,6 +631,7 @@ _tour-selftest-cases() {
     test-it "actions section runs"  _tour-selftest-actions
     test-it "plugins section runs"  _tour-selftest-plugins
     test-it "bspwm section runs"    _tour-selftest-bspwm
+    test-it "rofi section runs"     _tour-selftest-rofi
 }
 
 _tour-selftest-intro()    { test-assert-exit-code 0 _tour-quiet tour-intro; }
@@ -598,6 +647,7 @@ _tour-selftest-schema()   { test-assert-exit-code 0 _tour-quiet tour-schema; }
 _tour-selftest-actions()  { test-assert-exit-code 0 _tour-quiet tour-actions; }
 _tour-selftest-plugins()  { test-assert-exit-code 0 _tour-quiet tour-plugins; }
 _tour-selftest-bspwm()    { test-assert-exit-code 0 _tour-quiet tour-bspwm; }
+_tour-selftest-rofi()     { test-assert-exit-code 0 _tour-quiet tour-rofi; }
 
 tour-self-test() {
     test-describe "dotlib tour sections" _tour-selftest-cases

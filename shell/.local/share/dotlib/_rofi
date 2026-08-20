@@ -73,7 +73,7 @@ source "${DOTLIB}/_lifecycle" 2>/dev/null || true
 # All configurable via environment variables
 
 # ROFI_CONFIG: Path to rofi config file
-declare -g ROFI_CONFIG="${ROFI_CONFIG:-$(common-get-xdg-config-home)/rofi/config.rasi}"
+declare -g ROFI_CONFIG="${ROFI_CONFIG:-$(common-xdg-config-home)/rofi/config.rasi}"
 
 # ROFI_THEME: Theme name or path
 declare -g ROFI_THEME="${ROFI_THEME:-}"
@@ -203,7 +203,7 @@ rofi-init() {
     local config_dir="$(dirname "$ROFI_CONFIG")"
     if [[ ! -d "$config_dir" ]]; then
         mkdir -p "$config_dir" 2>/dev/null || {
-            log-warn "Failed to create rofi config directory: $config_dir"
+            log-warning "Failed to create rofi config directory: $config_dir"
         }
     fi
 
@@ -959,7 +959,15 @@ rofi-list-themes() {
         return 1
     fi
 
-    rofi -dump-theme 2>/dev/null | grep -E '^\s*\*' | sed 's/^\s*\* //' | sort
+    local -a theme_dirs=(
+        "$(rofi-get-config-dir)/themes"
+        "${XDG_DATA_HOME:-$HOME/.local/share}/rofi/themes"
+        "/usr/share/rofi/themes"
+    )
+    local dir
+    for dir in "${theme_dirs[@]}"; do
+        [[ -d "$dir" ]] && find "$dir" -maxdepth 1 -name "*.rasi" -exec basename {} .rasi \;
+    done | sort -u
 }
 
 # rofi-select-theme: Show theme selector
@@ -1037,7 +1045,7 @@ rofi-list-modi() {
         return 1
     fi
 
-    rofi -show-modi 2>/dev/null
+    rofi -help 2>&1 | awk '/^Detected modes:/{flag=1; next} /^$/{flag=0} flag' | sed 's/^[[:space:]]*•[[:space:]]*//;s/^+//'
 }
 
 # ------------------------------
