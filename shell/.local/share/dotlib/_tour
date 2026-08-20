@@ -63,6 +63,7 @@ source "${DOTLIB}/_network"    || { echo "[ERROR] _tour requires _network" >&2; 
 source "${DOTLIB}/_patterns"   || { echo "[ERROR] _tour requires _patterns" >&2; return 1; }
 source "${DOTLIB}/_args"       || { echo "[ERROR] _tour requires _args" >&2; return 1; }
 source "${DOTLIB}/_http"       || { echo "[ERROR] _tour requires _http" >&2; return 1; }
+source "${DOTLIB}/_server"     || { echo "[ERROR] _tour requires _server" >&2; return 1; }
 source "${DOTLIB}/_notify"     || { echo "[ERROR] _tour requires _notify" >&2; return 1; }
 source "${DOTLIB}/_test"       || { echo "[ERROR] _tour requires _test" >&2; return 1; }
 
@@ -86,6 +87,7 @@ typeset -gA _TOUR_DESCRIPTIONS=(
     [patterns]="Tour _patterns: glob matching and bulk operations"
     [args]="Tour _args: declarative CLI arg parsing"
     [http]="Tour _http: auth headers, URL encoding, query strings (no network calls)"
+    [server]="Tour _server: port/type checks and status queries (never starts a server)"
     [notify]="Tour _notify: a real desktop notification"
     [framework]="Tour _dispatcher's own help/commands/completion/dry-run"
     [run]="Run the full tour end to end (--fast skips pacing)"
@@ -745,6 +747,34 @@ tour-http() {
     ui-info "try a real request yourself: http-get https://example.com"
 }
 
+tour-server() {
+    ui-header "_server — port/type checks & status (never starts a server)"
+
+    ui-info "this section only probes and queries -- server-start would"
+    ui-info "spawn a real listening process, which is exactly the kind"
+    ui-info "of thing this tour avoids after the _http section's detour."
+
+    echo ""
+    ui-info "which server backends are installed (server-check-type)..."
+    local -a backends=(python php node)
+    local b
+    for b in "${backends[@]}"; do
+        if server-check-type "$b" 2>/dev/null; then
+            ui-success "$b: available"
+        else
+            ui-warning "$b: not available"
+        fi
+    done
+
+    echo ""
+    ui-info "server-find-available-port (probes with nc -z, never binds)..."
+    ui-list "first free port from 30000: $(server-find-available-port 30000)"
+
+    echo ""
+    ui-info "server-list / server-info (no servers running, none started)..."
+    server-info
+}
+
 tour-notify() {
     ui-header "_notify — desktop notifications"
 
@@ -776,7 +806,7 @@ tour-run() {
     local fast=false
     [[ "$1" == "--fast" ]] && fast=true
 
-    local -a sections=(intro ui format string validate events async rules crypto schema actions plugins bspwm rofi acpi network patterns args http notify framework)
+    local -a sections=(intro ui format string validate events async rules crypto schema actions plugins bspwm rofi acpi network patterns args http server notify framework)
     local section
 
     for section in "${sections[@]}"; do
@@ -816,6 +846,7 @@ _tour-selftest-cases() {
     test-it "patterns section runs" _tour-selftest-patterns
     test-it "args section runs"     _tour-selftest-args
     test-it "http section runs"     _tour-selftest-http
+    test-it "server section runs"   _tour-selftest-server
 }
 
 _tour-selftest-intro()    { test-assert-exit-code 0 _tour-quiet tour-intro; }
@@ -837,6 +868,7 @@ _tour-selftest-network()  { test-assert-exit-code 0 _tour-quiet tour-network; }
 _tour-selftest-patterns() { test-assert-exit-code 0 _tour-quiet tour-patterns; }
 _tour-selftest-args()     { test-assert-exit-code 0 _tour-quiet tour-args; }
 _tour-selftest-http()     { test-assert-exit-code 0 _tour-quiet tour-http; }
+_tour-selftest-server()   { test-assert-exit-code 0 _tour-quiet tour-server; }
 
 tour-self-test() {
     test-describe "dotlib tour sections" _tour-selftest-cases
