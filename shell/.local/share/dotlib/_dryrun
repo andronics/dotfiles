@@ -712,4 +712,9 @@ dryrun-self-test() {
 # ------------------------------
 
 # Run self-test if executed directly (not sourced)
-[[ "${ZSH_EVAL_CONTEXT}" == "toplevel" ]] && dryrun-self-test
+if [[ "${ZSH_EVAL_CONTEXT}" == *:file || "${ZSH_EVAL_CONTEXT}" == "file" ]]; then
+    # Sourced, don't run anything
+    :
+elif [[ "${ZSH_EVAL_CONTEXT}" == "" || "${(%):-%x}" == "$0" ]]; then
+    dryrun-self-test
+fi

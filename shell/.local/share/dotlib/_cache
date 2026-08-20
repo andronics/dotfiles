@@ -174,7 +174,7 @@ cache-set() {
     [[ -z "${_CACHE_HITS[$key]}" ]] && _CACHE_HITS[$key]=0
     [[ -z "${_CACHE_MISSES[$key]}" ]] && _CACHE_MISSES[$key]=0
 
-    ((_CACHE_TOTAL_SETS++))
+    ((_CACHE_TOTAL_SETS++)) || true
     _cache-auto-persist
 
     return 0
@@ -188,8 +188,8 @@ cache-get() {
     # Check if key exists
     if [[ -z "${_CACHE_DATA[$key]+exists}" ]]; then
         _cache-log-debug "Cache miss: $key"
-        [[ -n "${_CACHE_MISSES[$key]}" ]] && ((_CACHE_MISSES[$key]++)) || _CACHE_MISSES[$key]=1
-        ((_CACHE_TOTAL_MISSES++))
+        [[ -n "${_CACHE_MISSES[$key]}" ]] && { ((_CACHE_MISSES[$key]++)) || true; } || _CACHE_MISSES[$key]=1
+        ((_CACHE_TOTAL_MISSES++)) || true
         return 1
     fi
 
@@ -197,14 +197,14 @@ cache-get() {
     if _cache-is-expired "$key"; then
         _cache-log-debug "Cache expired: $key"
         _cache-remove-expired "$key"
-        ((_CACHE_TOTAL_MISSES++))
+        ((_CACHE_TOTAL_MISSES++)) || true
         return 1
     fi
 
     # Cache hit
     _cache-log-debug "Cache hit: $key"
-    ((_CACHE_HITS[$key]++))
-    ((_CACHE_TOTAL_HITS++))
+    ((_CACHE_HITS[$key]++)) || true
+    ((_CACHE_TOTAL_HITS++)) || true
 
     echo "${_CACHE_DATA[$key]}"
     return 0
@@ -238,7 +238,7 @@ cache-clear() {
         unset "_CACHE_HITS[$key]"
         unset "_CACHE_MISSES[$key]"
         _cache-log-debug "Cleared: $key"
-        ((_CACHE_TOTAL_CLEARS++))
+        ((_CACHE_TOTAL_CLEARS++)) || true
         _cache-auto-persist
         return 0
     fi
@@ -262,7 +262,7 @@ cache-clear-namespace() {
     for key in "${(@k)_CACHE_DATA}"; do
         if [[ "$key" == ${prefix}* ]]; then
             cache-clear "$key"
-            ((count++))
+            ((count++)) || true
         fi
     done
 
@@ -328,7 +328,7 @@ cache-cleanup-expired() {
     for key in "${(@k)_CACHE_DATA}"; do
         if _cache-is-expired "$key"; then
             _cache-remove-expired "$key"
-            ((count++))
+            ((count++)) || true
         fi
     done
 
@@ -420,7 +420,7 @@ cache-load() {
         _CACHE_HITS[$key]=$hits
         _CACHE_MISSES[$key]=$misses
 
-        ((count++))
+        ((count++)) || true
     done < "$file"
 
     _cache-log-verbose "Loaded $count entries from: $file"

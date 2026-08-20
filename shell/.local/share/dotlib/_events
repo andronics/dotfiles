@@ -391,10 +391,10 @@ _events-dispatch() {
 
         # Call handler with error isolation
         if ! "$handler" "$event_name" "$event_id" "$timestamp" "${event_data[@]}" 2>/dev/null; then
-            ((failed++))
+            ((failed++)) || true
             log-warning "Handler '$handler' failed for event '$event_name'"
         else
-            ((executed++))
+            ((executed++)) || true
         fi
     done
 
@@ -609,7 +609,7 @@ events-history() {
                 ;;
         esac
 
-        ((count++))
+        ((count++)) || true
     done
 }
 
@@ -1084,7 +1084,10 @@ events-self-test() {
     fi
 }
 
-# Run self-test if executed directly
-if [[ "${BASH_SOURCE[0]}" == "${0}" ]] || [[ "$1" == "self-test" ]]; then
+# Run self-test if executed directly (not sourced)
+if [[ "${ZSH_EVAL_CONTEXT}" == *:file || "${ZSH_EVAL_CONTEXT}" == "file" ]]; then
+    # Sourced, don't run anything
+    :
+elif [[ "${ZSH_EVAL_CONTEXT}" == "" || "${(%):-%x}" == "$0" ]]; then
     events-self-test
 fi

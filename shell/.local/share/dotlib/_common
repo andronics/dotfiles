@@ -646,7 +646,8 @@ common-dir-exists() {
 # Usage: common-ensure-dir "/path/to/dir"
 common-ensure-dir() {
     local dir="$1"
-    [[ ! -d "$dir" ]] && mkdir -p "$dir" 2>/dev/null
+    [[ -d "$dir" ]] && return 0
+    mkdir -p "$dir" 2>/dev/null
 }
 
 # Get file size in human-readable format
@@ -918,7 +919,10 @@ common-self-test() {
     fi
 }
 
-# Run self-test if executed directly
-if [[ "${BASH_SOURCE[0]}" == "${0}" ]] || [[ "$1" == "self-test" ]]; then
+# Run self-test if executed directly (not sourced)
+if [[ "${ZSH_EVAL_CONTEXT}" == *:file || "${ZSH_EVAL_CONTEXT}" == "file" ]]; then
+    # Sourced, don't run anything
+    :
+elif [[ "${ZSH_EVAL_CONTEXT}" == "" || "${(%):-%x}" == "$0" ]]; then
     common-self-test
 fi

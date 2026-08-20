@@ -39,6 +39,21 @@
 [[ -n "${_NOTIFY_LOADED}" ]] && return 0
 declare -gr _NOTIFY_LOADED=1
 
+# Load _common (required)
+if ! source "${DOTLIB}/_common" 2>/dev/null; then
+    echo "[ERROR] _notify requires _common - cannot load" >&2
+    return 1
+fi
+
+# Load _log (optional)
+if ! source "${DOTLIB}/_log" 2>/dev/null; then
+    log-trace() { [[ "${TRACE:-0}" == "1" ]] && echo "[TRACE] $*" >&2 || true; }
+    log-debug() { [[ "${DEBUG:-0}" == "1" ]] && echo "[DEBUG] $*" >&2 || true; }
+    log-info() { echo "[INFO] $*" >&2; }
+    log-warn() { echo "[WARN] $*" >&2; }
+    log-error() { echo "[ERROR] $*" >&2; }
+fi
+
 # ------------------------------
 # Version
 # ------------------------------
@@ -152,7 +167,8 @@ fi
 # Emit event if events are available
 # Args: event_name, [args...]
 _notify-emit() {
-    [[ -n "${_EVENTS_LOADED}" ]] && events-emit "$@"
+    [[ -n "${EVENTS_LOADED}" ]] && { events-emit "$@" || true; }
+    return 0
 }
 
 # Get next notification ID
@@ -505,12 +521,12 @@ notify-history() {
     local start=$((total - limit))
     (( start < 0 )) && start=0
 
+    local entry urgency_colored
     for (( i = start; i < total; i++ )); do
-        local entry="${_NOTIFY_HISTORY[$i]}"
+        entry="${_NOTIFY_HISTORY[$i]}"
         IFS='|' read -r timestamp urgency summary body <<< "$entry"
 
         # Color urgency
-        local urgency_colored
         case "$urgency" in
             low) urgency_colored="${COLOR_GREEN}LOW${COLOR_NC}" ;;
             normal) urgency_colored="${COLOR_YELLOW}NORMAL${COLOR_NC}" ;;
@@ -521,7 +537,7 @@ notify-history() {
         echo "[$timestamp] [$urgency_colored] $summary"
         [[ -n "$body" ]] && echo "  $body"
         echo ""
-        ((count++))
+        ((count++)) || true
     done
 
     echo "Total: $count notification(s)"

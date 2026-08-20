@@ -38,6 +38,21 @@
 [[ -n "${_CRYPTO_LOADED}" ]] && return 0
 declare -gr _CRYPTO_LOADED=1
 
+# Load _common (required)
+if ! source "${DOTLIB}/_common" 2>/dev/null; then
+    echo "[ERROR] _crypto requires _common - cannot load" >&2
+    return 1
+fi
+
+# Load _log (optional)
+if ! source "${DOTLIB}/_log" 2>/dev/null; then
+    log-trace() { [[ "${TRACE:-0}" == "1" ]] && echo "[TRACE] $*" >&2 || true; }
+    log-debug() { [[ "${DEBUG:-0}" == "1" ]] && echo "[DEBUG] $*" >&2 || true; }
+    log-info() { echo "[INFO] $*" >&2; }
+    log-warn() { echo "[WARN] $*" >&2; }
+    log-error() { echo "[ERROR] $*" >&2; }
+fi
+
 # ------------------------------
 # Version
 # ------------------------------
@@ -1357,6 +1372,9 @@ crypto-version() {
 # Auto-run self-test if executed directly
 # ------------------------------
 
-if [[ "${ZSH_EVAL_CONTEXT}" == "toplevel" ]] || [[ "${(%):-%x}" == "${0}" ]]; then
+if [[ "${ZSH_EVAL_CONTEXT}" == *:file || "${ZSH_EVAL_CONTEXT}" == "file" ]]; then
+    # Sourced, don't run anything
+    :
+elif [[ "${ZSH_EVAL_CONTEXT}" == "" || "${(%):-%x}" == "$0" ]]; then
     crypto-self-test
 fi

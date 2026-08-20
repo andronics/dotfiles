@@ -421,14 +421,16 @@ async-series() {
     [[ ${#tasks[@]} -eq 0 ]] && return 0
 
     local had_errors=false
+    local result
+    local exit_code=0
 
     log-debug "Starting series execution of ${#tasks[@]} tasks" \
         "stop_on_error=$stop_on_error" "timeout=${timeout:-none}"
 
     # Execute each task sequentially
     for task in "${tasks[@]}"; do
-        local result
-        local exit_code=0
+        result=""
+        exit_code=0
 
         log-trace "Executing task" "task=$task"
         _async-emit "$ASYNC_EVENT_JOB_START" "task=$task"
@@ -460,7 +462,7 @@ async-series() {
             had_errors=true
 
             if [[ "$stop_on_error" == "true" ]]; then
-                log-warn "Stopping series execution due to error"
+                log-warning "Stopping series execution due to error"
                 return 1
             fi
         fi
@@ -790,13 +792,15 @@ async-retry() {
 
     local attempt=1
     local current_interval=$interval
+    local result
+    local exit_code=0
 
     while [[ $attempt -le $times ]]; do
         log-trace "Retry attempt $attempt of $times" "task=$task"
         _async-emit "$ASYNC_EVENT_RETRY" "task=$task" "attempt=$attempt" "max=$times"
 
-        local result
-        local exit_code=0
+        result=""
+        exit_code=0
 
         # Execute task (handle both functions and commands)
         if typeset -f "$task" >/dev/null 2>&1; then
@@ -820,7 +824,7 @@ async-retry() {
             echo "$result"
             return 0
         else
-            log-warn "Retry attempt $attempt failed" "task=$task" "exit_code=$exit_code"
+            log-warning "Retry attempt $attempt failed" "task=$task" "exit_code=$exit_code"
 
             if [[ $attempt -lt $times ]]; then
                 log-trace "Waiting ${current_interval}s before retry"
@@ -941,7 +945,7 @@ async-queue-create() {
     common-validate-required "$worker" "worker function" || return 2
 
     if [[ -n "${_ASYNC_QUEUES[$queue_name]}" ]]; then
-        log-warn "Queue already exists" "queue=$queue_name"
+        log-warning "Queue already exists" "queue=$queue_name"
         return 4
     fi
 

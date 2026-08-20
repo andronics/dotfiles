@@ -1,0 +1,14 @@
+#!/usr/bin/env zsh
+set -e
+
+source "${DOTLIB}/_dispatcher" || { echo "missing _dispatcher" >&2; exit 1; }
+source "${DOTLIB}/_tour"       || { echo "missing _tour" >&2; exit 1; }
+
+dispatcher-init "tour" \
+    --route=function \
+    --description="Live tour of dotlib's framework and module capabilities"
+
+dispatcher-register-alias "all"  "run"
+dispatcher-register-alias "demo" "run"
+
+dispatcher-execute "$@"

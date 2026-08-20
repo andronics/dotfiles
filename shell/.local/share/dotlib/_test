@@ -714,6 +714,7 @@ EOF
 
     [[ "$TEST_VERBOSE" == "true" ]] && \
         echo "Results saved to: $results_file"
+    return 0
 }
 
 # Show test coverage report
