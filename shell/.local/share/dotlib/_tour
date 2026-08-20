@@ -9,15 +9,15 @@
 # Most of dotlib's modules are written but never exercised by a real
 # wrapper (see the dotlib README's "Module status" note). This module
 # runs real demos through them -- _ui, _format, _string, _validation,
-# _events, _async, _rules, _crypto, _schema, _notify, _test -- using
-# each module's actual public functions. Business logic stays in
-# those modules; this file only supplies narration, sample data, and
-# pacing.
+# _events, _async, _rules, _crypto, _schema, _actions, _notify, _test
+# -- using each module's actual public functions. Business logic
+# stays in those modules; this file only supplies narration, sample
+# data, and pacing.
 #
 # Dependencies:
 #   Required:
 #     - _common, _ui, _format, _string, _validation, _events, _async,
-#       _rules, _crypto, _schema, _notify, _test
+#       _rules, _crypto, _schema, _actions, _notify, _test
 #   Optional:
 #     - _log
 
@@ -36,6 +36,7 @@ source "${DOTLIB}/_async"      || { echo "[ERROR] _tour requires _async" >&2; re
 source "${DOTLIB}/_rules"      || { echo "[ERROR] _tour requires _rules" >&2; return 1; }
 source "${DOTLIB}/_crypto"     || { echo "[ERROR] _tour requires _crypto" >&2; return 1; }
 source "${DOTLIB}/_schema"     || { echo "[ERROR] _tour requires _schema" >&2; return 1; }
+source "${DOTLIB}/_actions"    || { echo "[ERROR] _tour requires _actions" >&2; return 1; }
 source "${DOTLIB}/_notify"     || { echo "[ERROR] _tour requires _notify" >&2; return 1; }
 source "${DOTLIB}/_test"       || { echo "[ERROR] _tour requires _test" >&2; return 1; }
 
@@ -50,6 +51,7 @@ typeset -gA _TOUR_DESCRIPTIONS=(
     [rules]="Tour _rules: condition/action rule evaluation"
     [crypto]="Tour _crypto: hashing, HMAC, and roundtrip encryption"
     [schema]="Tour _schema: action/v1 schema validation and querying"
+    [actions]="Tour _actions: dependency-ordered action execution"
     [notify]="Tour _notify: a real desktop notification"
     [framework]="Tour _dispatcher's own help/commands/completion/dry-run"
     [run]="Run the full tour end to end (--fast skips pacing)"
@@ -77,6 +79,24 @@ _tour-on-greet() {
 
 _tour-quiet() {
     "$@" >/dev/null 2>&1
+}
+
+# _actions handlers: action-register validates these exist as real functions,
+# then action-execute-schema calls them as `handler "$resource" "$params"`.
+_tour-action-ensure-dir() {
+    local resource="$1"
+    mkdir -p "$resource" && echo "ensured directory: $resource"
+}
+
+_tour-action-write-file() {
+    local resource="$1"
+    echo "written by the dotlib tour" > "$resource" && echo "wrote file: $resource"
+}
+
+_tour-action-fail() {
+    local resource="$1"
+    echo "simulated failure touching $resource" >&2
+    return 1
 }
 
 # ------------------------------
@@ -320,6 +340,68 @@ YAML
     rm -f "$good_schema" "$bad_schema"
 }
 
+tour-actions() {
+    ui-header "_actions — action registry & execution engine"
+
+    local workspace="${TMPDIR:-/tmp}/dotlib-tour-actions-workspace"
+    local schema_file
+    schema_file="$(mktemp --suffix=.yaml "${TMPDIR:-/tmp}/dotlib-tour-actions.XXXXXX")"
+
+    cat > "$schema_file" <<YAML
+schema: action/v1
+metadata:
+  name: dotlib-tour-actions-demo
+actions:
+  - id: create-workspace
+    type: fs.directory
+    action: ensure
+    resource: ${workspace}
+    on_error: fail
+  - id: write-marker
+    type: fs.file
+    action: write
+    resource: ${workspace}/marker.txt
+    depends_on:
+      - create-workspace
+    on_error: fail
+  - id: flaky-step
+    type: demo.flaky
+    action: run
+    resource: ${workspace}/marker.txt
+    depends_on:
+      - write-marker
+    on_error: warn
+YAML
+
+    action-register "fs.directory" "ensure" _tour-action-ensure-dir >/dev/null
+    action-register "fs.file" "write" _tour-action-write-file >/dev/null
+    action-register "demo.flaky" "run" _tour-action-fail >/dev/null
+
+    ui-info "executing a 3-step schema, dependency-ordered via _lifecycle..."
+    ui-info "(the third step deliberately fails with on_error: warn)"
+    action-execute-schema "$schema_file"
+    ui-success "schema execution finished (on_error: warn kept it from stopping)"
+
+    echo ""
+    ui-info "execution order (from action-get-history):"
+    local -a history
+    history=("${(@f)$(action-get-history)}")
+    ui-numbered-list "${history[@]}"
+
+    echo ""
+    ui-table-header "ACTION" "STATE" "" ""
+    ui-table-separator 60
+    printf "%-25s %s\n" "create-workspace" "$(action-get-state create-workspace)"
+    printf "%-25s %s\n" "write-marker" "$(action-get-state write-marker)"
+    printf "%-25s %s\n" "flaky-step" "$(action-get-state flaky-step)"
+
+    echo ""
+    action-stats
+
+    action-clear-state
+    rm -rf "$workspace" "$schema_file"
+}
+
 tour-notify() {
     ui-header "_notify — desktop notifications"
 
@@ -351,7 +433,7 @@ tour-run() {
     local fast=false
     [[ "$1" == "--fast" ]] && fast=true
 
-    local -a sections=(intro ui format string validate events async rules crypto schema notify framework)
+    local -a sections=(intro ui format string validate events async rules crypto schema actions notify framework)
     local section
 
     for section in "${sections[@]}"; do
@@ -382,6 +464,7 @@ _tour-selftest-cases() {
     test-it "rules section runs"    _tour-selftest-rules
     test-it "crypto section runs"   _tour-selftest-crypto
     test-it "schema section runs"   _tour-selftest-schema
+    test-it "actions section runs"  _tour-selftest-actions
 }
 
 _tour-selftest-intro()    { test-assert-exit-code 0 _tour-quiet tour-intro; }
@@ -394,6 +477,7 @@ _tour-selftest-async()    { test-assert-exit-code 0 _tour-quiet tour-async; }
 _tour-selftest-rules()    { test-assert-exit-code 0 _tour-quiet tour-rules; }
 _tour-selftest-crypto()   { test-assert-exit-code 0 _tour-quiet tour-crypto; }
 _tour-selftest-schema()   { test-assert-exit-code 0 _tour-quiet tour-schema; }
+_tour-selftest-actions()  { test-assert-exit-code 0 _tour-quiet tour-actions; }
 
 tour-self-test() {
     test-describe "dotlib tour sections" _tour-selftest-cases

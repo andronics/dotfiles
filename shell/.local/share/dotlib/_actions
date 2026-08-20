@@ -593,13 +593,10 @@ action-execute-schema() {
     fi
 
     # Validate schema
-    echo "[DEBUG action-execute-schema] Validating schema..." >&2
     if ! schema-validate "$schema_file" >&2; then
-        echo "[DEBUG action-execute-schema] Validation returned non-zero" >&2
         _actions-log-error "Schema validation failed"
         return 1
     fi
-    echo "[DEBUG action-execute-schema] Validation passed" >&2
 
     # Generate execution ID
     _ACTIONS_CURRENT_EXEC_ID="exec_$(/bin/date +%s)_$$"
@@ -610,12 +607,8 @@ action-execute-schema() {
     _ACTIONS_HISTORY=()
 
     # Get actions
-    echo "[DEBUG action-execute-schema] Getting actions..." >&2
-    echo "[DEBUG action-execute-schema] _SCHEMA_CURRENT[json] length: ${#_SCHEMA_CURRENT[json]}" >&2
     local actions=$(schema-get-actions)
-    echo "[DEBUG action-execute-schema] Got actions, length: ${#actions}" >&2
     local action_count=$(echo "$actions" | /usr/bin/jq -r 'length' 2>/dev/null)
-    echo "[DEBUG action-execute-schema] Action count: $action_count" >&2
 
     _actions-log-verbose "Executing $action_count actions"
     ((_ACTIONS_TOTAL_EXECUTIONS++)) || true
@@ -626,13 +619,10 @@ action-execute-schema() {
     _actions-log-debug "Building dependency graph"
 
     # Register all actions with lifecycle
-    echo "[DEBUG action-execute-schema] Registering $action_count actions with lifecycle..." >&2
     for ((i=0; i<action_count; i++)); do
         local action=$(echo "$actions" | /usr/bin/jq -r ".[$i]" 2>/dev/null)
         local action_id=$(echo "$action" | /usr/bin/jq -r '.id' 2>/dev/null)
         local depends_on=$(echo "$action" | /usr/bin/jq -r '.depends_on[]? // empty' 2>/dev/null)
-
-        echo "[DEBUG action-execute-schema] Registering action $i: $action_id" >&2
 
         # Create cleanup function for action
         local cleanup_func="_actions_cleanup_${action_id}"
@@ -640,7 +630,6 @@ action-execute-schema() {
 
         # Register with lifecycle
         if [[ -n "$depends_on" ]]; then
-            echo "[DEBUG action-execute-schema] Action has dependencies: $depends_on" >&2
             local -a deps=()
             while IFS= read -r dep; do
                 deps+=("$dep")
@@ -648,19 +637,15 @@ action-execute-schema() {
 
             lifecycle-cleanup-add "$action_id" "$cleanup_func" "${deps[@]}"
         else
-            echo "[DEBUG action-execute-schema] Action has no dependencies, registering..." >&2
             lifecycle-cleanup-add "$action_id" "$cleanup_func"
         fi
-        echo "[DEBUG action-execute-schema] Registered action: $action_id" >&2
 
         # Set initial state
         _actions-set-state "$action_id" "pending"
     done
 
     # Get execution order
-    echo "[DEBUG action-execute-schema] Getting execution order..." >&2
     local execution_order=$(lifecycle-cleanup-order 2>/dev/null)
-    echo "[DEBUG action-execute-schema] Execution order output: '$execution_order'" >&2
     _actions-log-debug "Execution order: $execution_order"
 
     # Execute actions in order
@@ -702,7 +687,7 @@ action-execute-schema() {
         # Attempt rollback if enabled
         if [[ "$ACTIONS_ENABLE_ROLLBACK" == "true" ]]; then
             _actions-log-warning "Attempting rollback..."
-            _actions-rollback-schema "$schema_json"
+            _actions-rollback-schema "${_SCHEMA_CURRENT[json]}"
         fi
 
         return 1
