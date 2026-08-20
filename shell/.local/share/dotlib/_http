@@ -234,7 +234,7 @@ _http-request() {
     if [[ "$http_code" =~ ^2[0-9][0-9]$ ]]; then
         return 0
     else
-        log-warn "HTTP $method $url returned $http_code"
+        log-warning "HTTP $method $url returned $http_code"
         return 1
     fi
 }
@@ -376,7 +376,7 @@ http-parse-json() {
         return 6
     fi
 
-    echo "$response" | jq -r "$query"
+    echo "$response" | /usr/bin/jq -r "$query"
 }
 
 # ------------------------------
