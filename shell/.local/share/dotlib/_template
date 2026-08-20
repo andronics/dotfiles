@@ -417,7 +417,9 @@ template-load-partial() {
 
     # Try to load from file
     local partial_file="${TEMPLATE_PARTIALS_DIR}/${name}"
-    [[ ! "$name" =~ \. ]] && partial_file="${partial_file}.tmpl"
+    # Glob match instead of `=~ \.` — an unquoted backslash-escape fed to zsh's
+    # =~ loses its escaping, so \. silently became "any char" (always true).
+    [[ "$name" != *.* ]] && partial_file="${partial_file}.tmpl"
 
     if [[ ! -f "$partial_file" ]]; then
         _template-log-warning "Partial not found: ${name}"
@@ -469,10 +471,10 @@ _template-render-gomplate() {
         "--right-delim" "$TEMPLATE_GOMPLATE_RIGHT_DELIM"
     )
 
-    # Add context data source
+    # Add context data source directly as the root context (the older ctx=...
+    # datasource alias + `.=ctx://ctx` indirection isn't supported by current gomplate)
     if [[ -n "$temp_context" ]]; then
-        gomplate_args+=("--datasource" "ctx=file://$temp_context?type=application/json")
-        gomplate_args+=("--context" ".=ctx://ctx")
+        gomplate_args+=("--context" ".=file://$temp_context?type=application/json")
     fi
 
     # Merge global context as environment variables
@@ -515,10 +517,19 @@ _template-render-mustache() {
         output="${output//\{\{${var_name}\}\}/$var_value}"
     done
 
-    # Conditionals: {{#var}}...{{/var}}
-    while [[ "$output" =~ \{\{#([^\}]+)\}\}(.*)\{\{/\1\}\} ]]; do
+    # Conditionals: {{#var}}...{{/var}}. Note: zsh's `=~` (POSIX ERE) has no
+    # backreferences, so the close tag can't be matched via \1 — extract the var
+    # name first, then split on its *literal* open/close tags instead.
+    local open_pattern='\{\{#([A-Za-z0-9_]+)\}\}'
+    while [[ "$output" =~ $open_pattern ]]; do
         local cond_var="${match[1]}"
-        local cond_content="${match[2]}"
+        local open_tag="{{#${cond_var}}}"
+        local close_tag="{{/${cond_var}}}"
+
+        local pre="${output%%${open_tag}*}"
+        local rest="${output#*${open_tag}}"
+        local cond_content="${rest%%${close_tag}*}"
+        local post="${rest#*${close_tag}}"
         local cond_value="${_TEMPLATE_VARS[$cond_var]:-}"
 
         local replacement=""
@@ -526,13 +537,20 @@ _template-render-mustache() {
             replacement="$cond_content"
         fi
 
-        output="${output/\{\{#${cond_var}\}\}${cond_content}\{\{\/${cond_var}\}\}/$replacement}"
+        output="${pre}${replacement}${post}"
     done
 
     # Inverted conditionals: {{^var}}...{{/var}}
-    while [[ "$output" =~ \{\{\^([^\}]+)\}\}(.*)\{\{/\1\}\} ]]; do
+    local inv_open_pattern='\{\{\^([A-Za-z0-9_]+)\}\}'
+    while [[ "$output" =~ $inv_open_pattern ]]; do
         local inv_var="${match[1]}"
-        local inv_content="${match[2]}"
+        local inv_open_tag="{{^${inv_var}}}"
+        local inv_close_tag="{{/${inv_var}}}"
+
+        local inv_pre="${output%%${inv_open_tag}*}"
+        local inv_rest="${output#*${inv_open_tag}}"
+        local inv_content="${inv_rest%%${inv_close_tag}*}"
+        local inv_post="${inv_rest#*${inv_close_tag}}"
         local inv_value="${_TEMPLATE_VARS[$inv_var]:-}"
 
         local replacement=""
@@ -540,11 +558,13 @@ _template-render-mustache() {
             replacement="$inv_content"
         fi
 
-        output="${output/\{\{\^${inv_var}\}\}${inv_content}\{\{\/${inv_var}\}\}/$replacement}"
+        output="${inv_pre}${replacement}${inv_post}"
     done
 
-    # Partials: {{> partial}}
-    while [[ "$output" =~ \{\{>([^\}]+)\}\} ]]; do
+    # Partials: {{> partial}}. The pattern is kept in a variable — inlined, the
+    # unquoted `>(` reads to zsh's parser as process substitution syntax.
+    local partial_pattern='\{\{>([^}]+)\}\}'
+    while [[ "$output" =~ $partial_pattern ]]; do
         local partial_name="${match[1]// /}"
         local partial_content=$(template-load-partial "$partial_name" 2>/dev/null || echo "")
         output="${output/\{\{>${match[1]}\}\}/$partial_content}"

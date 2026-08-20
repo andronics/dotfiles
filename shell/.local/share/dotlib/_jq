@@ -262,11 +262,14 @@ _jq-build-args() {
     # Sort keys
     [[ "$JQ_SORT_KEYS" == "true" ]] && args+=(-S)
 
-    # Tab indent
-    if [[ "$JQ_TAB_INDENT" == "true" ]]; then
-        args+=(--tab)
-    else
-        args+=(--indent "$JQ_INDENT")
+    # Tab/indent flags are meaningless (and, worse, override -c) in compact mode —
+    # jq applies flags in order, so a trailing --indent/--tab re-enables pretty-print.
+    if [[ "$JQ_COMPACT" != "true" ]]; then
+        if [[ "$JQ_TAB_INDENT" == "true" ]]; then
+            args+=(--tab)
+        else
+            args+=(--indent "$JQ_INDENT")
+        fi
     fi
 
     # Color

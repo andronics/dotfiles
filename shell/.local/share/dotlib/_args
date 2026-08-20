@@ -214,10 +214,13 @@ args-define-flag() {
 
     common-validate-required "$name" "name" || return 2
 
-    _ARGS_FLAGS[$name]="$short"
-    _ARGS_TYPES[$name]="boolean"
-    _ARGS_DEFAULTS[$name]="false"
-    [[ -n "$desc" ]] && _ARGS_DESCRIPTIONS[$name]="$desc"
+    # Store under the underscore-normalized form: args-parse normalizes --flag-name the
+    # same way before looking it up, so a hyphenated definition key would never match.
+    local key="${name//-/_}"
+    _ARGS_FLAGS[$key]="$short"
+    _ARGS_TYPES[$key]="boolean"
+    _ARGS_DEFAULTS[$key]="false"
+    [[ -n "$desc" ]] && _ARGS_DESCRIPTIONS[$key]="$desc"
 
     _args-log-debug "Defined flag: --$name${short:+ (-$short)}"
     return 0
@@ -235,11 +238,12 @@ args-define-option() {
 
     common-validate-required "$name" "name" || return 2
 
-    _ARGS_OPTIONS[$name]="$short"
-    _ARGS_TYPES[$name]="$type"
-    [[ -n "$default" ]] && _ARGS_DEFAULTS[$name]="$default"
-    [[ -n "$desc" ]] && _ARGS_DESCRIPTIONS[$name]="$desc"
-    [[ -n "$enum" ]] && _ARGS_ENUMS[$name]="$enum"
+    local key="${name//-/_}"
+    _ARGS_OPTIONS[$key]="$short"
+    _ARGS_TYPES[$key]="$type"
+    [[ -n "$default" ]] && _ARGS_DEFAULTS[$key]="$default"
+    [[ -n "$desc" ]] && _ARGS_DESCRIPTIONS[$key]="$desc"
+    [[ -n "$enum" ]] && _ARGS_ENUMS[$key]="$enum"
 
     _args-log-debug "Defined option: --$name${short:+ (-$short)} <$type>"
     return 0
@@ -256,11 +260,12 @@ args-define-required() {
 
     common-validate-required "$name" "name" || return 2
 
-    _ARGS_OPTIONS[$name]="$short"
-    _ARGS_TYPES[$name]="$type"
-    _ARGS_REQUIRED[$name]="true"
-    [[ -n "$desc" ]] && _ARGS_DESCRIPTIONS[$name]="$desc"
-    [[ -n "$enum" ]] && _ARGS_ENUMS[$name]="$enum"
+    local key="${name//-/_}"
+    _ARGS_OPTIONS[$key]="$short"
+    _ARGS_TYPES[$key]="$type"
+    _ARGS_REQUIRED[$key]="true"
+    [[ -n "$desc" ]] && _ARGS_DESCRIPTIONS[$key]="$desc"
+    [[ -n "$enum" ]] && _ARGS_ENUMS[$key]="$enum"
 
     _args-log-debug "Defined required option: --$name${short:+ (-$short)} <$type>"
     return 0
@@ -574,15 +579,16 @@ args-parse() {
             local key="${arg#--}"
             key="${key//-/_}"
 
-            # Check if it's a flag
-            if [[ -n "${_ARGS_FLAGS[$key]}" ]]; then
+            # Check if it's a flag. -v (key exists), not -n (value non-empty) — a flag
+            # with no short alias is a legitimate empty-string value, not an absent key.
+            if [[ -v "_ARGS_FLAGS[$key]" ]]; then
                 _ARGS_PARSED[$key]="true"
                 i=$((i + 1))
                 continue
             fi
 
             # Option with value
-            if [[ -n "${_ARGS_OPTIONS[$key]}" ]]; then
+            if [[ -v "_ARGS_OPTIONS[$key]" ]]; then
                 i=$((i + 1))
                 if [[ $i -gt ${#args[@]} ]]; then
                     _ARGS_PARSE_ERROR="Option --${key} requires a value"
@@ -663,7 +669,7 @@ args-parse() {
 # Get parsed value
 # Usage: args-get <name> [default]
 args-get() {
-    local name="$1"
+    local name="${1//-/_}"
     local default="${2:-}"
     echo "${_ARGS_PARSED[$name]:-$default}"
 }
@@ -671,7 +677,7 @@ args-get() {
 # Check if flag is set
 # Usage: args-is-set <name>
 args-is-set() {
-    local name="$1"
+    local name="${1//-/_}"
     [[ "${_ARGS_PARSED[$name]}" == "true" ]]
 }
 
@@ -791,11 +797,12 @@ args-show-help() {
             local short="${_ARGS_FLAGS[$name]}"
             local desc="${_ARGS_DESCRIPTIONS[$name]:-}"
             local line=""
+            local display="${name//_/-}"  # storage keys are underscore-normalized
 
             if [[ -n "$short" ]]; then
-                line="-${short}, --${name}"
+                line="-${short}, --${display}"
             else
-                line="    --${name}"
+                line="    --${display}"
             fi
 
             # Pad to 28 chars
@@ -812,11 +819,12 @@ args-show-help() {
             local required="${_ARGS_REQUIRED[$name]:-false}"
             local enum="${_ARGS_ENUMS[$name]:-}"
             local line=""
+            local display="${name//_/-}"
 
             if [[ -n "$short" ]]; then
-                line="-${short}, --${name} <${type:u}>"
+                line="-${short}, --${display} <${type:u}>"
             else
-                line="    --${name} <${type:u}>"
+                line="    --${display} <${type:u}>"
             fi
 
             # Build description

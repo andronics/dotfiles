@@ -243,11 +243,15 @@ singleton-lock() {
     # Clean stale lock if exists
     singleton-clean-stale-lock "$lock_file"
 
-    # Try to acquire lock
-    local lock_fd=$_SINGLETON_LOCK_FD
+    # Try to acquire lock. The hardcoded _SINGLETON_LOCK_FD (200) doesn't work here:
+    # zsh only recognizes a bare `exec N>file` fd redirect for single-digit N — any
+    # multi-digit N in that leading position is parsed as a command name instead
+    # ("command not found: 200"). zsh's `{name}` form allocates a real free fd and
+    # assigns it to $lock_fd, sidestepping the whole eval'd-string approach too.
+    local lock_fd
 
     # Open lock file
-    eval "exec ${lock_fd}>${lock_file}" 2>/dev/null || {
+    exec {lock_fd}>"${lock_file}" 2>/dev/null || {
         log-error "Failed to open lock file: $lock_file"
         return 1
     }
@@ -259,7 +263,7 @@ singleton-lock() {
     fi
 
     if ! flock $flock_opts $lock_fd; then
-        eval "exec ${lock_fd}>&-"  # Close FD
+        exec {lock_fd}>&-  # Close FD
 
         # Handle conflict based on action
         case "$SINGLETON_ACTION_ON_CONFLICT" in

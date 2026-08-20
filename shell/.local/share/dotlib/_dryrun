@@ -104,7 +104,11 @@ declare -g _DRYRUN_SCOPE_LEVEL=0
 # Emit event if events are available
 # Args: event_name, [args...]
 _dryrun-emit() {
+    # Unconditional return 0: every public dryrun-* caller ends on this as its last
+    # statement, so under `set -e` a bare `[[ ]] && cmd` here — false whenever
+    # _events isn't sourced — would abort the caller's caller too.
     [[ -n "${_EVENTS_LOADED}" ]] && events-emit "$@"
+    return 0
 }
 
 # ------------------------------

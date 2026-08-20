@@ -140,9 +140,9 @@ cache-set() {
     local value="$2"
     local ttl="${3:-$CACHE_DEFAULT_TTL}"
 
-    # Validate inputs
+    # Validate inputs. Only the key is required — an empty string is a legitimate,
+    # meaningful value to cache (e.g. "no remotes configured"), not a missing argument.
     common-validate-required "$key" "key" || return 2
-    common-validate-required "$value" "value" || return 2
 
     if [[ -n "$ttl" ]]; then
         common-validate-numeric "$ttl" || {
@@ -378,9 +378,11 @@ cache-save() {
         local hits="${_CACHE_HITS[$key]:-0}"
         local misses="${_CACHE_MISSES[$key]:-0}"
 
-        # Base64 encode to handle special characters
-        local encoded_key=$(echo -n "$key" | base64)
-        local encoded_value=$(echo -n "$value" | base64)
+        # Base64 encode to handle special characters. -w0: cache.dat is one record
+        # per line (key|value|expiry|hits|misses) — base64's default line-wrapping
+        # would split a multi-line value across records and corrupt the format.
+        local encoded_key=$(echo -n "$key" | base64 -w0)
+        local encoded_value=$(echo -n "$value" | base64 -w0)
 
         echo "${encoded_key}|${encoded_value}|${expiry}|${hits}|${misses}" >> "$tmpfile"
     done

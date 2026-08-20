@@ -407,8 +407,9 @@ ui-select() {
     fi
 
     echo "$prompt"
-    for i in "${!options[@]}"; do
-        echo "  $((i+1))) ${options[$i]}"
+    local i
+    for (( i = 1; i <= ${#options[@]}; i++ )); do
+        echo "  ${i}) ${options[$i]}"
     done
     echo ""
 

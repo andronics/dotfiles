@@ -225,7 +225,7 @@ docker-api-get() {
         local cached=$(cache-get "$cache_key")
         if [[ -n "$cached" ]]; then
             log-trace "Cache hit for: $api_path"
-            echo "$cached"
+            print -r -- "$cached"
             return 0
         fi
     fi
@@ -244,7 +244,7 @@ docker-api-get() {
         cache-set "$cache_key" "$response" "$DOCKER_CACHE_TTL"
     fi
 
-    echo "$response"
+    print -r -- "$response"
 }
 
 # Execute Docker API POST request
@@ -301,7 +301,7 @@ docker-api-post() {
         return 1
     fi
 
-    echo "$response"
+    print -r -- "$response"
 }
 
 # Execute Docker API PUT request
@@ -356,7 +356,7 @@ docker-api-put() {
         return 1
     fi
 
-    echo "$response"
+    print -r -- "$response"
 }
 
 # Execute Docker API DELETE request
@@ -399,7 +399,7 @@ docker-api-delete() {
         return 1
     fi
 
-    echo "$response"
+    print -r -- "$response"
 }
 
 # Execute Docker API HEAD request
@@ -580,7 +580,7 @@ docker-version() {
     if [[ "$DOCKER_CACHE_AVAILABLE" == "true" ]]; then
         local cached=$(cache-get "docker:version")
         if [[ -n "$cached" ]]; then
-            echo "$cached"
+            print -r -- "$cached"
             return 0
         fi
     fi
@@ -698,7 +698,7 @@ docker-container-create() {
 
     # Extract container ID
     local container_id
-    container_id=$(echo "$response" | _docker-parse-json '.Id')
+    container_id=$(print -r -- "$response" | _docker-parse-json '.Id')
 
     if [[ -n "$container_id" ]]; then
         _docker-emit "$DOCKER_EVENT_CONTAINER_CREATE" "id=$container_id"
@@ -1104,7 +1104,7 @@ docker-image-pull() {
     if [[ $? -eq 0 ]]; then
         _docker-emit "$DOCKER_EVENT_IMAGE_PULL" "name=$image"
         log-success "Image pulled" "name=$image"
-        echo "$response"
+        print -r -- "$response"
     else
         log-error "Failed to pull image" "name=$image"
         return 1
@@ -1143,7 +1143,7 @@ docker-image-remove() {
     if [[ $? -eq 0 ]]; then
         _docker-emit "$DOCKER_EVENT_IMAGE_DELETE" "name=$image"
         log-success "Image removed" "name=$image"
-        echo "$response"
+        print -r -- "$response"
     else
         log-error "Failed to remove image" "name=$image"
         return 1
@@ -1279,7 +1279,7 @@ docker-volume-create() {
     if [[ $? -eq 0 ]]; then
         _docker-emit "$DOCKER_EVENT_VOLUME_CREATE" "name=$name"
         log-success "Volume created" "name=$name"
-        echo "$response"
+        print -r -- "$response"
     else
         log-error "Failed to create volume" "name=$name"
         return 1
@@ -1322,7 +1322,7 @@ docker-volume-remove() {
         _docker-emit "$DOCKER_EVENT_VOLUME_DESTROY" "name=$volume"
         unset "_DOCKER_TRACKED_VOLUMES[$volume]"
         log-success "Volume removed" "name=$volume"
-        echo "$response"
+        print -r -- "$response"
     else
         log-error "Failed to remove volume" "name=$volume"
         return 1
@@ -1422,7 +1422,7 @@ docker-network-create() {
     if [[ $? -eq 0 ]]; then
         _docker-emit "$DOCKER_EVENT_NETWORK_CREATE" "name=$name"
         log-success "Network created" "name=$name"
-        echo "$response"
+        print -r -- "$response"
     else
         log-error "Failed to create network" "name=$name"
         return 1
@@ -1454,7 +1454,7 @@ docker-network-remove() {
         _docker-emit "$DOCKER_EVENT_NETWORK_DESTROY" "name=$network"
         unset "_DOCKER_TRACKED_NETWORKS[$network]"
         log-success "Network removed" "name=$network"
-        echo "$response"
+        print -r -- "$response"
     else
         log-error "Failed to remove network" "name=$network"
         return 1
