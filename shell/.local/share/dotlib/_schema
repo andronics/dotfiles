@@ -128,12 +128,10 @@ declare -g _SCHEMA_TOTAL_ERRORS=0
 if common-command-exists "python3" && python3 -c "import yaml" 2>/dev/null; then
     SCHEMA_PYTHON_YAML_AVAILABLE=true
 fi
-echo "[DEBUG _schema] Python YAML check done" >&2
 
 if common-command-exists "jq"; then
     SCHEMA_JQ_AVAILABLE=true
 fi
-echo "[DEBUG _schema] JQ check done" >&2
 
 # ------------------------------
 # Color Constants
@@ -314,26 +312,20 @@ schema-load-file() {
 # Load and expand schema (with template expansion)
 schema-load() {
     local file="$1"
-    echo "[DEBUG schema-load] Loading: $file" >&2
+    _schema-log-debug "Loading: $file"
 
     common-validate-required "$file" "file" || return 2
 
     # Load raw schema
-    echo "[DEBUG schema-load] Calling schema-load-file..." >&2
     local schema_json=$(schema-load-file "$file")
     local load_result=$?
-    echo "[DEBUG schema-load] schema-load-file returned: $load_result, json length: ${#schema_json}" >&2
     if [[ $load_result -ne 0 ]]; then
-        echo "[DEBUG schema-load] Returning early due to load failure" >&2
         return $load_result
     fi
 
     # Extract context for template expansion
-    echo "[DEBUG schema-load] SCHEMA_EXPAND_TEMPLATES: ${SCHEMA_EXPAND_TEMPLATES:-unset}" >&2
     if [[ "$SCHEMA_EXPAND_TEMPLATES" == "true" ]]; then
-        echo "[DEBUG schema-load] Template expansion enabled, extracting context..." >&2
         local context=$(echo "$schema_json" | /usr/bin/jq -r '.context // {}' 2>/dev/null)
-        echo "[DEBUG schema-load] Context extracted: $context" >&2
         if [[ -n "$context" ]] && [[ "$context" != "null" ]] && [[ "$context" != "{}" ]]; then
             _schema-log-debug "Expanding templates with context"
 
@@ -342,26 +334,17 @@ schema-load() {
             template-context-set "." "$context"
 
             # Expand templates in schema
-            echo "[DEBUG schema-load] Calling template-render..." >&2
             schema_json=$(template-render "$schema_json" "$context")
             if [[ $? -ne 0 ]]; then
                 _schema-log-error "Template expansion failed"
-                echo "[DEBUG schema-load] Returning early due to template expansion failure" >&2
                 return 3
             fi
-            echo "[DEBUG schema-load] Template expansion completed" >&2
-        else
-            echo "[DEBUG schema-load] No context to expand" >&2
         fi
-    else
-        echo "[DEBUG schema-load] Template expansion disabled, skipping..." >&2
     fi
 
     # Store as current schema
-    echo "[DEBUG schema-load] About to set _SCHEMA_CURRENT, schema_json length: ${#schema_json}" >&2
     _SCHEMA_CURRENT[json]="$schema_json"
     _SCHEMA_CURRENT[file]="$file"
-    echo "[DEBUG schema-load] _SCHEMA_CURRENT set, json length: ${#_SCHEMA_CURRENT[json]}, file: ${_SCHEMA_CURRENT[file]}" >&2
 
     _schema-log-success "Schema loaded: $file"
     echo "$schema_json"

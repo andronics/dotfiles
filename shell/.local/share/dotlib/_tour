@@ -9,14 +9,15 @@
 # Most of dotlib's modules are written but never exercised by a real
 # wrapper (see the dotlib README's "Module status" note). This module
 # runs real demos through them -- _ui, _format, _string, _validation,
-# _events, _async, _rules, _crypto, _notify, _test -- using each
-# module's actual public functions. Business logic stays in those
-# modules; this file only supplies narration, sample data, and pacing.
+# _events, _async, _rules, _crypto, _schema, _notify, _test -- using
+# each module's actual public functions. Business logic stays in
+# those modules; this file only supplies narration, sample data, and
+# pacing.
 #
 # Dependencies:
 #   Required:
 #     - _common, _ui, _format, _string, _validation, _events, _async,
-#       _rules, _crypto, _notify, _test
+#       _rules, _crypto, _schema, _notify, _test
 #   Optional:
 #     - _log
 
@@ -34,6 +35,7 @@ source "${DOTLIB}/_events"     || { echo "[ERROR] _tour requires _events" >&2; r
 source "${DOTLIB}/_async"      || { echo "[ERROR] _tour requires _async" >&2; return 1; }
 source "${DOTLIB}/_rules"      || { echo "[ERROR] _tour requires _rules" >&2; return 1; }
 source "${DOTLIB}/_crypto"     || { echo "[ERROR] _tour requires _crypto" >&2; return 1; }
+source "${DOTLIB}/_schema"     || { echo "[ERROR] _tour requires _schema" >&2; return 1; }
 source "${DOTLIB}/_notify"     || { echo "[ERROR] _tour requires _notify" >&2; return 1; }
 source "${DOTLIB}/_test"       || { echo "[ERROR] _tour requires _test" >&2; return 1; }
 
@@ -47,6 +49,7 @@ typeset -gA _TOUR_DESCRIPTIONS=(
     [async]="Tour _async: parallel execution and retry-until-success"
     [rules]="Tour _rules: condition/action rule evaluation"
     [crypto]="Tour _crypto: hashing, HMAC, and roundtrip encryption"
+    [schema]="Tour _schema: action/v1 schema validation and querying"
     [notify]="Tour _notify: a real desktop notification"
     [framework]="Tour _dispatcher's own help/commands/completion/dry-run"
     [run]="Run the full tour end to end (--fast skips pacing)"
@@ -254,6 +257,69 @@ tour-crypto() {
     fi
 }
 
+tour-schema() {
+    ui-header "_schema — action/v1 schema engine"
+
+    local good_schema bad_schema
+    good_schema="$(mktemp --suffix=.yaml "${TMPDIR:-/tmp}/dotlib-tour-schema-good.XXXXXX")"
+    bad_schema="$(mktemp --suffix=.yaml "${TMPDIR:-/tmp}/dotlib-tour-schema-bad.XXXXXX")"
+
+    cat > "$good_schema" <<'YAML'
+schema: action/v1
+metadata:
+  name: dotlib-tour-demo
+  description: A tiny sample action/v1 schema used by the tour
+actions:
+  - id: create-workspace
+    type: fs.directory
+    action: ensure
+    resource: /tmp/dotlib-tour-workspace
+    on_error: fail
+  - id: write-marker
+    type: fs.file
+    action: write
+    resource: /tmp/dotlib-tour-workspace/marker.txt
+    depends_on:
+      - create-workspace
+    on_error: warn
+YAML
+
+    cat > "$bad_schema" <<'YAML'
+schema: action/v1
+actions:
+  - id: BadID With Spaces
+    type: not-a-valid-type-format
+    action: ensure
+    resource: /tmp/whatever
+    on_error: explode
+YAML
+
+    ui-info "validating a well-formed action/v1 schema..."
+    if schema-validate "$good_schema"; then
+        ui-success "schema is valid"
+    fi
+
+    echo ""
+    ui-info "validating a deliberately broken schema..."
+    schema-validate "$bad_schema" && ui-error "expected this to fail" \
+        || ui-warning "invalid, as expected (errors above are schema-validate's real output)"
+
+    echo ""
+    ui-info "loading the valid schema and querying it..."
+    schema-load "$good_schema" >/dev/null
+
+    ui-list \
+        "version: $(schema-get-version)" \
+        "name: $(schema-get-metadata name)" \
+        "actions: $(schema-get-action-count) ($(schema-list-action-ids | tr '\n' ' '))"
+
+    echo ""
+    schema-stats
+
+    schema-clear
+    rm -f "$good_schema" "$bad_schema"
+}
+
 tour-notify() {
     ui-header "_notify — desktop notifications"
 
@@ -285,7 +351,7 @@ tour-run() {
     local fast=false
     [[ "$1" == "--fast" ]] && fast=true
 
-    local -a sections=(intro ui format string validate events async rules crypto notify framework)
+    local -a sections=(intro ui format string validate events async rules crypto schema notify framework)
     local section
 
     for section in "${sections[@]}"; do
@@ -315,6 +381,7 @@ _tour-selftest-cases() {
     test-it "async section runs"    _tour-selftest-async
     test-it "rules section runs"    _tour-selftest-rules
     test-it "crypto section runs"   _tour-selftest-crypto
+    test-it "schema section runs"   _tour-selftest-schema
 }
 
 _tour-selftest-intro()    { test-assert-exit-code 0 _tour-quiet tour-intro; }
@@ -326,6 +393,7 @@ _tour-selftest-events()   { test-assert-exit-code 0 _tour-quiet tour-events; }
 _tour-selftest-async()    { test-assert-exit-code 0 _tour-quiet tour-async; }
 _tour-selftest-rules()    { test-assert-exit-code 0 _tour-quiet tour-rules; }
 _tour-selftest-crypto()   { test-assert-exit-code 0 _tour-quiet tour-crypto; }
+_tour-selftest-schema()   { test-assert-exit-code 0 _tour-quiet tour-schema; }
 
 tour-self-test() {
     test-describe "dotlib tour sections" _tour-selftest-cases
