@@ -231,8 +231,32 @@ _bluetooth-exec() {
     if [[ "$_BLUETOOTH_FIFO_ACTIVE" == "true" ]]; then
         bluetooth-fifo-command "$cmd"
     else
-        # Direct execution
-        echo "$cmd" | bluetoothctl 2>/dev/null
+        # Direct execution. Callers that can hang waiting on a device
+        # confirmation/PIN (connect, pair) set _BLUETOOTH_EXEC_TIMEOUT before
+        # calling in, e.g. `_BLUETOOTH_EXEC_TIMEOUT=$BLUETOOTH_PAIR_TIMEOUT
+        # _bluetooth-exec "pair $mac"`.
+        #
+        # Invoke as one-shot CLI arguments (`bluetoothctl show`), not piped
+        # into the interactive REPL (`echo show | bluetoothctl`). The two
+        # are not equivalent: entering the interactive REPL registers a
+        # client/agent as a side effect, which transiently flips the
+        # adapter to Pairable=yes for the life of that session - piping
+        # "show" in would then read back its own side effect as if it were
+        # persistent state. Confirmed by comparing both forms directly
+        # against `bluetoothctl show` run outside this module. CLI-argument
+        # invocation has no such side effect.
+        #
+        # bluetoothctl's interactive REPL emits ANSI color codes and
+        # "[bluetoothctl]>" prompt/event lines even in this mode - strip
+        # them so callers get plain response text (the strings they grep
+        # for, like "successful"/"succeeded", never start with "[" so they
+        # survive this filter).
+        local -a _args=(${(z)cmd})
+        if [[ -n "${_BLUETOOTH_EXEC_TIMEOUT:-}" ]]; then
+            timeout "$_BLUETOOTH_EXEC_TIMEOUT" bluetoothctl "${_args[@]}" 2>/dev/null | sed -E 's/\x1b\[[0-9;]*[a-zA-Z]//g' | { grep -v '^\[' || true; }
+        else
+            bluetoothctl "${_args[@]}" 2>/dev/null | sed -E 's/\x1b\[[0-9;]*[a-zA-Z]//g' | { grep -v '^\[' || true; }
+        fi
     fi
 }
 
@@ -484,6 +508,32 @@ bluetooth-scan-stop() {
     return 0
 }
 
+# Get scan status
+#
+# Function: bluetooth-scan-is-active
+# Description: Check if device discovery is currently running
+# Output: "yes" or "no"
+# Returns:
+#   0 - Scanning
+#   1 - Not scanning
+# Example:
+#   bluetooth-scan-is-active
+#
+bluetooth-scan-is-active() {
+    _bluetooth-init
+
+    local output
+    output=$(_bluetooth-exec "show")
+
+    if [[ "$output" =~ "Discovering: yes" ]]; then
+        echo "yes"
+        return 0
+    else
+        echo "no"
+        return 1
+    fi
+}
+
 # List discovered devices
 #
 # Function: bluetooth-devices-list
@@ -505,11 +555,22 @@ bluetooth-devices-list() {
     local output
     case "$filter" in
         paired)
-            output=$(_bluetooth-exec "paired-devices")
+            output=$(_bluetooth-exec "devices Paired")
             ;;
         connected)
-            output=$(_bluetooth-exec "devices")
-            echo "$output" | grep "Connected: yes" -B5 | grep "Device"
+            # "Connected: yes" only appears in per-device `info` output, not
+            # in the `devices` listing - grepping the listing for it never
+            # matches. Check each paired device individually instead.
+            output=$(_bluetooth-exec "devices Paired")
+            local _line _mac _rest
+            while IFS= read -r _line; do
+                [[ "$_line" =~ ^Device\ (([0-9A-F]{2}:){5}[0-9A-F]{2})\ (.*)$ ]] || continue
+                _mac="${match[1]}"
+                _rest="${match[3]}"
+                if bluetooth-connect-status "$_mac" >/dev/null 2>&1; then
+                    echo "Device $_mac $_rest"
+                fi
+            done <<< "$output"
             return
             ;;
         *)
@@ -608,7 +669,7 @@ bluetooth-connect() {
     log-info "Connecting to Bluetooth device" "mac=$mac"
 
     local output
-    output=$(_bluetooth-exec "connect $mac")
+    output=$(_BLUETOOTH_EXEC_TIMEOUT="$BLUETOOTH_CONNECT_TIMEOUT" _bluetooth-exec "connect $mac")
 
     if [[ "$output" =~ "Connection successful" ]] || [[ "$output" =~ "already connected" ]]; then
         log-success "Device connected" "mac=$mac"
@@ -649,7 +710,7 @@ bluetooth-disconnect() {
     local output
     output=$(_bluetooth-exec "disconnect $mac")
 
-    if [[ "$output" =~ "Successful disconnected" ]] || [[ "$output" =~ "not connected" ]]; then
+    if [[ "$output" =~ "Disconnection successful" ]] || [[ "$output" =~ "not connected" ]]; then
         log-success "Device disconnected" "mac=$mac"
         _bluetooth-emit "$BLUETOOTH_EVENT_DEVICE_DISCONNECTED" "mac=$mac"
 
@@ -806,7 +867,7 @@ bluetooth-pair() {
     log-info "Pairing with Bluetooth device" "mac=$mac"
 
     local output
-    output=$(_bluetooth-exec "pair $mac")
+    output=$(_BLUETOOTH_EXEC_TIMEOUT="$BLUETOOTH_PAIR_TIMEOUT" _bluetooth-exec "pair $mac")
 
     if [[ "$output" =~ "Pairing successful" ]] || [[ "$output" =~ "already paired" ]]; then
         log-success "Device paired" "mac=$mac"
@@ -883,12 +944,19 @@ bluetooth-trust() {
 
     log-info "Trusting Bluetooth device" "mac=$mac"
 
-    _bluetooth-exec "trust $mac"
+    local output
+    output=$(_bluetooth-exec "trust $mac")
 
     # Invalidate cache
     [[ "$BLUETOOTH_CACHE_AVAILABLE" == "true" ]] && cache-clear "bluetooth:device:info:$mac"
 
-    return 0
+    if [[ "$output" =~ "succeeded" ]]; then
+        log-success "Device trusted" "mac=$mac"
+        return 0
+    else
+        log-error "Trust failed" "mac=$mac"
+        return 1
+    fi
 }
 
 # Untrust device
@@ -913,12 +981,19 @@ bluetooth-untrust() {
 
     log-info "Untrusting Bluetooth device" "mac=$mac"
 
-    _bluetooth-exec "untrust $mac"
+    local output
+    output=$(_bluetooth-exec "untrust $mac")
 
     # Invalidate cache
     [[ "$BLUETOOTH_CACHE_AVAILABLE" == "true" ]] && cache-clear "bluetooth:device:info:$mac"
 
-    return 0
+    if [[ "$output" =~ "succeeded" ]]; then
+        log-success "Device untrusted" "mac=$mac"
+        return 0
+    else
+        log-error "Untrust failed" "mac=$mac"
+        return 1
+    fi
 }
 
 # Block device
@@ -943,12 +1018,19 @@ bluetooth-block() {
 
     log-info "Blocking Bluetooth device" "mac=$mac"
 
-    _bluetooth-exec "block $mac"
+    local output
+    output=$(_bluetooth-exec "block $mac")
 
     # Invalidate cache
     [[ "$BLUETOOTH_CACHE_AVAILABLE" == "true" ]] && cache-clear "bluetooth:device:info:$mac"
 
-    return 0
+    if [[ "$output" =~ "succeeded" ]]; then
+        log-success "Device blocked" "mac=$mac"
+        return 0
+    else
+        log-error "Block failed" "mac=$mac"
+        return 1
+    fi
 }
 
 # Unblock device
@@ -973,12 +1055,19 @@ bluetooth-unblock() {
 
     log-info "Unblocking Bluetooth device" "mac=$mac"
 
-    _bluetooth-exec "unblock $mac"
+    local output
+    output=$(_bluetooth-exec "unblock $mac")
 
     # Invalidate cache
     [[ "$BLUETOOTH_CACHE_AVAILABLE" == "true" ]] && cache-clear "bluetooth:device:info:$mac"
 
-    return 0
+    if [[ "$output" =~ "succeeded" ]]; then
+        log-success "Device unblocked" "mac=$mac"
+        return 0
+    else
+        log-error "Unblock failed" "mac=$mac"
+        return 1
+    fi
 }
 
 # ------------------------------
@@ -1262,54 +1351,6 @@ bluetooth-audio-profile() {
     return 0
 }
 
-# Set audio profile
-#
-# Function: bluetooth-audio-profile-set
-# Description: Set audio profile for device
-# Parameters:
-#   $1 - MAC address (required)
-#   $2 - Profile (a2dp, hsp, hfp) (required)
-# Returns:
-#   0 - Success
-#   1 - Failed to set profile
-#   2 - Invalid input
-# Example:
-#   bluetooth-audio-profile-set "00:11:22:33:44:55" "a2dp"
-#
-bluetooth-audio-profile-set() {
-    local mac="$1"
-    local profile="$2"
-
-    bluetooth-validate-mac "$mac" || return 2
-    common-validate-required "$profile" "profile" || return 2
-
-    _bluetooth-init
-
-    # Validate profile
-    case "$profile" in
-        a2dp|hsp|hfp)
-            log-info "Setting audio profile" "mac=$mac" "profile=$profile"
-            ;;
-        *)
-            log-error "Invalid profile" "profile=$profile"
-            return 2
-            ;;
-    esac
-
-    # Note: bluetoothctl doesn't have direct profile switching
-    # This requires PulseAudio integration
-    if [[ "$BLUETOOTH_AUDIO_AVAILABLE" == "true" ]]; then
-        # Integrate with _audio extension
-        log-debug "Using _audio extension for profile switching"
-        # Implementation would call into _audio functions
-    else
-        log-warn "Profile switching requires _audio extension"
-        return 1
-    fi
-
-    return 0
-}
-
 # List available audio profiles
 #
 # Function: bluetooth-audio-profile-list
@@ -1528,7 +1569,11 @@ bluetooth-device-alias() {
         local output
         output=$(bluetooth-device-info "$mac")
 
-        if [[ "$output" =~ "Alias: (.+)" ]]; then
+        # Bounded to non-newline chars - unlike every other extractor in
+        # this file, this is the only one using an unbounded quantifier
+        # (.+), which greedily swallowed the rest of the multi-line info
+        # blob into the capture group instead of stopping at end of line.
+        if [[ "$output" =~ $'Alias: ([^\n]+)' ]]; then
             echo "${match[1]}"
             return 0
         else
@@ -1806,6 +1851,7 @@ CONTROLLER MANAGEMENT:
 DEVICE DISCOVERY & SCANNING:
   bluetooth-scan-start [DURATION]      Start device scanning
   bluetooth-scan-stop                  Stop scanning
+  bluetooth-scan-is-active             Check if scanning is active
   bluetooth-devices-list [FILTER]      List devices (all/paired/connected)
   bluetooth-device-info MAC            Get device details
   bluetooth-devices-paired             List paired devices only
@@ -1842,7 +1888,6 @@ DISCOVERABLE & PAIRABLE:
 
 AUDIO PROFILE MANAGEMENT:
   bluetooth-audio-profile MAC          Get current audio profile
-  bluetooth-audio-profile-set MAC PROF Set profile (a2dp/hsp/hfp)
   bluetooth-audio-profile-list MAC     List available profiles
   bluetooth-audio-device-type MAC      Detect if audio device
 
