@@ -10,9 +10,9 @@
 # wrapper (see the dotlib README's "Module status" note). This module
 # runs real demos through them -- _ui, _format, _string, _validation,
 # _events, _async, _rules, _crypto, _schema, _actions, _plugins,
-# _notify, _test -- using each module's actual public functions.
-# Business logic stays in those modules; this file only supplies
-# narration, sample data, and pacing.
+# _bspwm, _notify, _test -- using each module's actual public
+# functions. Business logic stays in those modules; this file only
+# supplies narration, sample data, and pacing.
 #
 # Dependencies:
 #   Required:
@@ -20,6 +20,8 @@
 #       _rules, _crypto, _schema, _actions, _plugins, _notify, _test
 #   Optional:
 #     - _log
+#     - _bspwm (requires the bspc binary; tour-bspwm degrades
+#       gracefully when unavailable, e.g. on servers)
 
 [[ -n "${TOUR_LOADED:-}" ]] && return 0
 declare -gr TOUR_LOADED=1
@@ -38,6 +40,10 @@ source "${DOTLIB}/_crypto"     || { echo "[ERROR] _tour requires _crypto" >&2; r
 source "${DOTLIB}/_schema"     || { echo "[ERROR] _tour requires _schema" >&2; return 1; }
 source "${DOTLIB}/_actions"    || { echo "[ERROR] _tour requires _actions" >&2; return 1; }
 source "${DOTLIB}/_plugins"    || { echo "[ERROR] _tour requires _plugins" >&2; return 1; }
+# _bspwm requires the bspc binary and hard-fails to source without it; shell/
+# (and this tour) must still work on hosts with no desktop package installed,
+# so this stays optional and tour-bspwm checks availability itself.
+source "${DOTLIB}/_bspwm" 2>/dev/null || true
 source "${DOTLIB}/_notify"     || { echo "[ERROR] _tour requires _notify" >&2; return 1; }
 source "${DOTLIB}/_test"       || { echo "[ERROR] _tour requires _test" >&2; return 1; }
 
@@ -54,6 +60,7 @@ typeset -gA _TOUR_DESCRIPTIONS=(
     [schema]="Tour _schema: action/v1 schema validation and querying"
     [actions]="Tour _actions: dependency-ordered action execution"
     [plugins]="Tour _plugins: discovery, validation, and dependency-ordered init"
+    [bspwm]="Tour _bspwm: live window manager introspection (read-only, skips if unavailable)"
     [notify]="Tour _notify: a real desktop notification"
     [framework]="Tour _dispatcher's own help/commands/completion/dry-run"
     [run]="Run the full tour end to end (--fast skips pacing)"
@@ -467,6 +474,50 @@ ZSH
     rm -rf "$plugins_dir"
 }
 
+tour-bspwm() {
+    ui-header "_bspwm — live window manager introspection (read-only)"
+
+    if ! typeset -f bspwm-is-running >/dev/null 2>&1 || ! bspwm-is-running; then
+        ui-warning "bspwm not available on this host - skipping (this section only queries, never mutates)"
+        return 0
+    fi
+
+    ui-list \
+        "bspwm version: $(bspwm-version)" \
+        "monitors: $(bspwm-monitor-list | tr '\n' ' ')" \
+        "focused monitor: $(bspwm-monitor-focused)" \
+        "desktops: $(bspwm-desktop-list | tr '\n' ' ')" \
+        "focused desktop: $(bspwm-desktop-focused)"
+
+    echo ""
+    ui-info "focused window (bspwm-node-focused + bspwm-node-info)..."
+    local node_id
+    node_id="$(bspwm-node-focused)"
+    if [[ -n "$node_id" ]]; then
+        local info
+        info="$(bspwm-node-info "$node_id")"
+        ui-list \
+            "id: $node_id" \
+            "$(echo "$info" | /usr/bin/jq -r '"\(.rectangle.width)x\(.rectangle.height) at (\(.rectangle.x),\(.rectangle.y))"')" \
+            "$(echo "$info" | /usr/bin/jq -r '"vacant: \(.vacant), sticky: \(.sticky), locked: \(.locked)"')"
+    else
+        ui-warning "no focused window"
+    fi
+
+    echo ""
+    ui-info "window rules (bspwm-rule-list)..."
+    local -a rules
+    rules=("${(@f)$(bspwm-rule-list)}")
+    if [[ -n "${rules[1]}" ]]; then
+        ui-list "${rules[@]}"
+    else
+        ui-info "(none configured)"
+    fi
+
+    echo ""
+    bspwm-info
+}
+
 tour-notify() {
     ui-header "_notify — desktop notifications"
 
@@ -498,7 +549,7 @@ tour-run() {
     local fast=false
     [[ "$1" == "--fast" ]] && fast=true
 
-    local -a sections=(intro ui format string validate events async rules crypto schema actions plugins notify framework)
+    local -a sections=(intro ui format string validate events async rules crypto schema actions plugins bspwm notify framework)
     local section
 
     for section in "${sections[@]}"; do
@@ -531,6 +582,7 @@ _tour-selftest-cases() {
     test-it "schema section runs"   _tour-selftest-schema
     test-it "actions section runs"  _tour-selftest-actions
     test-it "plugins section runs"  _tour-selftest-plugins
+    test-it "bspwm section runs"    _tour-selftest-bspwm
 }
 
 _tour-selftest-intro()    { test-assert-exit-code 0 _tour-quiet tour-intro; }
@@ -545,6 +597,7 @@ _tour-selftest-crypto()   { test-assert-exit-code 0 _tour-quiet tour-crypto; }
 _tour-selftest-schema()   { test-assert-exit-code 0 _tour-quiet tour-schema; }
 _tour-selftest-actions()  { test-assert-exit-code 0 _tour-quiet tour-actions; }
 _tour-selftest-plugins()  { test-assert-exit-code 0 _tour-quiet tour-plugins; }
+_tour-selftest-bspwm()    { test-assert-exit-code 0 _tour-quiet tour-bspwm; }
 
 tour-self-test() {
     test-describe "dotlib tour sections" _tour-selftest-cases

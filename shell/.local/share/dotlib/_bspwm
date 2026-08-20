@@ -246,7 +246,7 @@ bspwm-is-running() {
 #   version=$(bspwm-version)
 #
 bspwm-version() {
-    bspc -v 2>/dev/null | grep -oP 'bspwm \K[0-9.]+'
+    bspwm -v 2>/dev/null
 }
 
 # ------------------------------
@@ -347,10 +347,10 @@ bspwm-node-info() {
     local node="${1:-focused}"
 
     if ! common-command-exists jq; then
-        log-warn "jq not found, returning raw output"
+        log-warning "jq not found, returning raw output"
         _bspwm-exec query -T -n "$node"
     else
-        _bspwm-exec query -T -n "$node" | jq '.'
+        _bspwm-exec query -T -n "$node" | /usr/bin/jq '.'
     fi
 }
 
@@ -415,7 +415,7 @@ bspwm-desktop-add() {
 
     # Check if desktop already exists
     if bspwm-desktop-list | grep -q "^${name}$"; then
-        log-warn "Desktop already exists: $name"
+        log-warning "Desktop already exists: $name"
         return 4
     fi
 
@@ -839,7 +839,7 @@ bspwm-rule-remove() {
 
         return 0
     else
-        log-warn "Rule not found: $class"
+        log-warning "Rule not found: $class"
         return 3
     fi
 }
@@ -924,7 +924,7 @@ bspwm-layout-restore() {
 
     # This would require a more complex implementation to actually restore
     # the tree structure - simplified for now
-    log-warn "Layout restoration requires external tooling (not yet implemented)"
+    log-warning "Layout restoration requires external tooling (not yet implemented)"
     return 1
 }
 
@@ -961,12 +961,12 @@ bspwm-layout-list() {
 #
 bspwm-event-monitor-start() {
     if [[ "$_BSPWM_EVENT_MONITOR_ACTIVE" == "true" ]]; then
-        log-warn "Event monitor already running"
+        log-warning "Event monitor already running"
         return 4
     fi
 
     if [[ "$BSPWM_EVENTS_AVAILABLE" != "true" ]]; then
-        log-warn "Event system not available, monitoring disabled"
+        log-warning "Event system not available, monitoring disabled"
         return 1
     fi
 
@@ -1021,7 +1021,7 @@ bspwm-event-monitor-start() {
 #
 bspwm-event-monitor-stop() {
     if [[ "$_BSPWM_EVENT_MONITOR_ACTIVE" != "true" ]]; then
-        log-warn "Event monitor not running"
+        log-warning "Event monitor not running"
         return 3
     fi
 
@@ -1164,7 +1164,7 @@ bspwm-focus-previous() {
         local prev="${_BSPWM_FOCUS_HISTORY[0]}"
         bspwm-node-focus "$prev"
     else
-        log-warn "No previous node in focus history"
+        log-warning "No previous node in focus history"
         return 3
     fi
 }
@@ -1346,7 +1346,7 @@ bspwm-self-test() {
         log-info "✓ BSPWM is running"
         ((tests_passed++)) || true
     else
-        log-warn "⚠ BSPWM is not running (some tests will be skipped)"
+        log-warning "⚠ BSPWM is not running (some tests will be skipped)"
     fi
 
     # Test 2: Command availability
