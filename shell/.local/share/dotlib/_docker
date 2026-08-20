@@ -175,7 +175,7 @@ _docker-parse-json() {
     local query="$1"
 
     if common-command-exists jq; then
-        jq -r "$query" 2>/dev/null
+        /usr/bin/jq -r "$query" 2>/dev/null
     else
         cat  # Pass through if jq unavailable
     fi
@@ -183,8 +183,8 @@ _docker-parse-json() {
 
 # Format API URL
 _docker-format-url() {
-    local path="$1"
-    echo "http://localhost/v${DOCKER_API_VERSION}/${path}"
+    local api_path="$1"
+    echo "http://localhost/v${DOCKER_API_VERSION}/${api_path}"
 }
 
 # ------------------------------
@@ -196,7 +196,7 @@ _docker-format-url() {
 # Function: docker-api-get
 # Description: Execute HTTP GET request to Docker API
 # Parameters:
-#   $1 - API path (e.g., "containers/json")
+#   $1 - API api_path (e.g., "containers/json")
 # Returns:
 #   0 - Success
 #   1 - API call failed
@@ -205,12 +205,12 @@ _docker-format-url() {
 #   result=$(docker-api-get "containers/json")
 #
 docker-api-get() {
-    local path="$1"
+    local api_path="$1"
 
     # Validation
-    common-validate-required "$path" "API path" || return 2
+    common-validate-required "$api_path" "API api_path" || return 2
 
-    local url="$(_docker-format-url "$path")"
+    local url="$(_docker-format-url "$api_path")"
 
     if [[ "$DOCKER_DRY_RUN" == "true" ]]; then
         log-info "[DRY RUN] Would GET: $url"
@@ -220,11 +220,11 @@ docker-api-get() {
     log-trace "GET $url"
 
     # Check cache if available
-    local cache_key="docker:api:get:${path}"
+    local cache_key="docker:api:get:${api_path}"
     if [[ "$DOCKER_CACHE_AVAILABLE" == "true" ]]; then
         local cached=$(cache-get "$cache_key")
         if [[ -n "$cached" ]]; then
-            log-trace "Cache hit for: $path"
+            log-trace "Cache hit for: $api_path"
             echo "$cached"
             return 0
         fi
@@ -235,7 +235,7 @@ docker-api-get() {
     local exit_code=$?
 
     if [[ $exit_code -ne 0 ]]; then
-        log-error "API GET failed" "path=$path" "error=$response"
+        log-error "API GET failed" "api_path=$api_path" "error=$response"
         return 1
     fi
 
@@ -252,7 +252,7 @@ docker-api-get() {
 # Function: docker-api-post
 # Description: Execute HTTP POST request to Docker API
 # Parameters:
-#   $1 - API path (required)
+#   $1 - API api_path (required)
 #   $2 - JSON data (optional)
 # Returns:
 #   0 - Success
@@ -262,13 +262,13 @@ docker-api-get() {
 #   result=$(docker-api-post "containers/create" '{"Image":"nginx"}')
 #
 docker-api-post() {
-    local path="$1"
+    local api_path="$1"
     local data="${2:-}"
 
     # Validation
-    common-validate-required "$path" "API path" || return 2
+    common-validate-required "$api_path" "API api_path" || return 2
 
-    local url="$(_docker-format-url "$path")"
+    local url="$(_docker-format-url "$api_path")"
 
     if [[ "$DOCKER_DRY_RUN" == "true" ]]; then
         log-info "[DRY RUN] Would POST to: $url"
@@ -297,7 +297,7 @@ docker-api-post() {
     local exit_code=$?
 
     if [[ $exit_code -ne 0 ]]; then
-        log-error "API POST failed" "path=$path" "error=$response"
+        log-error "API POST failed" "api_path=$api_path" "error=$response"
         return 1
     fi
 
@@ -309,7 +309,7 @@ docker-api-post() {
 # Function: docker-api-put
 # Description: Execute HTTP PUT request to Docker API
 # Parameters:
-#   $1 - API path (required)
+#   $1 - API api_path (required)
 #   $2 - JSON data (optional)
 # Returns:
 #   0 - Success
@@ -318,12 +318,12 @@ docker-api-post() {
 #   docker-api-put "containers/abc123/rename?name=newname"
 #
 docker-api-put() {
-    local path="$1"
+    local api_path="$1"
     local data="${2:-}"
 
-    common-validate-required "$path" "API path" || return 2
+    common-validate-required "$api_path" "API api_path" || return 2
 
-    local url="$(_docker-format-url "$path")"
+    local url="$(_docker-format-url "$api_path")"
 
     if [[ "$DOCKER_DRY_RUN" == "true" ]]; then
         log-info "[DRY RUN] Would PUT to: $url"
@@ -352,7 +352,7 @@ docker-api-put() {
     local exit_code=$?
 
     if [[ $exit_code -ne 0 ]]; then
-        log-error "API PUT failed" "path=$path" "error=$response"
+        log-error "API PUT failed" "api_path=$api_path" "error=$response"
         return 1
     fi
 
@@ -364,7 +364,7 @@ docker-api-put() {
 # Function: docker-api-delete
 # Description: Execute HTTP DELETE request to Docker API
 # Parameters:
-#   $1 - API path (required)
+#   $1 - API api_path (required)
 # Returns:
 #   0 - Success
 #   1 - API call failed
@@ -372,11 +372,11 @@ docker-api-put() {
 #   docker-api-delete "containers/abc123?force=true"
 #
 docker-api-delete() {
-    local path="$1"
+    local api_path="$1"
 
-    common-validate-required "$path" "API path" || return 2
+    common-validate-required "$api_path" "API api_path" || return 2
 
-    local url="$(_docker-format-url "$path")"
+    local url="$(_docker-format-url "$api_path")"
 
     if [[ "$DOCKER_DRY_RUN" == "true" ]]; then
         log-info "[DRY RUN] Would DELETE: $url"
@@ -395,7 +395,7 @@ docker-api-delete() {
     local exit_code=$?
 
     if [[ $exit_code -ne 0 ]]; then
-        log-error "API DELETE failed" "path=$path" "error=$response"
+        log-error "API DELETE failed" "api_path=$api_path" "error=$response"
         return 1
     fi
 
@@ -407,19 +407,19 @@ docker-api-delete() {
 # Function: docker-api-head
 # Description: Execute HTTP HEAD request to Docker API
 # Parameters:
-#   $1 - API path (required)
+#   $1 - API api_path (required)
 # Returns:
 #   0 - Success
 #   1 - API call failed
 # Example:
-#   docker-api-head "containers/abc123/archive?path=/etc"
+#   docker-api-head "containers/abc123/archive?api_path=/etc"
 #
 docker-api-head() {
-    local path="$1"
+    local api_path="$1"
 
-    common-validate-required "$path" "API path" || return 2
+    common-validate-required "$api_path" "API api_path" || return 2
 
-    local url="$(_docker-format-url "$path")"
+    local url="$(_docker-format-url "$api_path")"
 
     if [[ "$DOCKER_DRY_RUN" == "true" ]]; then
         log-info "[DRY RUN] Would HEAD: $url"
@@ -436,17 +436,17 @@ docker-api-head() {
 # Function: docker-api-stream
 # Description: Stream data from Docker API (events, logs, stats)
 # Parameters:
-#   $1 - API path (required)
+#   $1 - API api_path (required)
 # Output: Continuous stream of data
 # Example:
 #   docker-api-stream "events" | while read event; do ...; done
 #
 docker-api-stream() {
-    local path="$1"
+    local api_path="$1"
 
-    common-validate-required "$path" "API path" || return 2
+    common-validate-required "$api_path" "API api_path" || return 2
 
-    local url="$(_docker-format-url "$path")"
+    local url="$(_docker-format-url "$api_path")"
 
     if [[ "$DOCKER_DRY_RUN" == "true" ]]; then
         log-info "[DRY RUN] Would stream from: $url"
@@ -481,7 +481,7 @@ docker-check-available() {
 
     # Check if Docker socket exists
     if [[ ! -S "$DOCKER_SOCKET" ]]; then
-        log-error "Docker socket not found" "path=$DOCKER_SOCKET"
+        log-error "Docker socket not found" "api_path=$DOCKER_SOCKET"
         log-info "Is Docker running? Try: systemctl status docker"
         return 1
     fi
@@ -508,11 +508,11 @@ docker-require-available() {
     docker-check-available || exit 1
 }
 
-# Get Docker socket path
+# Get Docker socket api_path
 #
 # Function: docker-get-socket
-# Description: Return configured Docker socket path
-# Output: Socket path string
+# Description: Return configured Docker socket api_path
+# Output: Socket api_path string
 # Example:
 #   socket=$(docker-get-socket)
 #
@@ -649,12 +649,12 @@ docker-container-list() {
         all="true"
     fi
 
-    local path="containers/json"
+    local api_path="containers/json"
     if [[ "$all" == "true" ]]; then
-        path="containers/json?all=true"
+        api_path="containers/json?all=true"
     fi
 
-    docker-api-get "$path"
+    docker-api-get "$api_path"
 }
 
 # Inspect container
@@ -814,7 +814,7 @@ docker-container-kill() {
 
     common-validate-required "$container" "container ID/name" || return 2
 
-    log-warn "Killing container" "name=$container" "signal=$signal"
+    log-warning "Killing container" "name=$container" "signal=$signal"
     docker-api-post "containers/${container}/kill?signal=${signal}"
 }
 
@@ -849,10 +849,10 @@ docker-container-remove() {
         esac
     done
 
-    local path="containers/${container}?force=${force}&v=${volumes}"
+    local api_path="containers/${container}?force=${force}&v=${volumes}"
 
     log-info "Removing container" "name=$container" "force=$force" "volumes=$volumes"
-    docker-api-delete "$path"
+    docker-api-delete "$api_path"
 
     if [[ $? -eq 0 ]]; then
         _docker-emit "$DOCKER_EVENT_CONTAINER_DESTROY" "id=$container"
@@ -893,14 +893,14 @@ docker-container-logs() {
         esac
     done
 
-    local path="containers/${container}/logs?stdout=true&stderr=true"
-    [[ -n "$tail" ]] && path="${path}&tail=${tail}"
-    [[ "$follow" == "true" ]] && path="${path}&follow=true"
+    local api_path="containers/${container}/logs?stdout=true&stderr=true"
+    [[ -n "$tail" ]] && api_path="${api_path}&tail=${tail}"
+    [[ "$follow" == "true" ]] && api_path="${api_path}&follow=true"
 
     if [[ "$follow" == "true" ]]; then
-        docker-api-stream "$path"
+        docker-api-stream "$api_path"
     else
-        docker-api-get "$path"
+        docker-api-get "$api_path"
     fi
 }
 
@@ -925,12 +925,12 @@ docker-container-stats() {
 
     common-validate-required "$container" "container ID/name" || return 2
 
-    local path="containers/${container}/stats?stream=${stream}"
+    local api_path="containers/${container}/stats?stream=${stream}"
 
     if [[ "$stream" == "true" ]]; then
-        docker-api-stream "$path"
+        docker-api-stream "$api_path"
     else
-        docker-api-get "$path"
+        docker-api-get "$api_path"
     fi
 }
 
@@ -1054,12 +1054,12 @@ docker-image-list() {
         all="true"
     fi
 
-    local path="images/json"
+    local api_path="images/json"
     if [[ "$all" == "true" ]]; then
-        path="images/json?all=true"
+        api_path="images/json?all=true"
     fi
 
-    docker-api-get "$path"
+    docker-api-get "$api_path"
 }
 
 # Inspect image
@@ -1134,11 +1134,11 @@ docker-image-remove() {
 
     common-validate-required "$image" "image name/ID" || return 2
 
-    local path="images/${image}?force=${force}"
+    local api_path="images/${image}?force=${force}"
 
     log-info "Removing image" "name=$image" "force=$force"
     local response
-    response=$(docker-api-delete "$path")
+    response=$(docker-api-delete "$api_path")
 
     if [[ $? -eq 0 ]]; then
         _docker-emit "$DOCKER_EVENT_IMAGE_DELETE" "name=$image"
@@ -1309,14 +1309,14 @@ docker-volume-remove() {
 
     common-validate-required "$volume" "volume name" || return 2
 
-    local path="volumes/${volume}"
+    local api_path="volumes/${volume}"
     if [[ "$force" == "true" ]]; then
-        path="${path}?force=true"
+        api_path="${api_path}?force=true"
     fi
 
     log-info "Removing volume" "name=$volume" "force=$force"
     local response
-    response=$(docker-api-delete "$path")
+    response=$(docker-api-delete "$api_path")
 
     if [[ $? -eq 0 ]]; then
         _docker-emit "$DOCKER_EVENT_VOLUME_DESTROY" "name=$volume"
@@ -1568,7 +1568,7 @@ docker-network-track() {
 #
 docker-events-monitor() {
     if [[ "$DOCKER_EVENT_MONITOR_ACTIVE" == "true" ]]; then
-        log-warn "Event monitor already running" "pid=$DOCKER_EVENT_MONITOR_PID"
+        log-warning "Event monitor already running" "pid=$DOCKER_EVENT_MONITOR_PID"
         return 1
     fi
 
@@ -1660,7 +1660,7 @@ docker-events-stream() {
 #
 docker-events-stop() {
     if [[ "$DOCKER_EVENT_MONITOR_ACTIVE" != "true" ]]; then
-        log-warn "Event monitor not running"
+        log-warning "Event monitor not running"
         return 1
     fi
 
@@ -1731,7 +1731,7 @@ docker-system-prune() {
         esac
     done
 
-    log-warn "Pruning Docker system" "all=$all" "volumes=$volumes"
+    log-warning "Pruning Docker system" "all=$all" "volumes=$volumes"
 
     # Prune containers
     log-info "Pruning stopped containers"
@@ -1982,7 +1982,7 @@ docker-self-test() {
         log-info "✓ Docker is available"
         ((tests_passed++)) || true
     else
-        log-warn "✗ Docker is not available (expected if not running)"
+        log-warning "✗ Docker is not available (expected if not running)"
         ((tests_failed++)) || true
     fi
 

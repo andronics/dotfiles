@@ -493,37 +493,37 @@ rules-cond-always() { return 0; }
 rules-cond-never() { return 1; }
 
 # Check if file exists
-# Usage: rules-cond-file-exists <path>
+# Usage: rules-cond-file-exists <target_path>
 rules-cond-file-exists() {
-    local path="$1"
-    [[ -f "$path" ]]
+    local target_path="$1"
+    [[ -f "$target_path" ]]
 }
 
 # Check if directory exists
-# Usage: rules-cond-dir-exists <path>
+# Usage: rules-cond-dir-exists <target_path>
 rules-cond-dir-exists() {
-    local path="$1"
-    [[ -d "$path" ]]
+    local target_path="$1"
+    [[ -d "$target_path" ]]
 }
 
-# Check if path exists (file or directory)
-# Usage: rules-cond-path-exists <path>
-rules-cond-path-exists() {
-    local path="$1"
-    [[ -e "$path" ]]
+# Check if target_path exists (file or directory)
+# Usage: rules-cond-target_path-exists <target_path>
+rules-cond-target_path-exists() {
+    local target_path="$1"
+    [[ -e "$target_path" ]]
 }
 
 # Check if file is older than N seconds
-# Usage: rules-cond-file-older-than <path> <seconds>
+# Usage: rules-cond-file-older-than <target_path> <seconds>
 rules-cond-file-older-than() {
-    local path="$1"
+    local target_path="$1"
     local max_age="$2"
 
-    if [[ ! -f "$path" ]]; then
+    if [[ ! -f "$target_path" ]]; then
         return 1
     fi
 
-    local file_time=$(stat -c %Y "$path" 2>/dev/null || stat -f %m "$path" 2>/dev/null)
+    local file_time=$(stat -c %Y "$target_path" 2>/dev/null || stat -f %m "$target_path" 2>/dev/null)
     local current_time=$(date +%s)
     local age=$((current_time - file_time))
 
@@ -531,16 +531,16 @@ rules-cond-file-older-than() {
 }
 
 # Check if file is larger than N bytes
-# Usage: rules-cond-file-larger-than <path> <bytes>
+# Usage: rules-cond-file-larger-than <target_path> <bytes>
 rules-cond-file-larger-than() {
-    local path="$1"
+    local target_path="$1"
     local max_size="$2"
 
-    if [[ ! -f "$path" ]]; then
+    if [[ ! -f "$target_path" ]]; then
         return 1
     fi
 
-    local file_size=$(stat -c %s "$path" 2>/dev/null || stat -f %z "$path" 2>/dev/null)
+    local file_size=$(stat -c %s "$target_path" 2>/dev/null || stat -f %z "$target_path" 2>/dev/null)
     [[ $file_size -gt $max_size ]]
 }
 

@@ -121,7 +121,7 @@ else
     declare -g RCLONE_CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/rclone"
 fi
 
-# Rclone configuration file path
+# Rclone configuration file remote_path
 declare -g RCLONE_CONFIG="${RCLONE_CONFIG:-${RCLONE_CONFIG_DIR}/rclone.conf}"
 
 # Transfer configuration
@@ -398,12 +398,12 @@ rclone-get-config() {
 # Configuration Setters
 # ------------------------------
 
-# Set config file path
+# Set config file remote_path
 #
 # Function: rclone-set-config
-# Description: Change rclone configuration file path
+# Description: Change rclone configuration file remote_path
 # Parameters:
-#   $1 - Config file path (required)
+#   $1 - Config file remote_path (required)
 # Returns:
 #   0 - Success
 #   2 - Invalid argument
@@ -411,13 +411,13 @@ rclone-get-config() {
 #   rclone-set-config "$HOME/.config/rclone/custom.conf"
 #
 rclone-set-config() {
-    local path="$1"
+    local remote_path="$1"
 
-    common-validate-required "$path" "config file path" || return 2
+    common-validate-required "$remote_path" "config file remote_path" || return 2
 
-    RCLONE_CONFIG="$path"
+    RCLONE_CONFIG="$remote_path"
     mkdir -p "$(dirname "$RCLONE_CONFIG")" 2>/dev/null || true
-    log-debug "Config file set" "path=$path"
+    log-debug "Config file set" "remote_path=$remote_path"
 }
 
 # Set number of parallel transfers
@@ -569,9 +569,9 @@ rclone-set-log-level() {
 # Set exclude file
 #
 # Function: rclone-set-exclude-file
-# Description: Set path to exclude patterns file
+# Description: Set remote_path to exclude patterns file
 # Parameters:
-#   $1 - File path (required)
+#   $1 - File remote_path (required)
 # Returns:
 #   0 - Success
 #   2 - Invalid argument
@@ -582,7 +582,7 @@ rclone-set-log-level() {
 rclone-set-exclude-file() {
     local file="$1"
 
-    common-validate-required "$file" "exclude file path" || return 2
+    common-validate-required "$file" "exclude file remote_path" || return 2
 
     if [[ ! -f "$file" ]]; then
         log-error "Exclude file not found: $file"
@@ -596,9 +596,9 @@ rclone-set-exclude-file() {
 # Set filter file
 #
 # Function: rclone-set-filter-file
-# Description: Set path to filter rules file
+# Description: Set remote_path to filter rules file
 # Parameters:
-#   $1 - File path (required)
+#   $1 - File remote_path (required)
 # Returns:
 #   0 - Success
 #   2 - Invalid argument
@@ -609,7 +609,7 @@ rclone-set-exclude-file() {
 rclone-set-filter-file() {
     local file="$1"
 
-    common-validate-required "$file" "filter file path" || return 2
+    common-validate-required "$file" "filter file remote_path" || return 2
 
     if [[ ! -f "$file" ]]; then
         log-error "Filter file not found: $file"
@@ -866,8 +866,8 @@ rclone-show-remote() {
 # Function: rclone-copy
 # Description: Copy files/directories from source to destination
 # Parameters:
-#   $1 - Source path (required, can be local or remote:path)
-#   $2 - Destination path (required, can be local or remote:path)
+#   $1 - Source remote_path (required, can be local or remote:remote_path)
+#   $2 - Destination remote_path (required, can be local or remote:remote_path)
 # Returns:
 #   0 - Success
 #   1 - Command failed
@@ -879,8 +879,8 @@ rclone-copy() {
     local src="$1"
     local dst="$2"
 
-    common-validate-required "$src" "source path" || return 2
-    common-validate-required "$dst" "destination path" || return 2
+    common-validate-required "$src" "source remote_path" || return 2
+    common-validate-required "$dst" "destination remote_path" || return 2
 
     if ! rclone-check-available; then
         return 1
@@ -910,8 +910,8 @@ rclone-copy() {
 # Function: rclone-move
 # Description: Move files/directories from source to destination
 # Parameters:
-#   $1 - Source path (required)
-#   $2 - Destination path (required)
+#   $1 - Source remote_path (required)
+#   $2 - Destination remote_path (required)
 # Returns:
 #   0 - Success
 #   1 - Command failed
@@ -925,8 +925,8 @@ rclone-move() {
     shift 2
     local -a extra_opts=("$@")
 
-    common-validate-required "$src" "source path" || return 2
-    common-validate-required "$dst" "destination path" || return 2
+    common-validate-required "$src" "source remote_path" || return 2
+    common-validate-required "$dst" "destination remote_path" || return 2
 
     if ! rclone-check-available; then
         return 1
@@ -960,8 +960,8 @@ rclone-move() {
 # Function: rclone-sync
 # Description: Sync source to destination (make destination identical to source)
 # Parameters:
-#   $1 - Source path (required)
-#   $2 - Destination path (required)
+#   $1 - Source remote_path (required)
+#   $2 - Destination remote_path (required)
 # Returns:
 #   0 - Success
 #   1 - Command failed
@@ -973,8 +973,8 @@ rclone-sync() {
     local src="$1"
     local dst="$2"
 
-    common-validate-required "$src" "source path" || return 2
-    common-validate-required "$dst" "destination path" || return 2
+    common-validate-required "$src" "source remote_path" || return 2
+    common-validate-required "$dst" "destination remote_path" || return 2
 
     if ! rclone-check-available; then
         return 1
@@ -1017,8 +1017,8 @@ rclone-bisync() {
     local path1="$1"
     local path2="$2"
 
-    common-validate-required "$path1" "path 1" || return 2
-    common-validate-required "$path2" "path 2" || return 2
+    common-validate-required "$path1" "remote_path 1" || return 2
+    common-validate-required "$path2" "remote_path 2" || return 2
 
     if ! rclone-check-available; then
         return 1
@@ -1048,8 +1048,8 @@ rclone-bisync() {
 # Function: rclone-check-files
 # Description: Compare files between source and destination
 # Parameters:
-#   $1 - Source path (required)
-#   $2 - Destination path (required)
+#   $1 - Source remote_path (required)
+#   $2 - Destination remote_path (required)
 # Returns:
 #   0 - Files are identical
 #   1 - Files differ or command failed
@@ -1061,8 +1061,8 @@ rclone-check-files() {
     local src="$1"
     local dst="$2"
 
-    common-validate-required "$src" "source path" || return 2
-    common-validate-required "$dst" "destination path" || return 2
+    common-validate-required "$src" "source remote_path" || return 2
+    common-validate-required "$dst" "destination remote_path" || return 2
 
     if ! rclone-check-available; then
         return 1
@@ -1078,9 +1078,9 @@ rclone-check-files() {
 # List directory contents
 #
 # Function: rclone-ls
-# Description: List files in a path with sizes
+# Description: List files in a remote_path with sizes
 # Parameters:
-#   $1 - Path (required, can be local or remote:path)
+#   $1 - Path (required, can be local or remote:remote_path)
 # Returns:
 #   0 - Success
 #   1 - Command failed
@@ -1089,16 +1089,16 @@ rclone-check-files() {
 #   rclone-ls "remote:/data"
 #
 rclone-ls() {
-    local path="$1"
+    local remote_path="$1"
 
-    common-validate-required "$path" "path" || return 2
+    common-validate-required "$remote_path" "remote_path" || return 2
 
     if ! rclone-check-available; then
         return 1
     fi
 
     local -a args=($(_rclone-build-args))
-    rclone ls "$path" "${args[@]}"
+    rclone ls "$remote_path" "${args[@]}"
     return $?
 }
 
@@ -1116,16 +1116,16 @@ rclone-ls() {
 #   rclone-lsl "remote:/data"
 #
 rclone-lsl() {
-    local path="$1"
+    local remote_path="$1"
 
-    common-validate-required "$path" "path" || return 2
+    common-validate-required "$remote_path" "remote_path" || return 2
 
     if ! rclone-check-available; then
         return 1
     fi
 
     local -a args=($(_rclone-build-args))
-    rclone lsl "$path" "${args[@]}"
+    rclone lsl "$remote_path" "${args[@]}"
     return $?
 }
 
@@ -1143,16 +1143,16 @@ rclone-lsl() {
 #   rclone-lsd "remote:/data"
 #
 rclone-lsd() {
-    local path="$1"
+    local remote_path="$1"
 
-    common-validate-required "$path" "path" || return 2
+    common-validate-required "$remote_path" "remote_path" || return 2
 
     if ! rclone-check-available; then
         return 1
     fi
 
     local -a args=($(_rclone-build-args))
-    rclone lsd "$path" "${args[@]}"
+    rclone lsd "$remote_path" "${args[@]}"
     return $?
 }
 
@@ -1171,23 +1171,23 @@ rclone-lsd() {
 #   files=$(rclone-lsjson "remote:/data" | jq '.[].Name')
 #
 rclone-lsjson() {
-    local path="$1"
+    local remote_path="$1"
 
-    common-validate-required "$path" "path" || return 2
+    common-validate-required "$remote_path" "remote_path" || return 2
 
     if ! rclone-check-available; then
         return 1
     fi
 
     local -a args=($(_rclone-build-args))
-    rclone lsjson "$path" "${args[@]}"
+    rclone lsjson "$remote_path" "${args[@]}"
     return $?
 }
 
-# Get path size
+# Get remote_path size
 #
 # Function: rclone-size
-# Description: Get total size of path
+# Description: Get total size of remote_path
 # Parameters:
 #   $1 - Path (required)
 # Returns:
@@ -1198,23 +1198,23 @@ rclone-lsjson() {
 #   rclone-size "remote:/data"
 #
 rclone-size() {
-    local path="$1"
+    local remote_path="$1"
 
-    common-validate-required "$path" "path" || return 2
+    common-validate-required "$remote_path" "remote_path" || return 2
 
     if ! rclone-check-available; then
         return 1
     fi
 
     local -a args=($(_rclone-build-args))
-    rclone size "$path" "${args[@]}"
+    rclone size "$remote_path" "${args[@]}"
     return $?
 }
 
 # Delete files
 #
 # Function: rclone-delete
-# Description: Delete files from path
+# Description: Delete files from remote_path
 # Parameters:
 #   $1 - Path (required)
 # Returns:
@@ -1225,9 +1225,9 @@ rclone-size() {
 #   rclone-delete "remote:/old-data"
 #
 rclone-delete() {
-    local path="$1"
+    local remote_path="$1"
 
-    common-validate-required "$path" "path" || return 2
+    common-validate-required "$remote_path" "remote_path" || return 2
 
     if ! rclone-check-available; then
         return 1
@@ -1235,14 +1235,14 @@ rclone-delete() {
 
     local -a args=($(_rclone-build-args))
 
-    log-warn "Deleting files" "path=$path"
-    rclone delete "$path" "${args[@]}"
+    log-warn "Deleting files" "remote_path=$remote_path"
+    rclone delete "$remote_path" "${args[@]}"
     _RCLONE_LAST_EXIT_CODE=$?
 
     if [[ $_RCLONE_LAST_EXIT_CODE -eq 0 ]]; then
-        log-success "Delete complete" "path=$path"
+        log-success "Delete complete" "remote_path=$remote_path"
     else
-        log-error "Delete failed" "path=$path"
+        log-error "Delete failed" "remote_path=$remote_path"
     fi
 
     return $_RCLONE_LAST_EXIT_CODE
@@ -1262,9 +1262,9 @@ rclone-delete() {
 #   rclone-purge "remote:/old-directory"
 #
 rclone-purge() {
-    local path="$1"
+    local remote_path="$1"
 
-    common-validate-required "$path" "path" || return 2
+    common-validate-required "$remote_path" "remote_path" || return 2
 
     if ! rclone-check-available; then
         return 1
@@ -1272,14 +1272,14 @@ rclone-purge() {
 
     local -a args=($(_rclone-build-args))
 
-    log-warn "Purging directory (recursive delete)" "path=$path"
-    rclone purge "$path" "${args[@]}"
+    log-warn "Purging directory (recursive delete)" "remote_path=$remote_path"
+    rclone purge "$remote_path" "${args[@]}"
     _RCLONE_LAST_EXIT_CODE=$?
 
     if [[ $_RCLONE_LAST_EXIT_CODE -eq 0 ]]; then
-        log-success "Purge complete" "path=$path"
+        log-success "Purge complete" "remote_path=$remote_path"
     else
-        log-error "Purge failed" "path=$path"
+        log-error "Purge failed" "remote_path=$remote_path"
     fi
 
     return $_RCLONE_LAST_EXIT_CODE
@@ -1288,7 +1288,7 @@ rclone-purge() {
 # Remove empty directories
 #
 # Function: rclone-rmdirs
-# Description: Remove empty directories from path
+# Description: Remove empty directories from remote_path
 # Parameters:
 #   $1 - Path (required)
 # Returns:
@@ -1299,9 +1299,9 @@ rclone-purge() {
 #   rclone-rmdirs "remote:/cleanup"
 #
 rclone-rmdirs() {
-    local path="$1"
+    local remote_path="$1"
 
-    common-validate-required "$path" "path" || return 2
+    common-validate-required "$remote_path" "remote_path" || return 2
 
     if ! rclone-check-available; then
         return 1
@@ -1309,8 +1309,8 @@ rclone-rmdirs() {
 
     local -a args=($(_rclone-build-args))
 
-    log-info "Removing empty directories" "path=$path"
-    rclone rmdirs "$path" "${args[@]}"
+    log-info "Removing empty directories" "remote_path=$remote_path"
+    rclone rmdirs "$remote_path" "${args[@]}"
     return $?
 }
 
@@ -1328,9 +1328,9 @@ rclone-rmdirs() {
 #   rclone-mkdir "remote:/new-directory"
 #
 rclone-mkdir() {
-    local path="$1"
+    local remote_path="$1"
 
-    common-validate-required "$path" "path" || return 2
+    common-validate-required "$remote_path" "remote_path" || return 2
 
     if ! rclone-check-available; then
         return 1
@@ -1338,8 +1338,8 @@ rclone-mkdir() {
 
     local -a args=($(_rclone-build-args))
 
-    log-info "Creating directory" "path=$path"
-    rclone mkdir "$path" "${args[@]}"
+    log-info "Creating directory" "remote_path=$remote_path"
+    rclone mkdir "$remote_path" "${args[@]}"
     return $?
 }
 
@@ -1357,9 +1357,9 @@ rclone-mkdir() {
 #   rclone-rmdir "remote:/empty-directory"
 #
 rclone-rmdir() {
-    local path="$1"
+    local remote_path="$1"
 
-    common-validate-required "$path" "path" || return 2
+    common-validate-required "$remote_path" "remote_path" || return 2
 
     if ! rclone-check-available; then
         return 1
@@ -1367,8 +1367,8 @@ rclone-rmdir() {
 
     local -a args=($(_rclone-build-args))
 
-    log-info "Removing directory" "path=$path"
-    rclone rmdir "$path" "${args[@]}"
+    log-info "Removing directory" "remote_path=$remote_path"
+    rclone rmdir "$remote_path" "${args[@]}"
     return $?
 }
 
@@ -1381,8 +1381,8 @@ rclone-rmdir() {
 # Function: rclone-mount
 # Description: Mount remote as filesystem
 # Parameters:
-#   $1 - Remote path (required, e.g., "remote:" or "remote:/subdir")
-#   $2 - Mountpoint (required, local directory path)
+#   $1 - Remote remote_path (required, e.g., "remote:" or "remote:/subdir")
+#   $2 - Mountpoint (required, local directory remote_path)
 #   $@ - Additional mount options (optional)
 # Returns:
 #   0 - Success
@@ -1397,7 +1397,7 @@ rclone-mount() {
     shift 2
     local -a extra_opts=("$@")
 
-    common-validate-required "$remote" "remote path" || return 2
+    common-validate-required "$remote" "remote remote_path" || return 2
     common-validate-required "$mountpoint" "mountpoint" || return 2
 
     if ! rclone-check-available; then
@@ -1407,14 +1407,14 @@ rclone-mount() {
     # Create mountpoint if doesn't exist
     if [[ ! -d "$mountpoint" ]]; then
         mkdir -p "$mountpoint" || {
-            log-error "Failed to create mountpoint" "path=$mountpoint"
+            log-error "Failed to create mountpoint" "remote_path=$mountpoint"
             return 1
         }
     fi
 
     # Check if already mounted
     if mountpoint -q "$mountpoint" 2>/dev/null; then
-        log-error "Already mounted" "path=$mountpoint"
+        log-error "Already mounted" "remote_path=$mountpoint"
         return 1
     fi
 
@@ -1472,11 +1472,11 @@ rclone-unmount() {
     common-validate-required "$mountpoint" "mountpoint" || return 2
 
     if ! mountpoint -q "$mountpoint" 2>/dev/null; then
-        log-error "Not mounted" "path=$mountpoint"
+        log-error "Not mounted" "remote_path=$mountpoint"
         return 1
     fi
 
-    log-info "Unmounting" "path=$mountpoint"
+    log-info "Unmounting" "remote_path=$mountpoint"
 
     # Try fusermount first, then umount
     local exit_code
@@ -1495,9 +1495,9 @@ rclone-unmount() {
         local remote="${_RCLONE_MOUNTS[$mountpoint]}"
         unset "_RCLONE_MOUNTS[$mountpoint]"
         _rclone-emit "$RCLONE_EVENT_MOUNT_DESTROY" "remote=$remote" "mountpoint=$mountpoint"
-        log-success "Unmounted successfully" "path=$mountpoint"
+        log-success "Unmounted successfully" "remote_path=$mountpoint"
     else
-        log-error "Unmount failed" "path=$mountpoint"
+        log-error "Unmount failed" "remote_path=$mountpoint"
     fi
 
     return $exit_code
@@ -1523,10 +1523,10 @@ rclone-list-mounts() {
     done
 }
 
-# Check if path is mounted
+# Check if remote_path is mounted
 #
 # Function: rclone-is-mounted
-# Description: Check if a path is currently mounted
+# Description: Check if a remote_path is currently mounted
 # Parameters:
 #   $1 - Mountpoint (required)
 # Returns:
@@ -1550,7 +1550,7 @@ rclone-is-mounted() {
 # Serve HTTP
 #
 # Function: rclone-serve-http
-# Description: Serve path over HTTP
+# Description: Serve remote_path over HTTP
 # Parameters:
 #   $1 - Path (required)
 #   $2 - Address (optional, default: localhost:8080)
@@ -1562,10 +1562,10 @@ rclone-is-mounted() {
 #   rclone-serve-http "remote:/public" "0.0.0.0:8080"
 #
 rclone-serve-http() {
-    local path="$1"
+    local remote_path="$1"
     local addr="${2:-localhost:8080}"
 
-    common-validate-required "$path" "path" || return 2
+    common-validate-required "$remote_path" "remote_path" || return 2
 
     if ! rclone-check-available; then
         return 1
@@ -1573,15 +1573,15 @@ rclone-serve-http() {
 
     local -a args=($(_rclone-build-args))
 
-    log-info "Starting HTTP server" "path=$path" "addr=$addr"
-    rclone serve http "$path" --addr "$addr" "${args[@]}"
+    log-info "Starting HTTP server" "remote_path=$remote_path" "addr=$addr"
+    rclone serve http "$remote_path" --addr "$addr" "${args[@]}"
     return $?
 }
 
 # Serve WebDAV
 #
 # Function: rclone-serve-webdav
-# Description: Serve path over WebDAV
+# Description: Serve remote_path over WebDAV
 # Parameters:
 #   $1 - Path (required)
 #   $2 - Address (optional, default: localhost:8080)
@@ -1593,10 +1593,10 @@ rclone-serve-http() {
 #   rclone-serve-webdav "remote:/data" "localhost:8080"
 #
 rclone-serve-webdav() {
-    local path="$1"
+    local remote_path="$1"
     local addr="${2:-localhost:8080}"
 
-    common-validate-required "$path" "path" || return 2
+    common-validate-required "$remote_path" "remote_path" || return 2
 
     if ! rclone-check-available; then
         return 1
@@ -1604,15 +1604,15 @@ rclone-serve-webdav() {
 
     local -a args=($(_rclone-build-args))
 
-    log-info "Starting WebDAV server" "path=$path" "addr=$addr"
-    rclone serve webdav "$path" --addr "$addr" "${args[@]}"
+    log-info "Starting WebDAV server" "remote_path=$remote_path" "addr=$addr"
+    rclone serve webdav "$remote_path" --addr "$addr" "${args[@]}"
     return $?
 }
 
 # Serve FTP
 #
 # Function: rclone-serve-ftp
-# Description: Serve path over FTP
+# Description: Serve remote_path over FTP
 # Parameters:
 #   $1 - Path (required)
 #   $2 - Address (optional, default: localhost:2121)
@@ -1624,10 +1624,10 @@ rclone-serve-webdav() {
 #   rclone-serve-ftp "remote:/data" "localhost:2121"
 #
 rclone-serve-ftp() {
-    local path="$1"
+    local remote_path="$1"
     local addr="${2:-localhost:2121}"
 
-    common-validate-required "$path" "path" || return 2
+    common-validate-required "$remote_path" "remote_path" || return 2
 
     if ! rclone-check-available; then
         return 1
@@ -1635,15 +1635,15 @@ rclone-serve-ftp() {
 
     local -a args=($(_rclone-build-args))
 
-    log-info "Starting FTP server" "path=$path" "addr=$addr"
-    rclone serve ftp "$path" --addr "$addr" "${args[@]}"
+    log-info "Starting FTP server" "remote_path=$remote_path" "addr=$addr"
+    rclone serve ftp "$remote_path" --addr "$addr" "${args[@]}"
     return $?
 }
 
 # Serve SFTP
 #
 # Function: rclone-serve-sftp
-# Description: Serve path over SFTP
+# Description: Serve remote_path over SFTP
 # Parameters:
 #   $1 - Path (required)
 #   $2 - Address (optional, default: localhost:2022)
@@ -1655,10 +1655,10 @@ rclone-serve-ftp() {
 #   rclone-serve-sftp "remote:/data" "localhost:2022"
 #
 rclone-serve-sftp() {
-    local path="$1"
+    local remote_path="$1"
     local addr="${2:-localhost:2022}"
 
-    common-validate-required "$path" "path" || return 2
+    common-validate-required "$remote_path" "remote_path" || return 2
 
     if ! rclone-check-available; then
         return 1
@@ -1666,15 +1666,15 @@ rclone-serve-sftp() {
 
     local -a args=($(_rclone-build-args))
 
-    log-info "Starting SFTP server" "path=$path" "addr=$addr"
-    rclone serve sftp "$path" --addr "$addr" "${args[@]}"
+    log-info "Starting SFTP server" "remote_path=$remote_path" "addr=$addr"
+    rclone serve sftp "$remote_path" --addr "$addr" "${args[@]}"
     return $?
 }
 
 # Serve Restic repository
 #
 # Function: rclone-serve-restic
-# Description: Serve path as Restic REST repository
+# Description: Serve remote_path as Restic REST repository
 # Parameters:
 #   $1 - Path (required)
 #   $2 - Address (optional, default: localhost:8080)
@@ -1686,10 +1686,10 @@ rclone-serve-sftp() {
 #   rclone-serve-restic "remote:/backups" "localhost:8080"
 #
 rclone-serve-restic() {
-    local path="$1"
+    local remote_path="$1"
     local addr="${2:-localhost:8080}"
 
-    common-validate-required "$path" "path" || return 2
+    common-validate-required "$remote_path" "remote_path" || return 2
 
     if ! rclone-check-available; then
         return 1
@@ -1697,8 +1697,8 @@ rclone-serve-restic() {
 
     local -a args=($(_rclone-build-args))
 
-    log-info "Starting Restic REST server" "path=$path" "addr=$addr"
-    rclone serve restic "$path" --addr "$addr" "${args[@]}"
+    log-info "Starting Restic REST server" "remote_path=$remote_path" "addr=$addr"
+    rclone serve restic "$remote_path" --addr "$addr" "${args[@]}"
     return $?
 }
 
@@ -1887,7 +1887,7 @@ rclone-rc-version() {
 # Get transfer stats
 #
 # Function: rclone-stats
-# Description: Get transfer statistics for path
+# Description: Get transfer statistics for remote_path
 # Parameters:
 #   $1 - Path (required)
 # Returns:
@@ -1898,16 +1898,16 @@ rclone-rc-version() {
 #   rclone-stats "remote:/data"
 #
 rclone-stats() {
-    local path="$1"
+    local remote_path="$1"
 
-    common-validate-required "$path" "path" || return 2
+    common-validate-required "$remote_path" "remote_path" || return 2
 
     if ! rclone-check-available; then
         return 1
     fi
 
     local -a args=($(_rclone-build-args))
-    rclone size "$path" --json "${args[@]}"
+    rclone size "$remote_path" --json "${args[@]}"
     return $?
 }
 
@@ -1925,9 +1925,9 @@ rclone-stats() {
 #   rclone-cleanup "remote:/data"
 #
 rclone-cleanup() {
-    local path="$1"
+    local remote_path="$1"
 
-    common-validate-required "$path" "path" || return 2
+    common-validate-required "$remote_path" "remote_path" || return 2
 
     if ! rclone-check-available; then
         return 1
@@ -1935,15 +1935,15 @@ rclone-cleanup() {
 
     local -a args=($(_rclone-build-args))
 
-    log-info "Cleaning up" "path=$path"
-    rclone cleanup "$path" "${args[@]}"
+    log-info "Cleaning up" "remote_path=$remote_path"
+    rclone cleanup "$remote_path" "${args[@]}"
     return $?
 }
 
 # Deduplicate files
 #
 # Function: rclone-dedupe
-# Description: Deduplicate files in path
+# Description: Deduplicate files in remote_path
 # Parameters:
 #   $1 - Path (required)
 #   $2 - Mode (optional, default: interactive)
@@ -1956,10 +1956,10 @@ rclone-cleanup() {
 #   rclone-dedupe "remote:/data" "newest"
 #
 rclone-dedupe() {
-    local path="$1"
+    local remote_path="$1"
     local mode="${2:-interactive}"
 
-    common-validate-required "$path" "path" || return 2
+    common-validate-required "$remote_path" "remote_path" || return 2
 
     if ! rclone-check-available; then
         return 1
@@ -1967,8 +1967,8 @@ rclone-dedupe() {
 
     local -a args=($(_rclone-build-args))
 
-    log-info "Deduplicating" "path=$path" "mode=$mode"
-    rclone dedupe "$mode" "$path" "${args[@]}"
+    log-info "Deduplicating" "remote_path=$remote_path" "mode=$mode"
+    rclone dedupe "$mode" "$remote_path" "${args[@]}"
     return $?
 }
 
@@ -2032,10 +2032,10 @@ EOF
 # Function: rclone-build-options-json
 # Description: Build JSON for RC options
 # Parameters:
-#   $1 - Filter file path (optional)
+#   $1 - Filter file remote_path (optional)
 # Output: JSON string
 # Example:
-#   json=$(rclone-build-options-json "/path/to/filters.txt")
+#   json=$(rclone-build-options-json "/remote_path/to/filters.txt")
 #
 rclone-build-options-json() {
     local filter_file="${1:-}"
@@ -2085,7 +2085,7 @@ rclone-cleanup() {
 
     # Unmount all tracked mounts
     for mountpoint in "${(@k)_RCLONE_MOUNTS}"; do
-        log-debug "Unmounting tracked mount" "path=$mountpoint"
+        log-debug "Unmounting tracked mount" "remote_path=$mountpoint"
         rclone-unmount "$mountpoint" 2>/dev/null || true
     done
 
@@ -2152,7 +2152,7 @@ AVAILABILITY:
   rclone-get-config             Display configuration
 
 CONFIGURATION:
-  rclone-set-config PATH        Set config file path
+  rclone-set-config PATH        Set config file remote_path
   rclone-set-transfers N        Set parallel transfers
   rclone-set-checkers N         Set parallel checkers
   rclone-set-bandwidth LIMIT    Set bandwidth limit
@@ -2182,7 +2182,7 @@ FILE OPERATIONS:
   rclone-lsl PATH               List files (long format)
   rclone-lsd PATH               List directories
   rclone-lsjson PATH            List files (JSON)
-  rclone-size PATH              Get path size
+  rclone-size PATH              Get remote_path size
   rclone-delete PATH            Delete files
   rclone-purge PATH             Delete directory and contents
   rclone-rmdirs PATH            Remove empty directories

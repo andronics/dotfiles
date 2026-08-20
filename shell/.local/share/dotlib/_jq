@@ -379,7 +379,7 @@ jq-validate-file() {
     local file="$1"
 
     if [[ -z "$file" ]]; then
-        log-error "File path required"
+        log-error "File jq_path required"
         return 1
     fi
 
@@ -435,18 +435,18 @@ jq-get() {
     jq-query ".$key"
 }
 
-# Get nested value by path (dot notation)
-# Usage: echo '{"a":{"b":{"c":1}}}' | jq-get-path "a.b.c"
-jq-get-path() {
-    local path="$1"
+# Get nested value by jq_path (dot notation)
+# Usage: echo '{"a":{"b":{"c":1}}}' | jq-get-jq_path "a.b.c"
+jq-get-jq_path() {
+    local jq_path="$1"
 
-    if [[ -z "$path" ]]; then
+    if [[ -z "$jq_path" ]]; then
         log-error "Path required"
         return 1
     fi
 
-    # Convert dot notation to jq path
-    local filter=".$path"
+    # Convert dot notation to jq jq_path
+    local filter=".$jq_path"
     jq-query "$filter"
 }
 
@@ -999,48 +999,48 @@ jq-ceil() {
 # Path Operations
 # ------------------------------
 
-# Get value at path
+# Get value at jq_path
 # Usage: echo '{"a":{"b":1}}' | jq-getpath '"a","b"'
 jq-getpath() {
-    local path="$1"
+    local jq_path="$1"
 
-    if [[ -z "$path" ]]; then
+    if [[ -z "$jq_path" ]]; then
         log-error "Path required"
         return 1
     fi
 
-    jq-query "getpath([$path])"
+    jq-query "getpath([$jq_path])"
 }
 
-# Set value at path
+# Set value at jq_path
 # Usage: echo '{}' | jq-setpath '"a","b"' '1'
 jq-setpath() {
-    local path="$1"
+    local jq_path="$1"
     local value="$2"
 
-    if [[ -z "$path" ]]; then
+    if [[ -z "$jq_path" ]]; then
         log-error "Path required"
         return 1
     fi
 
     if echo "$value" | jq empty >/dev/null 2>&1; then
-        jq-query --argjson val "$value" "setpath([$path]; \$val)"
+        jq-query --argjson val "$value" "setpath([$jq_path]; \$val)"
     else
-        jq-query "setpath([$path]; \"$value\")"
+        jq-query "setpath([$jq_path]; \"$value\")"
     fi
 }
 
-# Delete path
+# Delete jq_path
 # Usage: echo '{"a":{"b":1}}' | jq-delpath '"a","b"'
 jq-delpath() {
-    local path="$1"
+    local jq_path="$1"
 
-    if [[ -z "$path" ]]; then
+    if [[ -z "$jq_path" ]]; then
         log-error "Path required"
         return 1
     fi
 
-    jq-query "delpaths([[$path]])"
+    jq-query "delpaths([[$jq_path]])"
 }
 
 # Get all paths
@@ -1204,7 +1204,7 @@ jq-load() {
     local file="$1"
 
     if [[ -z "$file" ]]; then
-        log-error "File path required"
+        log-error "File jq_path required"
         return 1
     fi
 
@@ -1223,7 +1223,7 @@ jq-save() {
     local file="$1"
 
     if [[ -z "$file" ]]; then
-        log-error "File path required"
+        log-error "File jq_path required"
         return 1
     fi
 

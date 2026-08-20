@@ -742,9 +742,9 @@ template-find() {
     # Check search paths
     if [[ -n "$TEMPLATE_SEARCH_PATHS" ]]; then
         local -a paths=("${(@s[:])TEMPLATE_SEARCH_PATHS}")
-        local path
-        for path in "${paths[@]}"; do
-            local full_path="$path/$template_name"
+        local search_dir
+        for search_dir in "${paths[@]}"; do
+            local full_path="$search_dir/$template_name"
             if [[ -f "$full_path" ]]; then
                 echo "$full_path"
                 return 0
@@ -769,10 +769,10 @@ template-list() {
     # List from search paths
     if [[ -n "$TEMPLATE_SEARCH_PATHS" ]]; then
         local -a paths=("${(@s[:])TEMPLATE_SEARCH_PATHS}")
-        local path
-        for path in "${paths[@]}"; do
-            if [[ -d "$path" ]]; then
-                find "$path" -maxdepth 1 -name "$pattern" -type f
+        local search_dir
+        for search_dir in "${paths[@]}"; do
+            if [[ -d "$search_dir" ]]; then
+                find "$search_dir" -maxdepth 1 -name "$pattern" -type f
             fi
         done
     fi

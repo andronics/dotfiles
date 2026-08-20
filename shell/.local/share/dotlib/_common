@@ -284,22 +284,22 @@ common-require-commands() {
 # Usage: safe_path=$(common-path-sanitize "$user_input") || return $?
 # Returns: sanitized absolute path or empty string on error
 common-path-sanitize() {
-    local path="$1"
+    local input_path="$1"
 
-    [[ -z "$path" ]] && return 1
+    [[ -z "$input_path" ]] && return 1
 
     # Remove null bytes
-    path="${path//\x00/}"
+    input_path="${input_path//\x00/}"
 
     # Resolve to absolute path (handles .., ., symlinks)
     # Use ZSH's :a modifier for path resolution (more portable than realpath)
     local resolved
-    if resolved="${path:a}" 2>/dev/null && [[ -n "$resolved" ]]; then
+    if resolved="${input_path:a}" 2>/dev/null && [[ -n "$resolved" ]]; then
         echo "$resolved"
         return 0
     else
         # Fallback: use realpath if available
-        if resolved=$(/usr/bin/realpath -m "$path" 2>/dev/null) && [[ -n "$resolved" ]]; then
+        if resolved=$(/usr/bin/realpath -m "$input_path" 2>/dev/null) && [[ -n "$resolved" ]]; then
             echo "$resolved"
             return 0
         fi

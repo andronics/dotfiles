@@ -663,9 +663,9 @@ schema-find() {
     # Check search paths
     if [[ -n "$SCHEMA_SEARCH_PATHS" ]]; then
         local -a paths=("${(@s[:])SCHEMA_SEARCH_PATHS}")
-        local path
-        for path in "${paths[@]}"; do
-            local full_path="$path/$schema_name"
+        local search_dir
+        for search_dir in "${paths[@]}"; do
+            local full_path="$search_dir/$schema_name"
             if [[ -f "$full_path" ]]; then
                 echo "$full_path"
                 return 0
@@ -691,9 +691,9 @@ schema-list() {
     # List from search paths
     if [[ -n "$SCHEMA_SEARCH_PATHS" ]]; then
         local -a paths=("${(@s[:])SCHEMA_SEARCH_PATHS}")
-        local path
-        for path in "${paths[@]}"; do
-            [[ -d "$path" ]] && find "$path" -maxdepth 1 -name "$pattern" -type f
+        local search_dir
+        for search_dir in "${paths[@]}"; do
+            [[ -d "$search_dir" ]] && find "$search_dir" -maxdepth 1 -name "$pattern" -type f
         done
     fi
 }

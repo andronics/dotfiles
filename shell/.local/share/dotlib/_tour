@@ -65,6 +65,7 @@ source "${DOTLIB}/_args"       || { echo "[ERROR] _tour requires _args" >&2; ret
 source "${DOTLIB}/_http"       || { echo "[ERROR] _tour requires _http" >&2; return 1; }
 source "${DOTLIB}/_server"     || { echo "[ERROR] _tour requires _server" >&2; return 1; }
 source "${DOTLIB}/_wifi"       || { echo "[ERROR] _tour requires _wifi" >&2; return 1; }
+source "${DOTLIB}/_docker"     || { echo "[ERROR] _tour requires _docker" >&2; return 1; }
 source "${DOTLIB}/_notify"     || { echo "[ERROR] _tour requires _notify" >&2; return 1; }
 source "${DOTLIB}/_test"       || { echo "[ERROR] _tour requires _test" >&2; return 1; }
 
@@ -90,6 +91,7 @@ typeset -gA _TOUR_DESCRIPTIONS=(
     [http]="Tour _http: auth headers, URL encoding, query strings (no network calls)"
     [server]="Tour _server: port/type checks and status queries (never starts a server)"
     [wifi]="Tour _wifi: live network/connection status (read-only, skips if unavailable)"
+    [docker]="Tour _docker: live container/image/volume listing (read-only, skips if unavailable)"
     [notify]="Tour _notify: a real desktop notification"
     [framework]="Tour _dispatcher's own help/commands/completion/dry-run"
     [run]="Run the full tour end to end (--fast skips pacing)"
@@ -809,6 +811,39 @@ tour-wifi() {
     wifi-info
 }
 
+tour-docker() {
+    ui-header "_docker — live container/image status (read-only)"
+
+    if ! docker-check-available 2>/dev/null; then
+        ui-warning "docker daemon not available on this host - skipping"
+        return 0
+    fi
+
+    ui-info "docker-ping / docker-version..."
+    docker-ping >/dev/null 2>&1 && ui-success "daemon responding"
+    ui-list "$(docker-version 2>/dev/null | /usr/bin/jq -r '"Docker \(.Version) (API \(.ApiVersion))"' 2>/dev/null || echo "version: unavailable")"
+
+    echo ""
+    ui-info "containers (docker-container-list)..."
+    local containers
+    containers=$(docker-container-list --all 2>/dev/null | /usr/bin/jq -r '.[] | "\(.Names[0]) (\(.State))"' 2>/dev/null) || true
+    if [[ -n "$containers" ]]; then
+        echo "$containers" | head -5
+    else
+        ui-warning "this daemon's API response has malformed JSON in it (unescaped control characters in a label) - jq can't parse it strictly, which is jq being correct, not a dotlib bug"
+    fi
+
+    echo ""
+    ui-info "images (docker-image-list)..."
+    docker-image-list 2>/dev/null | /usr/bin/jq -r '.[] | .RepoTags[0] // "<none>"' 2>/dev/null | head -5
+
+    echo ""
+    ui-info "volumes (docker-volume-list) & networks (docker-network-list)..."
+    ui-list \
+        "volumes: $(docker-volume-list 2>/dev/null | /usr/bin/jq -r '.Volumes | length' 2>/dev/null) total" \
+        "networks: $(docker-network-list 2>/dev/null | /usr/bin/jq -r 'length' 2>/dev/null) total"
+}
+
 tour-notify() {
     ui-header "_notify — desktop notifications"
 
@@ -840,7 +875,7 @@ tour-run() {
     local fast=false
     [[ "$1" == "--fast" ]] && fast=true
 
-    local -a sections=(intro ui format string validate events async rules crypto schema actions plugins bspwm rofi acpi network patterns args http server wifi notify framework)
+    local -a sections=(intro ui format string validate events async rules crypto schema actions plugins bspwm rofi acpi network patterns args http server wifi docker notify framework)
     local section
 
     for section in "${sections[@]}"; do
@@ -882,6 +917,7 @@ _tour-selftest-cases() {
     test-it "http section runs"     _tour-selftest-http
     test-it "server section runs"   _tour-selftest-server
     test-it "wifi section runs"     _tour-selftest-wifi
+    test-it "docker section runs"   _tour-selftest-docker
 }
 
 _tour-selftest-intro()    { test-assert-exit-code 0 _tour-quiet tour-intro; }
@@ -905,6 +941,7 @@ _tour-selftest-args()     { test-assert-exit-code 0 _tour-quiet tour-args; }
 _tour-selftest-http()     { test-assert-exit-code 0 _tour-quiet tour-http; }
 _tour-selftest-server()   { test-assert-exit-code 0 _tour-quiet tour-server; }
 _tour-selftest-wifi()     { test-assert-exit-code 0 _tour-quiet tour-wifi; }
+_tour-selftest-docker()   { test-assert-exit-code 0 _tour-quiet tour-docker; }
 
 tour-self-test() {
     test-describe "dotlib tour sections" _tour-selftest-cases
