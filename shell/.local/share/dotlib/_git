@@ -1172,8 +1172,8 @@ git-self-test() {
 
     # Test 6: Status JSON format
     echo -n "Test 6: Status JSON format... "
-    local status=$(git-status --format json 2>/dev/null)
-    if echo "$status" | grep -q '"branch"'; then
+    local status_json=$(git-status --format json 2>/dev/null)
+    if echo "$status_json" | grep -q '"branch"'; then
         echo "PASS"
         ((tests_passed++)) || true
     else

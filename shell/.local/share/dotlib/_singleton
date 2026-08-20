@@ -558,18 +558,18 @@ singleton-list-locks() {
         local name=$(basename "$lock_file" .lock)
         local pid=$(cat "$lock_file" 2>/dev/null | head -n 1)
         local age=$((($(date +%s) - $(stat -c %Y "$lock_file" 2>/dev/null || echo "0"))))
-        local status="active"
+        local lock_status="active"
 
         if ! kill -0 "$pid" 2>/dev/null; then
-            status="stale (dead process)"
+            lock_status="stale (dead process)"
         elif [[ $age -gt $SINGLETON_STALE_TIMEOUT ]]; then
-            status="stale (old)"
+            lock_status="stale (old)"
         fi
 
         echo "  $name"
         echo "    PID: $pid"
         echo "    Age: ${age}s"
-        echo "    Status: $status"
+        echo "    Status: $lock_status"
         echo ""
 
         count=$((count + 1))

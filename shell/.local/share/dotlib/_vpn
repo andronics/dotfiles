@@ -581,10 +581,10 @@ vpn-status-json() {
 #   vpn-is-connected && echo "VPN active"
 #
 vpn-is-connected() {
-    local status
-    status=$(vpn-status)
+    local conn_status
+    conn_status=$(vpn-status)
 
-    [[ "$status" == "connected" ]]
+    [[ "$conn_status" == "connected" ]]
 }
 
 # Check if VPN is disconnected
@@ -598,10 +598,10 @@ vpn-is-connected() {
 #   vpn-is-disconnected && echo "VPN inactive"
 #
 vpn-is-disconnected() {
-    local status
-    status=$(vpn-status)
+    local conn_status
+    conn_status=$(vpn-status)
 
-    [[ "$status" == "disconnected" ]]
+    [[ "$conn_status" == "disconnected" ]]
 }
 
 # Wait for VPN to connect
@@ -632,7 +632,7 @@ vpn-wait-connected() {
         ((elapsed++)) || true
     done
 
-    log-warn "VPN connection timeout" "timeout=${timeout}s"
+    log-warning "VPN connection timeout" "timeout=${timeout}s"
     return 1
 }
 
@@ -664,7 +664,7 @@ vpn-wait-disconnected() {
         ((elapsed++)) || true
     done
 
-    log-warn "VPN disconnection timeout" "timeout=${timeout}s"
+    log-warning "VPN disconnection timeout" "timeout=${timeout}s"
     return 1
 }
 
@@ -1982,7 +1982,7 @@ vpn-disconnect() {
             log-success "VPN disconnected"
             return 0
         else
-            log-warn "VPN disconnection timeout"
+            log-warning "VPN disconnection timeout"
             return 1
         fi
     else
@@ -2823,7 +2823,7 @@ vpn-self-test() {
         log-info "✓ nordvpn CLI available"
         ((tests_passed++)) || true
     else
-        log-warn "✗ nordvpn CLI not available (expected if not installed)"
+        log-warning "✗ nordvpn CLI not available (expected if not installed)"
         ((tests_failed++)) || true
     fi
 
@@ -2832,7 +2832,7 @@ vpn-self-test() {
         log-info "✓ nordvpnd service available"
         ((tests_passed++)) || true
     else
-        log-warn "✗ nordvpnd service not available (expected if not installed)"
+        log-warning "✗ nordvpnd service not available (expected if not installed)"
         ((tests_failed++)) || true
     fi
 

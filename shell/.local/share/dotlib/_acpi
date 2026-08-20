@@ -988,8 +988,8 @@ acpi-battery-is-charging() {
         return 1
     fi
 
-    local status=$(cat "$battery_path/status")
-    [[ "$status" == "Charging" ]]
+    local batt_status=$(cat "$battery_path/status")
+    [[ "$batt_status" == "Charging" ]]
 }
 
 # Get battery discharging status
@@ -1012,8 +1012,8 @@ acpi-battery-is-discharging() {
         return 1
     fi
 
-    local status=$(cat "$battery_path/status")
-    [[ "$status" == "Discharging" ]]
+    local batt_status=$(cat "$battery_path/status")
+    [[ "$batt_status" == "Discharging" ]]
 }
 
 # ------------------------------

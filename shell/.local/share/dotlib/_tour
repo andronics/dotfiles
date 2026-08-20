@@ -67,6 +67,7 @@ source "${DOTLIB}/_server"     || { echo "[ERROR] _tour requires _server" >&2; r
 source "${DOTLIB}/_wifi"       || { echo "[ERROR] _tour requires _wifi" >&2; return 1; }
 source "${DOTLIB}/_docker"     || { echo "[ERROR] _tour requires _docker" >&2; return 1; }
 source "${DOTLIB}/_xidlehook"  || { echo "[ERROR] _tour requires _xidlehook" >&2; return 1; }
+source "${DOTLIB}/_vpn"        || { echo "[ERROR] _tour requires _vpn" >&2; return 1; }
 source "${DOTLIB}/_notify"     || { echo "[ERROR] _tour requires _notify" >&2; return 1; }
 source "${DOTLIB}/_test"       || { echo "[ERROR] _tour requires _test" >&2; return 1; }
 
@@ -94,6 +95,7 @@ typeset -gA _TOUR_DESCRIPTIONS=(
     [wifi]="Tour _wifi: live network/connection status (read-only, skips if unavailable)"
     [docker]="Tour _docker: live container/image/volume listing (read-only, skips if unavailable)"
     [xidlehook]="Tour _xidlehook: idle-timer status (read-only, skips if unavailable)"
+    [vpn]="Tour _vpn: NordVPN status and server catalog (read-only, never connects)"
     [notify]="Tour _notify: a real desktop notification"
     [framework]="Tour _dispatcher's own help/commands/completion/dry-run"
     [run]="Run the full tour end to end (--fast skips pacing)"
@@ -861,6 +863,42 @@ tour-xidlehook() {
     xidlehook-status
 }
 
+tour-vpn() {
+    ui-header "_vpn — NordVPN status (read-only, never connects)"
+
+    if ! vpn-check-cli 2>/dev/null; then
+        ui-warning "nordvpn CLI not available on this host - skipping"
+        return 0
+    fi
+
+    ui-info "service & connection status..."
+    ui-list \
+        "service active: $(vpn-service-is-active && echo yes || echo no)" \
+        "logged in: $(vpn-is-logged-in && echo yes || echo no)" \
+        "connected: $(vpn-is-connected && echo yes || echo no)"
+
+    echo ""
+    ui-info "vpn-status..."
+    vpn-status 2>&1
+
+    echo ""
+    ui-info "settings (vpn-get-settings)..."
+    vpn-get-settings 2>&1 | head -6
+
+    echo ""
+    ui-info "server catalog (vpn-list-countries / vpn-list-technologies)..."
+    local -a countries technologies
+    countries=("${(@f)$(vpn-list-countries 2>/dev/null)}")
+    technologies=("${(@f)$(vpn-list-technologies 2>/dev/null)}")
+    ui-list \
+        "countries: ${#countries[@]} total (e.g. ${countries[1]}, ${countries[2]}, ${countries[3]})" \
+        "technologies: ${#technologies[@]} total"
+
+    echo ""
+    ui-info "note: vpn-connect/-disconnect/-login/-logout and every settings"
+    ui-info "mutator exist but this tour never touches your real VPN state."
+}
+
 tour-notify() {
     ui-header "_notify — desktop notifications"
 
@@ -892,7 +930,7 @@ tour-run() {
     local fast=false
     [[ "$1" == "--fast" ]] && fast=true
 
-    local -a sections=(intro ui format string validate events async rules crypto schema actions plugins bspwm rofi acpi network patterns args http server wifi docker xidlehook notify framework)
+    local -a sections=(intro ui format string validate events async rules crypto schema actions plugins bspwm rofi acpi network patterns args http server wifi docker xidlehook vpn notify framework)
     local section
 
     for section in "${sections[@]}"; do
@@ -936,6 +974,7 @@ _tour-selftest-cases() {
     test-it "wifi section runs"     _tour-selftest-wifi
     test-it "docker section runs"   _tour-selftest-docker
     test-it "xidlehook section runs" _tour-selftest-xidlehook
+    test-it "vpn section runs"      _tour-selftest-vpn
 }
 
 _tour-selftest-intro()    { test-assert-exit-code 0 _tour-quiet tour-intro; }
@@ -961,6 +1000,7 @@ _tour-selftest-server()   { test-assert-exit-code 0 _tour-quiet tour-server; }
 _tour-selftest-wifi()     { test-assert-exit-code 0 _tour-quiet tour-wifi; }
 _tour-selftest-docker()   { test-assert-exit-code 0 _tour-quiet tour-docker; }
 _tour-selftest-xidlehook() { test-assert-exit-code 0 _tour-quiet tour-xidlehook; }
+_tour-selftest-vpn()      { test-assert-exit-code 0 _tour-quiet tour-vpn; }
 
 tour-self-test() {
     test-describe "dotlib tour sections" _tour-selftest-cases

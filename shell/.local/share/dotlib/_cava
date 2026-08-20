@@ -831,14 +831,14 @@ cava-status() {
         local any_running=false
         for id in "${(@k)_CAVA_PROCESSES}"; do
             local pid="${_CAVA_PROCESSES[$id]}"
-            local status="Stopped"
+            local inst_status="Stopped"
             if kill -0 "$pid" 2>/dev/null; then
-                status="Running"
+                inst_status="Running"
                 any_running=true
             fi
             local spectrum_pid="${_CAVA_SPECTRUM_PIDS[$id]:-none}"
             local fifo="${_CAVA_FIFOS[$id]}"
-            echo "$id|$status|$pid|$spectrum_pid|$fifo"
+            echo "$id|$inst_status|$pid|$spectrum_pid|$fifo"
         done | column -t -s '|'
 
         [[ "$any_running" == "true" ]] && return 0 || return 1
