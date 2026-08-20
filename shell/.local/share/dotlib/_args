@@ -124,7 +124,7 @@ _args-log-verbose() {
 
 _args-log-error() {
     echo -e "${_ARGS_COLOR_ERROR}[ERROR] args: $*${COLOR_RESET}" >&2
-    ((_ARGS_TOTAL_ERRORS++))
+    ((_ARGS_TOTAL_ERRORS++)) || true
 }
 
 _args-log-warning() {
@@ -519,7 +519,7 @@ args-parse() {
 
     _ARGS_PARSE_ERROR=""
     _ARGS_POSITIONAL_VALUES=()
-    ((_ARGS_TOTAL_PARSES++))
+    ((_ARGS_TOTAL_PARSES++)) || true
 
     # Apply defaults
     for name in "${(@k)_ARGS_DEFAULTS}"; do

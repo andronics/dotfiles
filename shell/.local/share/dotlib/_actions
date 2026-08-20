@@ -200,7 +200,7 @@ action-register() {
 
     local key="${type}.${action}"
     _ACTIONS_REGISTRY[$key]="$handler"
-    ((_ACTIONS_TOTAL_REGISTERED++))
+    ((_ACTIONS_TOTAL_REGISTERED++)) || true
 
     _actions-log-debug "Registered action: $key => $handler"
     _actions-emit-event "actions.registered" "$type" "$action" "$handler"
@@ -493,7 +493,7 @@ _actions-execute-one() {
     if [[ $condition_result -eq 1 ]]; then
         _actions-log-verbose "Skipping action (condition not met): $action_id"
         _actions-set-state "$action_id" "skipped"
-        ((_ACTIONS_TOTAL_SKIPPED++))
+        ((_ACTIONS_TOTAL_SKIPPED++)) || true
         _actions-emit-event "actions.execute.skipped" "$action_id"
         return 0
     elif [[ $condition_result -eq 2 ]]; then
@@ -539,7 +539,7 @@ _actions-execute-one() {
     if [[ $exit_code -eq 0 ]]; then
         _actions-log-success "Action completed: $action_id"
         _actions-set-state "$action_id" "completed"
-        ((_ACTIONS_TOTAL_SUCCESSES++))
+        ((_ACTIONS_TOTAL_SUCCESSES++)) || true
 
         # Store result if requested
         if [[ -n "$store_as" ]]; then
@@ -556,7 +556,7 @@ _actions-execute-one() {
         _actions-log-error "Action failed: $action_id (exit code: $exit_code)"
         _actions-log-error "Error output: $result"
         _actions-set-state "$action_id" "failed"
-        ((_ACTIONS_TOTAL_FAILURES++))
+        ((_ACTIONS_TOTAL_FAILURES++)) || true
 
         _actions-emit-event "actions.execute.failed" "$action_id" "$exit_code"
 
@@ -618,7 +618,7 @@ action-execute-schema() {
     echo "[DEBUG action-execute-schema] Action count: $action_count" >&2
 
     _actions-log-verbose "Executing $action_count actions"
-    ((_ACTIONS_TOTAL_EXECUTIONS++))
+    ((_ACTIONS_TOTAL_EXECUTIONS++)) || true
 
     _actions-emit-event "actions.schema.execute.start" "$schema_file" "$action_count"
 

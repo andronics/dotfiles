@@ -309,16 +309,16 @@ vpn-check-dependencies() {
     local missing=0
 
     if ! vpn-check-cli; then
-        ((missing++))
+        ((missing++)) || true
     fi
 
     if ! vpn-check-service; then
-        ((missing++))
+        ((missing++)) || true
     fi
 
     if ! common-command-exists systemctl; then
         log-error "systemctl not found - required for service management"
-        ((missing++))
+        ((missing++)) || true
     fi
 
     if [[ $missing -gt 0 ]]; then
@@ -629,7 +629,7 @@ vpn-wait-connected() {
         fi
 
         sleep 1
-        ((elapsed++))
+        ((elapsed++)) || true
     done
 
     log-warn "VPN connection timeout" "timeout=${timeout}s"
@@ -661,7 +661,7 @@ vpn-wait-disconnected() {
         fi
 
         sleep 1
-        ((elapsed++))
+        ((elapsed++)) || true
     done
 
     log-warn "VPN disconnection timeout" "timeout=${timeout}s"
@@ -2821,19 +2821,19 @@ vpn-self-test() {
     # Test 1: CLI availability
     if vpn-check-cli 2>/dev/null; then
         log-info "✓ nordvpn CLI available"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         log-warn "✗ nordvpn CLI not available (expected if not installed)"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
 
     # Test 2: Service availability
     if vpn-check-service 2>/dev/null; then
         log-info "✓ nordvpnd service available"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         log-warn "✗ nordvpnd service not available (expected if not installed)"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
 
     # Test 3: Integration detection
@@ -2845,7 +2845,7 @@ vpn-self-test() {
     log-info "  _config:    $VPN_CONFIG_AVAILABLE"
     log-info "  _string:    $VPN_STRING_AVAILABLE"
     log-info "  _rofi:      $VPN_ROFI_AVAILABLE"
-    ((tests_passed++))
+    ((tests_passed++)) || true
 
     # Test 4: Status parsing
     local test_status="Status: Connected
@@ -2862,10 +2862,10 @@ Uptime: 1 hour 23 minutes"
     parsed=$(_vpn-parse-status "$test_status")
     if echo "$parsed" | grep -q "status=connected"; then
         log-info "✓ Status parsing works"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         log-error "✗ Status parsing failed"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
 
     # Test 5: Byte formatting
@@ -2873,10 +2873,10 @@ Uptime: 1 hour 23 minutes"
     formatted=$(vpn-format-bytes 1572864000)
     if [[ -n "$formatted" ]]; then
         log-info "✓ Byte formatting works" "result=$formatted"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         log-error "✗ Byte formatting failed"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
 
     log-info ""

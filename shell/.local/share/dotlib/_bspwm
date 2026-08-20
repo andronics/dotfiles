@@ -1344,7 +1344,7 @@ bspwm-self-test() {
     # Test 1: BSPWM availability
     if bspwm-is-running; then
         log-info "✓ BSPWM is running"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         log-warn "⚠ BSPWM is not running (some tests will be skipped)"
     fi
@@ -1352,19 +1352,19 @@ bspwm-self-test() {
     # Test 2: Command availability
     if common-command-exists bspc; then
         log-info "✓ bspc command available"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         log-error "✗ bspc command not found"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
 
     # Test 3: Directory creation
     if [[ -d "$BSPWM_CONFIG_DIR" ]]; then
         log-info "✓ Config directory exists"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         log-error "✗ Config directory missing"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
 
     # Test 4: Cache functionality (if available)
@@ -1373,10 +1373,10 @@ bspwm-self-test() {
         cache-set "$test_key" "test_value" 1
         if [[ "$(cache-get "$test_key")" == "test_value" ]]; then
             log-info "✓ Cache integration works"
-            ((tests_passed++))
+            ((tests_passed++)) || true
         else
             log-error "✗ Cache integration failed"
-            ((tests_failed++))
+            ((tests_failed++)) || true
         fi
         cache-delete "$test_key"
     else
@@ -1387,10 +1387,10 @@ bspwm-self-test() {
     if bspwm-is-running; then
         if bspwm-monitor-list >/dev/null 2>&1; then
             log-info "✓ Query operations work"
-            ((tests_passed++))
+            ((tests_passed++)) || true
         else
             log-error "✗ Query operations failed"
-            ((tests_failed++))
+            ((tests_failed++)) || true
         fi
     fi
 
@@ -1404,10 +1404,10 @@ bspwm-self-test() {
 
         if [[ "$test_event_received" == "true" ]]; then
             log-info "✓ Event system integration works"
-            ((tests_passed++))
+            ((tests_passed++)) || true
         else
             log-error "✗ Event system integration failed"
-            ((tests_failed++))
+            ((tests_failed++)) || true
         fi
 
         events-off "bspwm.test.event" test_handler

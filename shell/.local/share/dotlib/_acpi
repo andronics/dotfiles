@@ -1636,10 +1636,10 @@ acpi-self-test() {
     # Test 1: Initialization
     if acpi-init 2>/dev/null; then
         log-info "✓ Initialization successful"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         log-error "✗ Initialization failed"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
 
     # Test 2: Dependencies
@@ -1650,26 +1650,26 @@ acpi-self-test() {
     log-info "  _cache:     ${ACPI_CACHE_AVAILABLE:-false}"
     log-info "  _lifecycle: ${ACPI_LIFECYCLE_AVAILABLE:-false}"
     log-info "  _config:    ${ACPI_CONFIG_AVAILABLE:-false}"
-    ((tests_passed++))
+    ((tests_passed++)) || true
 
     # Test 3: System utilities
     log-info "System utilities:"
     if common-command-exists nc; then
         log-info "  nc: Available"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         log-error "  nc: Missing (required for event listening)"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
 
     # Test 4: ACPI socket
     log-info "ACPI socket:"
     if [[ -S "$ACPI_SOCKET" ]]; then
         log-info "  $ACPI_SOCKET: Found"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         log-warn "  $ACPI_SOCKET: Not found (is acpid running?)"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
 
     # Test 5: Battery detection
@@ -1678,20 +1678,20 @@ acpi-self-test() {
         acpi-battery-list 2>/dev/null | while read -r line; do
             log-info "  $line"
         done
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         log-info "  No batteries found (may be expected on desktop)"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     fi
 
     # Test 6: AC adapter detection
     log-info "AC adapter detection:"
     if acpi-ac-status &>/dev/null; then
         log-info "  AC adapter found"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         log-info "  No AC adapter found (may be expected on desktop)"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     fi
 
     # Test 7: Thermal zones
@@ -1700,10 +1700,10 @@ acpi-self-test() {
         acpi-thermal-list 2>/dev/null | while read -r line; do
             log-info "  $line"
         done
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         log-info "  No thermal zones found"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     fi
 
     # Test 8: Callback registration
@@ -1713,28 +1713,28 @@ acpi-self-test() {
         log-info "  ✓ Callback registered"
         acpi-off "test * * *" 2>/dev/null
         log-info "  ✓ Callback unregistered"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         log-error "  ✗ Callback registration failed"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
 
     # Test 9: Caching integration
     if [[ "$ACPI_CACHE_AVAILABLE" == "true" ]]; then
         log-info "✓ Cache integration available"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         log-info "○ Cache integration not available (optional)"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     fi
 
     # Test 10: Event integration
     if [[ "$ACPI_EVENTS_AVAILABLE" == "true" ]]; then
         log-info "✓ Event integration available"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         log-info "○ Event integration not available (optional)"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     fi
 
     log-info ""

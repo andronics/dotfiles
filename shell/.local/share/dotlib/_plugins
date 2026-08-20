@@ -96,7 +96,7 @@ plugin-discover() {
 
             echo "[DEBUG plugin-discover] Loading metadata for: $plugin_name from $plugin_file" >&2
             if _plugin-load-metadata "$plugin_name" "$plugin_file"; then
-                ((discovered++))
+                ((discovered++)) || true
                 _PLUGINS_STATE[$plugin_name]="discovered"
                 _PLUGINS_PATHS[$plugin_name]="$plugin_dir"
 
@@ -593,7 +593,7 @@ plugin-init-all() {
     for name in "${init_order[@]}"; do
         echo "[DEBUG plugin-init-all] Initializing plugin: $name" >&2
         if ! plugin-init "$name"; then
-            ((failed++))
+            ((failed++)) || true
             echo "[DEBUG plugin-init-all] Plugin initialization FAILED: $name" >&2
             [[ -n "${_LOG_LOADED:-}" ]] && \
                 log-error "Failed to initialize plugin: $name"

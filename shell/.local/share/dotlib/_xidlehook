@@ -250,7 +250,7 @@ xidlehook-start() {
             return 0
         fi
         sleep 0.5
-        ((elapsed++))
+        ((elapsed++)) || true
     done
 
     log-error "[xidlehook] Daemon started but socket not created within ${XIDLEHOOK_START_TIMEOUT}s"
@@ -281,7 +281,7 @@ xidlehook-stop() {
             return 0
         fi
         sleep 0.5
-        ((elapsed++))
+        ((elapsed++)) || true
     done
 
     log-warning "[xidlehook] Daemon did not stop gracefully, forcing termination"
@@ -646,30 +646,30 @@ xidlehook-self-test() {
     print -n "Test 1: Dependencies... "
     if xidlehook-check >/dev/null 2>&1; then
         print "PASS"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         print "FAIL"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
 
     # Test 2: Initialization
     print -n "Test 2: Initialization... "
     if xidlehook-init >/dev/null 2>&1; then
         print "PASS"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         print "FAIL"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
 
     # Test 3: Configuration retrieval
     print -n "Test 3: Get configuration... "
     if xidlehook-get-config >/dev/null 2>&1; then
         print "PASS"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         print "FAIL"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
 
     # Test 4: Set timer duration
@@ -677,44 +677,44 @@ xidlehook-self-test() {
     if xidlehook-set-timer 600 >/dev/null 2>&1; then
         if [[ "$XIDLEHOOK_TIMER_DURATION" == "600" ]]; then
             print "PASS"
-            ((tests_passed++))
+            ((tests_passed++)) || true
         else
             print "FAIL (value not set)"
-            ((tests_failed++))
+            ((tests_failed++)) || true
         fi
     else
         print "FAIL"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
 
     # Test 5: Invalid timer duration
     print -n "Test 5: Reject invalid duration... "
     if ! xidlehook-set-timer "invalid" >/dev/null 2>&1; then
         print "PASS"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         print "FAIL"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
 
     # Test 6: Daemon status check
     print -n "Test 6: Daemon status check... "
     if xidlehook-status >/dev/null 2>&1; then
         print "PASS"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         print "FAIL"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
 
     # Test 7: Socket existence check
     print -n "Test 7: Socket check (not running)... "
     if ! xidlehook-socket-exists; then
         print "PASS"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         print "PASS (socket exists)"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     fi
 
     # Test 8: Idle time retrieval (if xprintidle available)
@@ -723,34 +723,34 @@ xidlehook-self-test() {
         local idle_time=$(xidlehook-get-idle-time 2>/dev/null)
         if [[ "$idle_time" =~ ^[0-9]+$ ]]; then
             print "PASS (${idle_time}s)"
-            ((tests_passed++))
+            ((tests_passed++)) || true
         else
             print "FAIL"
-            ((tests_failed++))
+            ((tests_failed++)) || true
         fi
     else
         print "SKIP (xprintidle not available)"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     fi
 
     # Test 9: PID retrieval (daemon not running)
     print -n "Test 9: PID retrieval... "
     if ! xidlehook-get-pid >/dev/null 2>&1; then
         print "PASS (no daemon running)"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         print "PASS (daemon running)"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     fi
 
     # Test 10: Cleanup
     print -n "Test 10: Cleanup... "
     if xidlehook-cleanup >/dev/null 2>&1; then
         print "PASS"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         print "FAIL"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
 
     # Summary

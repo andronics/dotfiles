@@ -2244,10 +2244,10 @@ rclone-self-test() {
     # Test 1: rclone availability
     if rclone-check-available 2>/dev/null; then
         log-info "✓ rclone is available"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         log-warn "✗ rclone is not available (expected if not installed)"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
 
     # Test 2: Version retrieval
@@ -2255,10 +2255,10 @@ rclone-self-test() {
         local version=$(rclone-get-version)
         if [[ -n "$version" ]]; then
             log-info "✓ rclone version: $version"
-            ((tests_passed++))
+            ((tests_passed++)) || true
         else
             log-error "✗ Failed to get rclone version"
-            ((tests_failed++))
+            ((tests_failed++)) || true
         fi
     fi
 
@@ -2266,20 +2266,20 @@ rclone-self-test() {
     local args=$(_rclone-build-args)
     if [[ -n "$args" ]]; then
         log-info "✓ Argument building works"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         log-error "✗ Argument building failed"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
 
     # Test 4: Configuration setters
     rclone-set-transfers 8
     if [[ "$RCLONE_TRANSFERS" == "8" ]]; then
         log-info "✓ Configuration setters work"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         log-error "✗ Configuration setters failed"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
     rclone-set-transfers 4  # Reset
 
@@ -2287,10 +2287,10 @@ rclone-self-test() {
     rclone-enable-dry-run
     if [[ "$RCLONE_DRY_RUN" == "true" ]]; then
         log-info "✓ Dry-run mode works"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         log-error "✗ Dry-run mode failed"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
     rclone-disable-dry-run
 
@@ -2300,16 +2300,16 @@ rclone-self-test() {
     log-info "  _cache:     $RCLONE_CACHE_AVAILABLE"
     log-info "  _lifecycle: $RCLONE_LIFECYCLE_AVAILABLE"
     log-info "  _config:    $RCLONE_CONFIG_AVAILABLE"
-    ((tests_passed++))
+    ((tests_passed++)) || true
 
     # Test 7: JSON building
     local json=$(rclone-build-operation-json "/tmp/src" "remote:dst")
     if [[ -n "$json" ]] && echo "$json" | grep -q "srcFs"; then
         log-info "✓ JSON building works"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         log-error "✗ JSON building failed"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
 
     log-info ""

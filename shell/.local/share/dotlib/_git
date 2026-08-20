@@ -1107,10 +1107,10 @@ git-self-test() {
     echo -n "Test 1: Git availability... "
     if git-check; then
         echo "PASS"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         echo "FAIL"
-        ((tests_failed++))
+        ((tests_failed++)) || true
         echo "  Git not found - git functions will not work"
         echo ""
         echo "=== Self-Test Summary ==="
@@ -1123,7 +1123,7 @@ git-self-test() {
     echo -n "Test 2: Repository detection... "
     if git-is-repo; then
         echo "PASS (in repository)"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         echo "SKIP (not in repository)"
         # Not a failure, just skip repo-dependent tests
@@ -1140,10 +1140,10 @@ git-self-test() {
     local root=$(git-root)
     if [[ -n "$root" ]] && [[ -d "$root" ]]; then
         echo "PASS (root: $root)"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         echo "FAIL"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
 
     # Test 4: Get current branch
@@ -1151,23 +1151,23 @@ git-self-test() {
     local branch=$(git-current-branch)
     if [[ -n "$branch" ]]; then
         echo "PASS (branch: $branch)"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         echo "FAIL"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
 
     # Test 5: Check clean status
     echo -n "Test 5: Check clean status... "
     if git-is-clean; then
         echo "PASS (clean)"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     elif git-has-changes; then
         echo "PASS (has changes)"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         echo "FAIL"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
 
     # Test 6: Status JSON format
@@ -1175,10 +1175,10 @@ git-self-test() {
     local status=$(git-status --format json 2>/dev/null)
     if echo "$status" | grep -q '"branch"'; then
         echo "PASS"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         echo "FAIL"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
 
     echo ""

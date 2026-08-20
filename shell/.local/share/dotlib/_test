@@ -159,8 +159,8 @@ test-teardown() {
 test-skip() {
     local reason="${1:-No reason provided}"
 
-    ((_TEST_TOTAL++))
-    ((_TEST_SKIPPED++))
+    ((_TEST_TOTAL++)) || true
+    ((_TEST_SKIPPED++)) || true
 
     if [[ "$TEST_OUTPUT_MODE" == "colored" ]]; then
         echo -e "${_TEST_YELLOW}⊘${_TEST_RESET} $_TEST_CURRENT_IT ${_TEST_YELLOW}[SKIPPED: $reason]${_TEST_RESET}"
@@ -180,10 +180,10 @@ _test-record-result() {
     local passed="$1"
     local message="$2"
 
-    ((_TEST_TOTAL++))
+    ((_TEST_TOTAL++)) || true
 
     if [[ "$passed" == "true" ]]; then
-        ((_TEST_PASSED++))
+        ((_TEST_PASSED++)) || true
         if [[ "$TEST_OUTPUT_MODE" == "colored" ]]; then
             echo -e "${_TEST_GREEN}✓${_TEST_RESET} $message"
         else
@@ -191,7 +191,7 @@ _test-record-result() {
         fi
         return 0
     else
-        ((_TEST_FAILED++))
+        ((_TEST_FAILED++)) || true
         if [[ "$TEST_OUTPUT_MODE" == "colored" ]]; then
             echo -e "${_TEST_RED}✗${_TEST_RESET} $message"
         else

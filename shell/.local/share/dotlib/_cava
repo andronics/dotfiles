@@ -347,7 +347,7 @@ cava-spectrum() {
     # Build sed substitution dictionary
     while [[ $idx -lt ${#bar} ]]; do
         dict="${dict}s/${idx}/${bar:${idx}:1}/g;"
-        ((idx++))
+        ((idx++)) || true
     done
 
     # Process input data from stdin
@@ -1088,49 +1088,49 @@ cava-self-test() {
     # Test 1: Dependency check
     if _cava-check-dependency; then
         log-info "✓ CAVA dependency available"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         log-error "✗ CAVA dependency not available (expected if not installed)"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
 
     # Test 2: Directory creation
     if mkdir -p "$CAVA_STATE_DIR" 2>/dev/null; then
         log-info "✓ Directory creation works"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         log-error "✗ Directory creation failed"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
 
     # Test 3: FIFO path generation
     local test_fifo="$(_cava-get-fifo-path "test")"
     if [[ -n "$test_fifo" ]]; then
         log-info "✓ FIFO path generation works"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         log-error "✗ FIFO path generation failed"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
 
     # Test 4: Config generation
     if cava-generate-config "test" >/dev/null 2>&1; then
         log-info "✓ Config generation works"
         rm -f "$(_cava-get-config-path "test")"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         log-error "✗ Config generation failed"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
 
     # Test 5: Bar style transformation
     local test_output=$(echo "01234567" | cava-spectrum)
     if [[ -n "$test_output" ]]; then
         log-info "✓ Bar style transformation works"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         log-error "✗ Bar style transformation failed"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
 
     # Test 6: Bar style get/set
@@ -1139,10 +1139,10 @@ cava-self-test() {
     local new_style="$(cava-get-bar-style)"
     if [[ "$new_style" == "test" ]]; then
         log-info "✓ Bar style get/set works"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         log-error "✗ Bar style get/set failed"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
     cava-set-bar-style "$orig_style" >/dev/null 2>&1
 
@@ -1151,7 +1151,7 @@ cava-self-test() {
     log-info "  _lifecycle: $CAVA_LIFECYCLE_AVAILABLE"
     log-info "  _events:    $CAVA_EVENTS_AVAILABLE"
     log-info "  _cache:     $CAVA_CACHE_AVAILABLE"
-    ((tests_passed++))
+    ((tests_passed++)) || true
 
     log-info ""
     log-info "Self-tests complete: $tests_passed passed, $tests_failed failed"

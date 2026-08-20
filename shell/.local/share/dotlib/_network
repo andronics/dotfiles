@@ -369,29 +369,29 @@ network-self-test() {
     local tests_passed=0 tests_failed=0
 
     # Test 1-10
-    network-check-dependencies && ((tests_passed++)) || ((tests_failed++))
+    network-check-dependencies && { ((tests_passed++)) || true; } || { ((tests_failed++)) || true; }
     network-is-online && ((tests_passed++)) || ((tests_passed++))  # Either way is ok
-    [[ -n "$(network-get-local-ip)" ]] && ((tests_passed++)) || ((tests_failed++))
-    [[ -n "$(network-get-gateway)" ]] && ((tests_passed++)) || ((tests_failed++))
-    [[ $(network-list-interfaces | wc -l) -gt 0 ]] && ((tests_passed++)) || ((tests_failed++))
+    [[ -n "$(network-get-local-ip)" ]] && { ((tests_passed++)) || true; } || { ((tests_failed++)) || true; }
+    [[ -n "$(network-get-gateway)" ]] && { ((tests_passed++)) || true; } || { ((tests_failed++)) || true; }
+    [[ $(network-list-interfaces | wc -l) -gt 0 ]] && { ((tests_passed++)) || true; } || { ((tests_failed++)) || true; }
 
     if network-is-online; then
-        [[ -n "$(network-resolve-host "google.com")" ]] && ((tests_passed++)) || ((tests_failed++))
+        [[ -n "$(network-resolve-host "google.com")" ]] && { ((tests_passed++)) || true; } || { ((tests_failed++)) || true; }
     else
-        ((tests_passed++))
+        ((tests_passed++)) || true
     fi
 
-    network-ping-host "127.0.0.1" 1 1 >/dev/null 2>&1 && ((tests_passed++)) || ((tests_failed++))
+    network-ping-host "127.0.0.1" 1 1 >/dev/null 2>&1 && { ((tests_passed++)) || true; } || { ((tests_failed++)) || true; }
     network-is-port-open "127.0.0.1" "22" && ((tests_passed++)) || ((tests_passed++))  # Either ok
 
     if network-is-online; then
-        [[ -n "$(network-get-public-ip 2>/dev/null)" ]] && ((tests_passed++)) || ((tests_failed++))
+        [[ -n "$(network-get-public-ip 2>/dev/null)" ]] && { ((tests_passed++)) || true; } || { ((tests_failed++)) || true; }
     else
-        ((tests_passed++))
+        ((tests_passed++)) || true
     fi
 
     local first_iface=$(network-list-interfaces | head -1)
-    [[ -n "$first_iface" && -n "$(network-get-interface-status "$first_iface")" ]] && ((tests_passed++)) || ((tests_failed++))
+    [[ -n "$first_iface" && -n "$(network-get-interface-status "$first_iface")" ]] && { ((tests_passed++)) || true; } || { ((tests_failed++)) || true; }
 
     echo "Passed: $tests_passed/10"
     [[ $tests_failed -eq 0 ]] && return 0 || return 1

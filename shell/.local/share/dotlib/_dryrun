@@ -304,7 +304,7 @@ dryrun-scope() {
     local was_enabled=false
     dryrun-is-enabled && was_enabled=true
 
-    ((_DRYRUN_SCOPE_LEVEL++))
+    ((_DRYRUN_SCOPE_LEVEL++)) || true
     log-debug "Entering dry-run scope (level $_DRYRUN_SCOPE_LEVEL)"
     _dryrun-emit "$DRYRUN_EVENT_SCOPE_ENTER" "$_DRYRUN_SCOPE_LEVEL"
 
@@ -314,7 +314,7 @@ dryrun-scope() {
 
     log-debug "Exiting dry-run scope (level $_DRYRUN_SCOPE_LEVEL)"
     _dryrun-emit "$DRYRUN_EVENT_SCOPE_EXIT" "$_DRYRUN_SCOPE_LEVEL"
-    ((_DRYRUN_SCOPE_LEVEL--))
+    ((_DRYRUN_SCOPE_LEVEL--)) || true
 
     [[ "$was_enabled" == "false" ]] && dryrun-disable
 
@@ -330,7 +330,7 @@ dryrun-live-scope() {
     local was_enabled=false
     dryrun-is-enabled && was_enabled=true
 
-    ((_DRYRUN_SCOPE_LEVEL++))
+    ((_DRYRUN_SCOPE_LEVEL++)) || true
     log-debug "Entering live scope (level $_DRYRUN_SCOPE_LEVEL)"
 
     dryrun-disable
@@ -338,7 +338,7 @@ dryrun-live-scope() {
     local result=$?
 
     log-debug "Exiting live scope (level $_DRYRUN_SCOPE_LEVEL)"
-    ((_DRYRUN_SCOPE_LEVEL--))
+    ((_DRYRUN_SCOPE_LEVEL--)) || true
 
     [[ "$was_enabled" == "true" ]] && dryrun-enable
 

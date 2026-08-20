@@ -1260,10 +1260,10 @@ jq-self-test() {
     # Test 1: Check jq availability
     if jq-check; then
         log-info "✓ jq is available"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         log-error "✗ jq is not available"
-        ((tests_failed++))
+        ((tests_failed++)) || true
         return 1
     fi
 
@@ -1271,57 +1271,57 @@ jq-self-test() {
     local version=$(jq-get-version)
     if [[ -n "$version" ]]; then
         log-info "✓ jq version: $version"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         log-error "✗ Failed to get jq version"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
 
     # Test 3: Validate JSON
     if echo '{"test": true}' | jq-validate; then
         log-info "✓ JSON validation works"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         log-error "✗ JSON validation failed"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
 
     # Test 4: Query operation
     local result=$(echo '{"name": "test"}' | jq-get "name" 2>/dev/null)
     if [[ "$result" == "test" ]]; then
         log-info "✓ Query operation works"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         log-error "✗ Query operation failed (got: $result)"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
 
     # Test 5: Array operations
     local result=$(echo '[3,1,2]' | jq-sort | jq-compact 2>/dev/null)
     if [[ "$result" == "[1,2,3]" ]]; then
         log-info "✓ Array operations work"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         log-error "✗ Array operations failed (got: $result)"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
 
     # Test 6: Type checking
     if echo '"string"' | jq-is-string; then
         log-info "✓ Type checking works"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         log-error "✗ Type checking failed"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
 
     # Test 7: Object operations
     if echo '{"a": 1}' | jq-has-key "a"; then
         log-info "✓ Object operations work"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         log-error "✗ Object operations failed"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
 
     # Test 8: Configuration
@@ -1329,10 +1329,10 @@ jq-self-test() {
     jq-enable-compact
     if [[ "$JQ_COMPACT" == "true" ]]; then
         log-info "✓ Configuration management works"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         log-error "✗ Configuration management failed"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
     JQ_COMPACT=$old_compact
 

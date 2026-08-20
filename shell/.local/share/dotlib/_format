@@ -134,7 +134,7 @@ format-list-number() {
 
     for item in "$@"; do
         echo "${indent}${index}. ${item}"
-        ((index++))
+        ((index++)) || true
     done
 }
 
@@ -280,30 +280,30 @@ format-self-test() {
 
     # Test 1: Left alignment
     local result=$(format-align-left "test" 10)
-    [[ ${#result} -eq 10 ]] && ((tests_passed++)) || ((tests_failed++))
+    [[ ${#result} -eq 10 ]] && { ((tests_passed++)) || true; } || { ((tests_failed++)) || true; }
 
     # Test 2: Right alignment
     result=$(format-align-right "test" 10)
-    [[ ${#result} -eq 10 && "$result" =~ "test$" ]] && ((tests_passed++)) || ((tests_failed++))
+    [[ ${#result} -eq 10 && "$result" =~ "test$" ]] && { ((tests_passed++)) || true; } || { ((tests_failed++)) || true; }
 
     # Test 3: Center alignment
     result=$(format-align-center "test" 10)
-    [[ ${#result} -eq 10 ]] && ((tests_passed++)) || ((tests_failed++))
+    [[ ${#result} -eq 10 ]] && { ((tests_passed++)) || true; } || { ((tests_failed++)) || true; }
 
     # Test 4: Truncation
     result=$(format-truncate "very long text here" 10)
-    [[ ${#result} -le 10 ]] && ((tests_passed++)) || ((tests_failed++))
+    [[ ${#result} -le 10 ]] && { ((tests_passed++)) || true; } || { ((tests_failed++)) || true; }
 
     # Test 5: Number formatting
     result=$(format-number "1234567")
-    [[ "$result" == "1,234,567" ]] && ((tests_passed++)) || ((tests_failed++))
+    [[ "$result" == "1,234,567" ]] && { ((tests_passed++)) || true; } || { ((tests_failed++)) || true; }
 
     # Test 6-10: Case conversions and others
-    [[ "$(format-uppercase "hello")" == "HELLO" ]] && ((tests_passed++)) || ((tests_failed++))
-    [[ "$(format-lowercase "WORLD")" == "world" ]] && ((tests_passed++)) || ((tests_failed++))
-    [[ "$(format-titlecase "hello world")" == "Hello World" ]] && ((tests_passed++)) || ((tests_failed++))
-    [[ "$(format-indent "test" 2)" =~ "    test" ]] && ((tests_passed++)) || ((tests_failed++))
-    [[ "$(format-list-bullet "item1" | head -1)" =~ "${FORMAT_BULLET_CHAR}" ]] && ((tests_passed++)) || ((tests_failed++))
+    [[ "$(format-uppercase "hello")" == "HELLO" ]] && { ((tests_passed++)) || true; } || { ((tests_failed++)) || true; }
+    [[ "$(format-lowercase "WORLD")" == "world" ]] && { ((tests_passed++)) || true; } || { ((tests_failed++)) || true; }
+    [[ "$(format-titlecase "hello world")" == "Hello World" ]] && { ((tests_passed++)) || true; } || { ((tests_failed++)) || true; }
+    [[ "$(format-indent "test" 2)" =~ "    test" ]] && { ((tests_passed++)) || true; } || { ((tests_failed++)) || true; }
+    [[ "$(format-list-bullet "item1" | head -1)" =~ "${FORMAT_BULLET_CHAR}" ]] && { ((tests_passed++)) || true; } || { ((tests_failed++)) || true; }
 
     echo "Passed: $tests_passed/10"
     [[ $tests_failed -eq 0 ]] && return 0 || return 1

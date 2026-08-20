@@ -325,7 +325,7 @@ _config-load-json() {
         key=$(_config-normalize-key "$key")
         _CONFIG_DATA[$key]="$value"
         _CONFIG_TYPES[$key]="string"  # Default type
-        ((_CONFIG_TOTAL_KEYS++))
+        ((_CONFIG_TOTAL_KEYS++)) || true
     done <<< "$json_data"
 
     _config-log-verbose "Loaded $_CONFIG_TOTAL_KEYS keys from JSON file"
@@ -415,7 +415,7 @@ _config-load-ini() {
             key=$(_config-normalize-key "$key")
             _CONFIG_DATA[$key]="$value"
             _CONFIG_TYPES[$key]="string"
-            ((_CONFIG_TOTAL_KEYS++))
+            ((_CONFIG_TOTAL_KEYS++)) || true
         fi
     done < "$file"
 
@@ -498,7 +498,7 @@ _config-load-env() {
             key=$(_config-normalize-key "$key")
             _CONFIG_DATA[$key]="$value"
             _CONFIG_TYPES[$key]="string"
-            ((_CONFIG_TOTAL_KEYS++))
+            ((_CONFIG_TOTAL_KEYS++)) || true
         fi
     done < "$file"
 
@@ -591,7 +591,7 @@ config-load() {
     _CONFIG_SOURCE_FILE="$file"
     _CONFIG_SOURCE_FORMAT="$format"
     _CONFIG_MODIFIED=false
-    ((_CONFIG_TOTAL_LOADS++))
+    ((_CONFIG_TOTAL_LOADS++)) || true
 
     _config-log-verbose "Configuration loaded successfully"
     return 0
@@ -639,7 +639,7 @@ config-save() {
     _CONFIG_SOURCE_FILE="$file"
     _CONFIG_SOURCE_FORMAT="$format"
     _CONFIG_MODIFIED=false
-    ((_CONFIG_TOTAL_SAVES++))
+    ((_CONFIG_TOTAL_SAVES++)) || true
 
     _config-log-verbose "Configuration saved successfully"
     return 0
@@ -657,21 +657,21 @@ config-get() {
     local env_value
     if env_value=$(_config-check-env-override "$key"); then
         echo "$env_value"
-        ((_CONFIG_TOTAL_GETS++))
+        ((_CONFIG_TOTAL_GETS++)) || true
         return 0
     fi
 
     # Check if key exists
     if [[ -n "${_CONFIG_DATA[$key]}" ]]; then
         echo "${_CONFIG_DATA[$key]}"
-        ((_CONFIG_TOTAL_GETS++))
+        ((_CONFIG_TOTAL_GETS++)) || true
         return 0
     fi
 
     # Check for default value
     if [[ -n "${_CONFIG_DEFAULTS[$key]}" ]]; then
         echo "${_CONFIG_DEFAULTS[$key]}"
-        ((_CONFIG_TOTAL_GETS++))
+        ((_CONFIG_TOTAL_GETS++)) || true
         return 0
     fi
 
@@ -710,7 +710,7 @@ config-set() {
     _CONFIG_DATA[$key]="$value"
     _CONFIG_TYPES[$key]="$type"
     _CONFIG_MODIFIED=true
-    ((_CONFIG_TOTAL_SETS++))
+    ((_CONFIG_TOTAL_SETS++)) || true
 
     _config-log-debug "Set: $key = $value (type: $type)"
 

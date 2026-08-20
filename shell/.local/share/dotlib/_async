@@ -834,7 +834,7 @@ async-retry() {
             fi
         fi
 
-        ((attempt++))
+        ((attempt++)) || true
     done
 
     log-error "Retry failed after $times attempts" "task=$task"
@@ -1322,20 +1322,20 @@ async-self-test() {
     log-info "Test 1: Parallel execution..."
     if async-parallel "echo test1" "echo test2" "echo test3" >/dev/null 2>&1; then
         log-info "✓ Parallel execution works"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         log-error "✗ Parallel execution failed"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
 
     # Test 2: Series execution
     log-info "Test 2: Series execution..."
     if async-series "echo test1" "echo test2" >/dev/null 2>&1; then
         log-info "✓ Series execution works"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         log-error "✗ Series execution failed"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
 
     # Test 3: Map operation
@@ -1343,10 +1343,10 @@ async-self-test() {
     local result=$(async-map "echo" a b c 2>/dev/null)
     if [[ -n "$result" ]]; then
         log-info "✓ Map operation works"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         log-error "✗ Map operation failed"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
 
     # Test 4: Retry
@@ -1355,17 +1355,17 @@ async-self-test() {
     echo "0" > "$retry_counter_file"
     _async_test_flaky_func() {
         local count=$(cat "$retry_counter_file")
-        ((count++))
+        ((count++)) || true
         echo "$count" > "$retry_counter_file"
         [[ $count -ge 2 ]] && return 0 || return 1
     }
     if async-retry --times 3 _async_test_flaky_func >/dev/null 2>&1; then
         local final_count=$(cat "$retry_counter_file")
         log-info "✓ Retry works (succeeded on attempt $final_count)"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         log-error "✗ Retry failed"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
     unfunction _async_test_flaky_func 2>/dev/null
     rm -f "$retry_counter_file" 2>/dev/null || true
@@ -1375,10 +1375,10 @@ async-self-test() {
     if command -v timeout >/dev/null 2>&1; then
         if async-timeout 1 "sleep 0.1" >/dev/null 2>&1; then
             log-info "✓ Timeout works (task completed)"
-            ((tests_passed++))
+            ((tests_passed++)) || true
         else
             log-error "✗ Timeout failed"
-            ((tests_failed++))
+            ((tests_failed++)) || true
         fi
     else
         log-info "⚠ Timeout command not available (skipping timeout test)"
@@ -1391,10 +1391,10 @@ async-self-test() {
     local result2=$(async-memoize expensive_func arg1)
     if [[ "$result1" == "$result2" ]]; then
         log-info "✓ Memoization works"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         log-error "✗ Memoization failed"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
     unfunction expensive_func 2>/dev/null
     async-memoize-clear
@@ -1403,10 +1403,10 @@ async-self-test() {
     log-info "Test 7: Cleanup..."
     if async-cleanup; then
         log-info "✓ Cleanup works"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         log-error "✗ Cleanup failed"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
 
     # Summary

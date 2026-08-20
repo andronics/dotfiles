@@ -828,7 +828,7 @@ _lifecycle-compute-cleanup-order() {
     # Compute in-degrees
     for node in "${(@k)_LIFECYCLE_CLEANUP_DEPS}"; do
         for dep in ${_LIFECYCLE_CLEANUP_DEPS[$node]}; do
-            ((in_degree[$node]++))
+            ((in_degree[$node]++)) || true
         done
     done
 
@@ -846,7 +846,7 @@ _lifecycle-compute-cleanup-order() {
         # For each node that depends on current
         for node in "${(@k)_LIFECYCLE_CLEANUP_DEPS}"; do
             if [[ " ${_LIFECYCLE_CLEANUP_DEPS[$node]} " == *" $current "* ]]; then
-                ((in_degree[$node]--))
+                ((in_degree[$node]--)) || true
                 [[ ${in_degree[$node]} -eq 0 ]] && queue+=("$node")
             fi
         done
@@ -1046,7 +1046,7 @@ lifecycle-restart-check() {
         # Check if process is alive
         if ! kill -0 "$pid" 2>/dev/null; then
             if _lifecycle-restart-process "$pid"; then
-                ((restarts++))
+                ((restarts++)) || true
             fi
         fi
     done
@@ -1071,7 +1071,7 @@ _lifecycle-restart-process() {
     fi
 
     # Increment attempts
-    ((attempts++))
+    ((attempts++)) || true
     _LIFECYCLE_RESTART_ATTEMPTS[$old_pid]=$attempts
 
     log-info "Restarting process" "old_pid=$old_pid" "attempt=$attempts/$max_attempts"
@@ -2158,7 +2158,7 @@ lifecycle-checkpoint-list() {
         local name="$(basename "$checkpoint" .checkpoint)"
         local created="$(grep '^# Created:' "$checkpoint" | cut -d' ' -f3-)"
         echo "$name ($created)"
-        ((found++))
+        ((found++)) || true
     done
 
     if [[ $found -eq 0 ]]; then
@@ -2422,10 +2422,10 @@ lifecycle-self-test() {
     lifecycle-signal INT true
     if [[ -n "${_LIFECYCLE_SIGNAL_HANDLERS[INT]}" ]]; then
         log-info "✓ Signal registration works"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         log-error "✗ Signal registration failed"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
     lifecycle-signal-remove INT true
 
@@ -2436,10 +2436,10 @@ lifecycle-self-test() {
     lifecycle-event-trigger test-event
     if [[ "$test_event_fired" == "true" ]]; then
         log-info "✓ Event system works"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         log-error "✗ Event system failed"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
     lifecycle-event-remove test-event test_event_handler
     unfunction test_event_handler 2>/dev/null
@@ -2448,10 +2448,10 @@ lifecycle-self-test() {
     lifecycle-cleanup true
     if [[ ${#_LIFECYCLE_CLEANUP_FUNCTIONS[@]} -eq 1 ]]; then
         log-info "✓ LIFO cleanup registry works"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         log-error "✗ LIFO cleanup registry failed"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
     lifecycle-cleanup-clear
 
@@ -2459,10 +2459,10 @@ lifecycle-self-test() {
     lifecycle-track-job 999999
     if [[ ${#_LIFECYCLE_TRACKED_PIDS[@]} -eq 1 ]]; then
         log-info "✓ Job tracking works"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         log-error "✗ Job tracking failed"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
     lifecycle-untrack-job 999999
 
@@ -2470,10 +2470,10 @@ lifecycle-self-test() {
     lifecycle-track-temp-file "/tmp/test-file"
     if [[ ${#_LIFECYCLE_TRACKED_TEMP_FILES[@]} -eq 1 ]]; then
         log-info "✓ Temp file tracking works"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         log-error "✗ Temp file tracking failed"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
     lifecycle-untrack-temp-file "/tmp/test-file"
 
@@ -2481,35 +2481,35 @@ lifecycle-self-test() {
     lifecycle-set-exit-code 42
     if [[ "$(lifecycle-get-exit-code)" == "42" ]]; then
         log-info "✓ Exit code management works"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         log-error "✗ Exit code management failed"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
     lifecycle-set-exit-code 0
 
     # Test 7: Integration detection
     log-info "Integration availability:"
     log-info "  _events: ${LIFECYCLE_EVENTS_AVAILABLE:-false}"
-    ((tests_passed++))
+    ((tests_passed++)) || true
 
     # NEW Test 8: Dependency-ordered cleanup
     lifecycle-cleanup-add "task1" "echo task1"
     lifecycle-cleanup-add "task2" "echo task2" "task1"
     if [[ ${#_LIFECYCLE_CLEANUP_REGISTRY[@]} -eq 2 ]]; then
         log-info "✓ Dependency cleanup registration works"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         log-error "✗ Dependency cleanup registration failed"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
 
     if lifecycle-cleanup-validate; then
         log-info "✓ Dependency graph validation works"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         log-error "✗ Dependency graph validation failed"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
 
     # Clear test cleanups
@@ -2524,10 +2524,10 @@ lifecycle-self-test() {
     local group_pids=$(lifecycle-process-group-list "test_group" | wc -l)
     if [[ $group_pids -eq 1 ]]; then
         log-info "✓ Process groups work"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         log-error "✗ Process groups failed"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
     lifecycle-process-group-delete "test_group"
 
@@ -2535,10 +2535,10 @@ lifecycle-self-test() {
     lifecycle-restart-enable 999999 "echo restart" 3 1
     if [[ "${_LIFECYCLE_RESTART_ENABLED[999999]}" == "true" ]]; then
         log-info "✓ Restart registration works"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         log-error "✗ Restart registration failed"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
     lifecycle-restart-disable 999999
 

@@ -166,7 +166,7 @@ _template-log-verbose() {
 _template-log-error() {
     echo -e "${_TEMPLATE_COLOR_ERROR}[ERROR] template: $*${COLOR_RESET}" >&2
     TEMPLATE_LAST_ERROR="$*"
-    ((_TEMPLATE_TOTAL_ERRORS++))
+    ((_TEMPLATE_TOTAL_ERRORS++)) || true
 }
 
 _template-log-warning() {
@@ -597,7 +597,7 @@ template-render() {
 
     common-validate-required "$template" "template" || return 2
 
-    ((_TEMPLATE_TOTAL_RENDERS++))
+    ((_TEMPLATE_TOTAL_RENDERS++)) || true
 
     _template-log-debug "Rendering template (length: ${#template})"
 
@@ -834,7 +834,7 @@ template-validate() {
 
     if [[ $open_count -ne $close_count ]]; then
         _template-log-error "Unbalanced delimiters: ${open_count} open, ${close_count} close"
-        ((errors++))
+        ((errors++)) || true
     fi
 
     # Check balanced conditionals (mustache)
@@ -844,7 +844,7 @@ template-validate() {
 
         if [[ $cond_open -ne $cond_close ]]; then
             _template-log-error "Unbalanced conditionals: ${cond_open} open, ${cond_close} close"
-            ((errors++))
+            ((errors++)) || true
         fi
     fi
 

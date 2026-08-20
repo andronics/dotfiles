@@ -1980,20 +1980,20 @@ docker-self-test() {
     # Test 1: Docker availability
     if docker-check-available 2>/dev/null; then
         log-info "✓ Docker is available"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         log-warn "✗ Docker is not available (expected if not running)"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
 
     # Test 2: Dry-run mode
     docker-enable-dry-run
     if docker-is-dry-run; then
         log-info "✓ Dry-run mode works"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         log-error "✗ Dry-run mode failed"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
     docker-disable-dry-run
 
@@ -2003,16 +2003,16 @@ docker-self-test() {
     log-info "  _cache:     $DOCKER_CACHE_AVAILABLE"
     log-info "  _lifecycle: $DOCKER_LIFECYCLE_AVAILABLE"
     log-info "  _config:    $DOCKER_CONFIG_AVAILABLE"
-    ((tests_passed++))
+    ((tests_passed++)) || true
 
     # Test 4: Tracking
     docker-container-track "test-container"
     if [[ -n "${_DOCKER_TRACKED_CONTAINERS[test-container]}" ]]; then
         log-info "✓ Container tracking works"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         log-error "✗ Container tracking failed"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
     unset "_DOCKER_TRACKED_CONTAINERS[test-container]"
 

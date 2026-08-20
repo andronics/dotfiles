@@ -1195,10 +1195,10 @@ crypto-self-test() {
     echo -n "Test 1: OpenSSL availability... "
     if crypto-check-openssl; then
         echo "PASS"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         echo "FAIL"
-        ((tests_failed++))
+        ((tests_failed++)) || true
         echo "  OpenSSL not found - crypto functions will not work"
         echo ""
         echo "=== Self-Test Summary ==="
@@ -1212,10 +1212,10 @@ crypto-self-test() {
     local hex=$(crypto-random-hex 16)
     if [[ -n "$hex" ]] && [[ ${#hex} -eq 32 ]]; then
         echo "PASS"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         echo "FAIL (got: $hex)"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
 
     # Test 3: Random base64 generation
@@ -1223,10 +1223,10 @@ crypto-self-test() {
     local b64=$(crypto-random-base64 16)
     if [[ -n "$b64" ]]; then
         echo "PASS"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         echo "FAIL"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
 
     # Test 4: UUID generation
@@ -1234,10 +1234,10 @@ crypto-self-test() {
     local uuid=$(crypto-uuid)
     if [[ "$uuid" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]; then
         echo "PASS"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         echo "FAIL (got: $uuid)"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
 
     # Test 5: SHA256 hashing
@@ -1246,22 +1246,22 @@ crypto-self-test() {
     local expected="916f0027a575074ce72a331777c3478d6513f786a591bd892da1a577bf2335f9"
     if [[ "$hash" == "$expected" ]]; then
         echo "PASS"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         echo "FAIL"
         echo "  Expected: $expected"
         echo "  Got:      $hash"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
 
     # Test 6: Hash verification
     echo -n "Test 6: Hash verification... "
     if crypto-verify-hash sha256 "test data" "$expected" 2>/dev/null; then
         echo "PASS"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         echo "FAIL"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
 
     # Test 7: HMAC generation
@@ -1269,20 +1269,20 @@ crypto-self-test() {
     local hmac=$(crypto-hmac sha256 "secret" "test data")
     if [[ -n "$hmac" ]] && [[ ${#hmac} -eq 64 ]]; then
         echo "PASS"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         echo "FAIL"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
 
     # Test 8: HMAC verification
     echo -n "Test 8: HMAC verification... "
     if crypto-verify-hmac sha256 "secret" "test data" "$hmac" 2>/dev/null; then
         echo "PASS"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         echo "FAIL"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
 
     # Test 9: Base64 encoding/decoding
@@ -1292,12 +1292,12 @@ crypto-self-test() {
     local decoded=$(crypto-base64-decode "$encoded")
     if [[ "$decoded" == "$original" ]]; then
         echo "PASS"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         echo "FAIL"
         echo "  Original: $original"
         echo "  Decoded:  $decoded"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
 
     # Test 10: URL encoding/decoding
@@ -1307,12 +1307,12 @@ crypto-self-test() {
     local decoded=$(crypto-url-decode "$encoded")
     if [[ "$decoded" == "$original" ]]; then
         echo "PASS"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         echo "FAIL"
         echo "  Original: $original"
         echo "  Decoded:  $decoded"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
 
     # Test 11: Symmetric encryption/decryption
@@ -1323,12 +1323,12 @@ crypto-self-test() {
     local decrypted=$(crypto-decrypt "$encrypted" --password "$password" 2>/dev/null)
     if [[ "$decrypted" == "$plaintext" ]]; then
         echo "PASS"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         echo "FAIL"
         echo "  Original:  $plaintext"
         echo "  Decrypted: $decrypted"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
 
     # Test 12: Password hashing/verification
@@ -1337,10 +1337,10 @@ crypto-self-test() {
     local hashed=$(crypto-hash-password "$password")
     if crypto-verify-password "$password" "$hashed" 2>/dev/null; then
         echo "PASS"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         echo "FAIL"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
 
     echo ""

@@ -162,7 +162,7 @@ events-on() {
 
     # Generate unique handler ID
     local handler_id="h${_EVENTS_NEXT_HANDLER_ID}"
-    ((_EVENTS_NEXT_HANDLER_ID++))
+    ((_EVENTS_NEXT_HANDLER_ID++)) || true
 
     # Create registry key (event:priority:id)
     local key="${event_name}:${priority}:${handler_id}"
@@ -233,7 +233,7 @@ events-off() {
                 local handler_id="${key##*:}"
                 unset "_EVENTS_HANDLERS[$key]"
                 unset "_EVENTS_HANDLER_META[$handler_id]"
-                ((removed++))
+                ((removed++)) || true
             fi
         done
         log-trace "Removed $removed handler(s) for event '$event_name'"
@@ -246,7 +246,7 @@ events-off() {
                 if [[ "$key" =~ ^${event_name}:.*:${handler}$ ]]; then
                     unset "_EVENTS_HANDLERS[$key]"
                     unset "_EVENTS_HANDLER_META[$handler]"
-                    ((removed++))
+                    ((removed++)) || true
                     log-trace "Removed handler '$handler' for event '$event_name'"
                     break
                 fi
@@ -262,7 +262,7 @@ events-off() {
                         local handler_id="${key##*:}"
                         unset "_EVENTS_HANDLERS[$key]"
                         unset "_EVENTS_HANDLER_META[$handler_id]"
-                        ((removed++))
+                        ((removed++)) || true
                     fi
                 fi
             done
@@ -285,7 +285,7 @@ events-clear() {
             local handler_id="${key##*:}"
             unset "_EVENTS_HANDLERS[$key]"
             unset "_EVENTS_HANDLER_META[$handler_id]"
-            ((removed++))
+            ((removed++)) || true
         fi
     done
 
@@ -459,7 +459,7 @@ events-list() {
     # Count handlers per event
     for key in "${(@k)_EVENTS_HANDLERS}"; do
         local event_name="${key%%:*}"
-        ((event_counts[$event_name]++))
+        ((event_counts[$event_name]++)) || true
     done
 
     # Sort and output
@@ -512,7 +512,7 @@ events-handler-count() {
     for key in "${(@k)_EVENTS_HANDLERS}"; do
         local key_event="${key%%:*}"
         if [[ "$key_event" == "$event_name" ]]; then
-            ((count++))
+            ((count++)) || true
         fi
     done
 
@@ -659,7 +659,7 @@ events-process-queue() {
         local event_data="${event#*|}"
 
         events-emit "$event_name" ${(s: :)event_data}
-        ((processed++))
+        ((processed++)) || true
     done
 
     log-trace "Processed $processed queued event(s)"
@@ -761,7 +761,7 @@ events-log-query() {
             echo "  Data: $event_data"
         fi
 
-        ((count++))
+        ((count++)) || true
     done
 }
 

@@ -1189,71 +1189,71 @@ rofi-self-test() {
     # Test 1: Check rofi availability
     if rofi-check; then
         log-info "PASS: rofi is available"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         log-error "FAIL: rofi is not available"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
 
     # Test 2: Get version
     local version=$(rofi-version-check 2>/dev/null)
     if [[ -n "$version" ]]; then
         log-info "PASS: rofi version: $version"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         log-error "FAIL: Failed to get rofi version"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
 
     # Test 3: Build arguments
     local args=$(_rofi-build-args)
     if [[ -n "$args" ]] || [[ $? -eq 0 ]]; then
         log-info "PASS: Argument building works"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         log-error "FAIL: Argument building failed"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
 
     # Test 4: Configuration
     ROFI_LINES=15
     if [[ "$ROFI_LINES" == "15" ]]; then
         log-info "PASS: Configuration variables work"
-        ((tests_passed++))
+        ((tests_passed++)) || true
         ROFI_LINES=10  # Reset
     else
         log-error "FAIL: Configuration variables failed"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
 
     # Test 5: Format validation
     if rofi-set-format "i"; then
         log-info "PASS: Format validation works"
-        ((tests_passed++))
+        ((tests_passed++)) || true
         rofi-set-format "s"  # Reset
     else
         log-error "FAIL: Format validation failed"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
 
     # Test 6: Matching validation
     if rofi-set-matching "fuzzy"; then
         log-info "PASS: Matching validation works"
-        ((tests_passed++))
+        ((tests_passed++)) || true
         rofi-set-matching "normal"  # Reset
     else
         log-error "FAIL: Matching validation failed"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
 
     # Test 7: Config directory
     local config_dir=$(rofi-get-config-dir)
     if [[ -n "$config_dir" ]]; then
         log-info "PASS: Config directory: $config_dir"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         log-error "FAIL: Failed to get config directory"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
 
     # Summary

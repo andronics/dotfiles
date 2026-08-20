@@ -1953,10 +1953,10 @@ bluetooth-self-test() {
     # Test 1: bluetoothctl availability
     if bluetooth-service-available; then
         log-info "✓ bluetoothctl is available"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         log-error "✗ bluetoothctl not available"
-        ((tests_failed++))
+        ((tests_failed++)) || true
         # Can't continue without bluetoothctl
         log-info "Self-tests complete: $tests_passed passed, $tests_failed failed"
         return 1
@@ -1965,27 +1965,27 @@ bluetooth-self-test() {
     # Test 2: MAC validation
     if bluetooth-validate-mac "00:11:22:33:44:55"; then
         log-info "✓ MAC validation works"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         log-error "✗ MAC validation failed"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
 
     # Test 3: MAC formatting
     local formatted=$(bluetooth-format-mac "aa:bb:cc:dd:ee:ff")
     if [[ "$formatted" == "AA:BB:CC:DD:EE:FF" ]]; then
         log-info "✓ MAC formatting works"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         log-error "✗ MAC formatting failed"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
 
     # Test 4: Power status query
     local power_status=$(bluetooth-power-status 2>/dev/null)
     if [[ -n "$power_status" ]]; then
         log-info "✓ Can query power status" "status=$power_status"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         log-warn "✗ Failed to query power status (expected if BT off)"
     fi
@@ -1994,7 +1994,7 @@ bluetooth-self-test() {
     local controllers=$(bluetooth-controller-list 2>/dev/null | wc -l)
     if [[ $controllers -gt 0 ]]; then
         log-info "✓ Can list controllers" "count=$controllers"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         log-warn "✗ No controllers found (expected if no BT hardware)"
     fi
@@ -2003,7 +2003,7 @@ bluetooth-self-test() {
     bluetooth-devices-list >/dev/null 2>&1
     if [[ $? -eq 0 ]]; then
         log-info "✓ Can list devices"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         log-warn "✗ Failed to list devices"
     fi
@@ -2014,7 +2014,7 @@ bluetooth-self-test() {
     log-info "  _events:    $BLUETOOTH_EVENTS_AVAILABLE"
     log-info "  _cache:     $BLUETOOTH_CACHE_AVAILABLE"
     log-info "  _audio:     $BLUETOOTH_AUDIO_AVAILABLE"
-    ((tests_passed++))
+    ((tests_passed++)) || true
 
     log-info ""
     log-info "Self-tests complete: $tests_passed passed, $tests_failed failed"

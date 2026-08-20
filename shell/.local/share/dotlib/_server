@@ -188,8 +188,8 @@ server-find-available-port() {
             echo "$port"
             return 0
         fi
-        ((port++))
-        ((max_attempts--))
+        ((port++)) || true
+        ((max_attempts--)) || true
     done
 
     log-error "[server] No available ports found (tried ${start_port}-${port})"
@@ -353,7 +353,7 @@ server-start() {
             return 0
         fi
         sleep 0.5
-        ((elapsed++))
+        ((elapsed++)) || true
     done
 
     log-error "[server] Server failed to start within ${SERVER_START_TIMEOUT}s"
@@ -397,7 +397,7 @@ server-stop() {
             return 0
         fi
         sleep 0.5
-        ((elapsed++))
+        ((elapsed++)) || true
     done
 
     log-warning "[server] Server did not stop gracefully, forcing termination"
@@ -591,7 +591,7 @@ server-wait-for-ready() {
             return 0
         fi
         sleep 0.5
-        ((elapsed++))
+        ((elapsed++)) || true
     done
 
     log-error "[server] Timeout waiting for ${host}:${port}"
@@ -722,20 +722,20 @@ server-self-test() {
     print -n "Test 1: Initialization... "
     if server-init >/dev/null 2>&1; then
         print "PASS"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         print "FAIL"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
 
     # Test 2: Check available types
     print -n "Test 2: Available server types... "
     if server-list-available-types >/dev/null 2>&1; then
         print "PASS"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         print "FAIL"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
 
     # Test 3: Find available port
@@ -743,20 +743,20 @@ server-self-test() {
     local port=$(server-find-available-port 9000 2>/dev/null)
     if [[ -n "$port" ]] && [[ "$port" =~ ^[0-9]+$ ]]; then
         print "PASS (found: ${port})"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         print "FAIL"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
 
     # Test 4: Port availability check
     print -n "Test 4: Port availability... "
     if server-is-port-available 9999; then
         print "PASS"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         print "PASS (port in use)"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     fi
 
     # Test 5: Get URL
@@ -764,60 +764,60 @@ server-self-test() {
     local url=$(server-get-url 8080)
     if [[ "$url" == "http://127.0.0.1:8080/" ]]; then
         print "PASS"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         print "FAIL (got: ${url})"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
 
     # Test 6: Server listing (empty)
     print -n "Test 6: List servers (empty)... "
     if server-list >/dev/null 2>&1; then
         print "PASS"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         print "FAIL"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
 
     # Test 7: Server status (not running)
     print -n "Test 7: Status check (not running)... "
     if ! server-is-running 9999; then
         print "PASS"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         print "FAIL (server unexpectedly running)"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
 
     # Test 8: Get PID (nonexistent)
     print -n "Test 8: Get PID (nonexistent)... "
     if ! server-get-pid 9999 >/dev/null 2>&1; then
         print "PASS"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         print "FAIL"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
 
     # Test 9: Check server type
     print -n "Test 9: Check server type... "
     if server-check-type "python" >/dev/null 2>&1 || server-check-type "php" >/dev/null 2>&1; then
         print "PASS"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         print "SKIP (no server types available)"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     fi
 
     # Test 10: Cleanup
     print -n "Test 10: Cleanup... "
     if server-cleanup >/dev/null 2>&1; then
         print "PASS"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         print "FAIL"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
 
     # Summary

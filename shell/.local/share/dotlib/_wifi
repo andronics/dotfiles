@@ -1055,7 +1055,7 @@ wifi-known-forget-all() {
         [[ -z "$ssid" ]] && continue
 
         if ! wifi-known-forget "$ssid"; then
-            ((failed++))
+            ((failed++)) || true
         fi
     done <<< "$networks"
 
@@ -1418,71 +1418,71 @@ wifi-self-test() {
     echo
 
     # Test: Check if iwctl is available
-    ((tests_run++))
+    ((tests_run++)) || true
     if common-command-exists iwctl; then
         echo "✓ iwctl command is available"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         echo "✗ iwctl command not found"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
 
     # Test: Check if iwd daemon is running
-    ((tests_run++))
+    ((tests_run++)) || true
     if _wifi-check-daemon; then
         echo "✓ iwd daemon is running"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         echo "✗ iwd daemon is not running"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
 
     # Test: List devices
-    ((tests_run++))
+    ((tests_run++)) || true
     local devices
     devices=$(wifi-device-list 2>/dev/null)
     if [[ $? -eq 0 ]]; then
         echo "✓ Can list WiFi devices"
-        ((tests_passed++))
+        ((tests_passed++)) || true
         if [[ -n "$devices" ]]; then
             echo "  Found devices: $devices"
         fi
     else
         echo "✗ Failed to list devices"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
 
     # Test: Signal conversion functions
-    ((tests_run++))
+    ((tests_run++)) || true
     local bars
     bars=$(wifi-signal-to-bars -65)
     if [[ "$bars" == "**" ]]; then
         echo "✓ Signal to bars conversion works"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         echo "✗ Signal to bars conversion failed (got: $bars)"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
 
-    ((tests_run++))
+    ((tests_run++)) || true
     local quality
     quality=$(wifi-signal-to-quality -65)
     if [[ "$quality" == "70%" ]]; then
         echo "✓ Signal to quality conversion works"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         echo "✗ Signal to quality conversion failed (got: $quality)"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
 
     # Test: Directory initialization
-    ((tests_run++))
+    ((tests_run++)) || true
     if [[ -d "$WIFI_CACHE_DIR" ]] && [[ -d "$WIFI_STATE_DIR" ]] && [[ -d "$WIFI_CONFIG_DIR" ]]; then
         echo "✓ All directories exist"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         echo "✗ Some directories missing"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
 
     echo

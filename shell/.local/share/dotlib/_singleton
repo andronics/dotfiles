@@ -950,86 +950,86 @@ singleton-self-test() {
     # Test 1: Check flock availability
     if singleton-check; then
         log-info "PASS: flock is available"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         log-error "FAIL: flock is not available"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
 
     # Test 2: Ensure lock directory
     if singleton-ensure-lock-dir; then
         log-info "PASS: Lock directory exists"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         log-error "FAIL: Failed to create lock directory"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
 
     # Test 3: Get process name
     local proc_name=$(singleton-get-process-name)
     if [[ -n "$proc_name" ]]; then
         log-info "PASS: Process name: $proc_name"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         log-error "FAIL: Failed to get process name"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
 
     # Test 4: Lock acquisition
     if singleton-lock "test-lock-$$"; then
         log-info "PASS: Lock acquired"
-        ((tests_passed++))
+        ((tests_passed++)) || true
 
         # Test 5: Check if we hold the lock
         if singleton-has-lock "test-lock-$$"; then
             log-info "PASS: Lock is held by us"
-            ((tests_passed++))
+            ((tests_passed++)) || true
         else
             log-error "FAIL: Lock not held by us"
-            ((tests_failed++))
+            ((tests_failed++)) || true
         fi
 
         # Test 6: Check if locked
         if singleton-is-locked "test-lock-$$"; then
             log-info "PASS: Lock file exists"
-            ((tests_passed++))
+            ((tests_passed++)) || true
         else
             log-error "FAIL: Lock file doesn't exist"
-            ((tests_failed++))
+            ((tests_failed++)) || true
         fi
 
         # Test 7: Get PID
         local pid=$(singleton-get-lock-pid "test-lock-$$")
         if [[ "$pid" == "$$" ]]; then
             log-info "PASS: Lock PID: $pid"
-            ((tests_passed++))
+            ((tests_passed++)) || true
         else
             log-error "FAIL: Wrong PID: $pid (expected $$)"
-            ((tests_failed++))
+            ((tests_failed++)) || true
         fi
 
         # Test 8: Release lock
         if singleton-unlock "test-lock-$$"; then
             log-info "PASS: Lock released"
-            ((tests_passed++))
+            ((tests_passed++)) || true
         else
             log-error "FAIL: Failed to release lock"
-            ((tests_failed++))
+            ((tests_failed++)) || true
         fi
     else
         log-error "FAIL: Failed to acquire lock"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
 
     # Test 9: Configuration
     singleton-set-timeout 30
     if [[ "$SINGLETON_LOCK_TIMEOUT" == "30" ]]; then
         log-info "PASS: Configuration works"
-        ((tests_passed++))
+        ((tests_passed++)) || true
         singleton-set-timeout 0  # Reset
     else
         log-error "FAIL: Configuration failed"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
 
     # Summary

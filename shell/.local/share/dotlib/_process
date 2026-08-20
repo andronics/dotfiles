@@ -466,7 +466,7 @@ process-stop() {
     local elapsed=0
     while process-exists "$pid" && (( elapsed < timeout )); do
         sleep 1
-        ((elapsed++))
+        ((elapsed++)) || true
     done
 
     # Force kill if still running
@@ -817,7 +817,7 @@ process-cleanup() {
             local name=$(echo "$info" | cut -d'|' -f1)
             process-remove-pid "$name" 2>/dev/null
             unset "_PROCESS_REGISTRY[$pid]"
-            ((cleaned++))
+            ((cleaned++)) || true
         fi
     done
 
@@ -841,10 +841,10 @@ process-self-test() {
     echo -n "Test 1: ps availability... "
     if common-command-exists "ps"; then
         echo "PASS"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         echo "FAIL"
-        ((tests_failed++))
+        ((tests_failed++)) || true
         echo "  ps not found - process functions will not work"
         echo ""
         echo "=== Self-Test Summary ==="
@@ -857,20 +857,20 @@ process-self-test() {
     echo -n "Test 2: kill availability... "
     if common-command-exists "kill"; then
         echo "PASS"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         echo "FAIL"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
 
     # Test 3: Process detection (current shell)
     echo -n "Test 3: Process detection... "
     if process-exists $$; then
         echo "PASS (current PID: $$)"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         echo "FAIL"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
 
     # Test 4: Get CPU usage
@@ -878,10 +878,10 @@ process-self-test() {
     local cpu=$(process-get-cpu $$)
     if [[ -n "$cpu" ]] && [[ "$cpu" =~ ^[0-9.]+$ ]]; then
         echo "PASS (CPU: $cpu%)"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         echo "FAIL"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
 
     # Test 5: Get memory usage
@@ -889,10 +889,10 @@ process-self-test() {
     local mem=$(process-get-memory $$)
     if [[ -n "$mem" ]] && [[ "$mem" =~ ^[0-9]+$ ]]; then
         echo "PASS (Memory: $mem KB)"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         echo "FAIL"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
 
     # Test 6: Get command
@@ -900,10 +900,10 @@ process-self-test() {
     local cmd=$(process-get-command $$)
     if [[ -n "$cmd" ]]; then
         echo "PASS (Command: $cmd)"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         echo "FAIL"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
 
     # Test 7: PID file operations
@@ -913,10 +913,10 @@ process-self-test() {
     process-remove-pid "test_process"
     if [[ "$read_pid" == "$$" ]]; then
         echo "PASS"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         echo "FAIL"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
 
     # Test 8: Process group operations
@@ -926,10 +926,10 @@ process-self-test() {
     unset "_PROCESS_GROUPS[test_group]"
     if [[ "$group_pids" == "$$" ]]; then
         echo "PASS"
-        ((tests_passed++))
+        ((tests_passed++)) || true
     else
         echo "FAIL"
-        ((tests_failed++))
+        ((tests_failed++)) || true
     fi
 
     echo ""

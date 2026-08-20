@@ -161,7 +161,7 @@ _schema-log-verbose() {
 _schema-log-error() {
     echo -e "${_SCHEMA_COLOR_ERROR}[ERROR] schema: $*${COLOR_RESET}" >&2
     SCHEMA_LAST_ERROR="$*"
-    ((_SCHEMA_TOTAL_ERRORS++))
+    ((_SCHEMA_TOTAL_ERRORS++)) || true
 }
 
 _schema-log-warning() {
@@ -306,7 +306,7 @@ schema-load-file() {
             ;;
     esac
 
-    ((_SCHEMA_TOTAL_LOADS++))
+    ((_SCHEMA_TOTAL_LOADS++)) || true
     echo "$json"
     return 0
 }
@@ -383,7 +383,7 @@ _schema-validate-structure() {
     for field in "${required_fields[@]}"; do
         if ! echo "$schema_json" | /usr/bin/jq -e ".$field" >/dev/null 2>&1; then
             _schema-log-error "Missing required field: $field"
-            ((errors++))
+            ((errors++)) || true
         fi
     done
 
@@ -391,7 +391,7 @@ _schema-validate-structure() {
     local schema_version=$(echo "$schema_json" | /usr/bin/jq -r '.schema' 2>/dev/null)
     if [[ ! " ${SCHEMA_SUPPORTED_VERSIONS} " =~ " ${schema_version} " ]]; then
         _schema-log-error "Unsupported schema version: $schema_version (supported: $SCHEMA_SUPPORTED_VERSIONS)"
-        ((errors++))
+        ((errors++)) || true
     fi
 
     # Validate metadata (optional but should have structure if present)
@@ -404,12 +404,12 @@ _schema-validate-structure() {
     # Validate actions array
     if ! echo "$schema_json" | /usr/bin/jq -e '.actions | type == "array"' >/dev/null 2>&1; then
         _schema-log-error "Field 'actions' must be an array"
-        ((errors++))
+        ((errors++)) || true
     else
         local action_count=$(echo "$schema_json" | /usr/bin/jq -r '.actions | length' 2>/dev/null)
         if [[ $action_count -eq 0 ]]; then
             _schema-log-error "Schema must have at least one action"
-            ((errors++))
+            ((errors++)) || true
         fi
     fi
 
@@ -428,7 +428,7 @@ _schema-validate-action() {
     for field in "${required_fields[@]}"; do
         if ! echo "$action_json" | /usr/bin/jq -e ".$field" >/dev/null 2>&1; then
             _schema-log-error "Action #$action_index: Missing required field '$field'"
-            ((errors++))
+            ((errors++)) || true
         fi
     done
 
@@ -436,7 +436,7 @@ _schema-validate-action() {
     if ! echo "$action_json" | /usr/bin/jq -e '.resource' >/dev/null 2>&1 && \
        ! echo "$action_json" | /usr/bin/jq -e '.selector' >/dev/null 2>&1; then
         _schema-log-error "Action #$action_index: Must have either 'resource' or 'selector' field"
-        ((errors++))
+        ((errors++)) || true
     fi
 
     # Validate ID format (kebab-case recommended)
@@ -449,7 +449,7 @@ _schema-validate-action() {
     local action_type=$(echo "$action_json" | /usr/bin/jq -r '.type' 2>/dev/null)
     if [[ -n "$action_type" ]] && [[ ! "$action_type" =~ ^[a-z0-9_-]+\.[a-z0-9_-]+$ ]]; then
         _schema-log-error "Action #$action_index: Type must be in format 'plugin.resource': $action_type"
-        ((errors++))
+        ((errors++)) || true
     fi
 
     # Validate on_error enum
@@ -457,7 +457,7 @@ _schema-validate-action() {
         local on_error=$(echo "$action_json" | /usr/bin/jq -r '.on_error' 2>/dev/null)
         if [[ ! "$on_error" =~ ^(fail|warn|ignore)$ ]]; then
             _schema-log-error "Action #$action_index: on_error must be 'fail', 'warn', or 'ignore'"
-            ((errors++))
+            ((errors++)) || true
         fi
     fi
 
@@ -490,7 +490,7 @@ _schema-validate-dependencies() {
                 if [[ ! " ${action_ids[@]} " =~ " ${dep} " ]]; then
                     local action_id=$(echo "$schema_json" | /usr/bin/jq -r ".actions[$i].id" 2>/dev/null)
                     _schema-log-error "Action '$action_id': Unknown dependency '$dep'"
-                    ((errors++))
+                    ((errors++)) || true
                 fi
             done <<< "$deps"
         fi
@@ -508,7 +508,7 @@ schema-validate() {
 
     common-validate-required "$file" "file" || return 2
 
-    ((_SCHEMA_TOTAL_VALIDATIONS++))
+    ((_SCHEMA_TOTAL_VALIDATIONS++)) || true
 
     _schema-log-debug "Validating schema: $file"
 

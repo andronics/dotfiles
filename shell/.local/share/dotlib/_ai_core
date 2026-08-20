@@ -548,7 +548,7 @@ ai-load-definition() {
 
     # Cache the parsed definition
     _AI_DEFINITION_CACHE[$cache_key]="$json"
-    ((_AI_STATS_DEFINITIONS_LOADED++))
+    ((_AI_STATS_DEFINITIONS_LOADED++)) || true
 
     # Emit event
     local def_name=$(echo -E "$json" | /usr/bin/jq -r '.name // "unknown"' 2>/dev/null)
@@ -1315,10 +1315,10 @@ _ai-extract-block() {
 
         # Check if it's opening or closing our block type
         if [[ "$tag_content" == "#$block_type"* ]]; then
-            ((depth++))
+            ((depth++)) || true
             content+="$tag"
         elif [[ "$tag_content" == "/$block_type" ]]; then
-            ((depth--))
+            ((depth--)) || true
             if [[ $depth -eq 0 ]]; then
                 # Found our closing tag
                 echo "${content}|||$((start_pos + pos + tag_end))"
@@ -1677,14 +1677,14 @@ ai-template-validate() {
             # Closing tag
             if [[ ${#stack[@]} -eq 0 ]]; then
                 _ai-log error "Unmatched closing tag: {{/$tag_name}}"
-                ((errors++))
+                ((errors++)) || true
             else
                 local expected="${stack[-1]}"
                 unset 'stack[-1]'
 
                 if [[ "$expected" != "$tag_name" ]]; then
                     _ai-log error "Mismatched tags: expected {{/$expected}}, got {{/$tag_name}}"
-                    ((errors++))
+                    ((errors++)) || true
                 fi
             fi
         fi
@@ -1697,7 +1697,7 @@ ai-template-validate() {
     if [[ ${#stack[@]} -gt 0 ]]; then
         for tag in "${stack[@]}"; do
             _ai-log error "Unclosed tag: {{#$tag}}"
-            ((errors++))
+            ((errors++)) || true
         done
     fi
 
@@ -2036,7 +2036,7 @@ ai-generate-all() {
     # Generate each definition
     while IFS= read -r def_file; do
         [[ -z "$def_file" ]] && continue
-        ((total++))
+        ((total++)) || true
 
         local name
         name=$(basename "$def_file" .yml)
@@ -2057,16 +2057,16 @@ ai-generate-all() {
                 [[ ! -f "$template_file" ]] && template_file="${AI_TEMPLATE_DIR}/common/${type}.tmpl"
 
                 if ai-should-regenerate "$tool" "$type" "$name" "$def_file" "$template_file"; then
-                    ((generated++))
+                    ((generated++)) || true
                 else
-                    ((cached++))
+                    ((cached++)) || true
                 fi
             else
-                ((generated++))
+                ((generated++)) || true
             fi
         else
             _ai-log error "Failed to generate: $name"
-            ((failed++))
+            ((failed++)) || true
         fi
     done <<< "$definitions"
 

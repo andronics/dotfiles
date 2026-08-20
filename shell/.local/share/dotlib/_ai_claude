@@ -919,7 +919,7 @@ claude-ensure-all() {
 
     while IFS= read -r def_file; do
         [[ -z "$def_file" ]] && continue
-        ((total++))
+        ((total++)) || true
 
         local name
         name=$(basename "$def_file" .yml)
@@ -932,7 +932,7 @@ claude-ensure-all() {
 
         if [[ -z "$type" ]]; then
             _claude-log warn "Skipping $name: no type field"
-            ((failed++))
+            ((failed++)) || true
             continue
         fi
 
@@ -942,10 +942,10 @@ claude-ensure-all() {
         [[ "$force" == "true" ]] && force_flag="--force"
 
         if claude-ensure-artifact "$type" "$name" $force_flag; then
-            ((installed++))
+            ((installed++)) || true
         else
             _claude-log error "Failed to ensure $type: $name"
-            ((failed++))
+            ((failed++)) || true
         fi
     done <<< "$definitions"
 
