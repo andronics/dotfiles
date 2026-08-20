@@ -208,7 +208,7 @@ patterns-validate() {
     local pattern="${1:?Pattern required}"
 
     # Allow alphanumeric, underscore, hyphen, period, asterisk, comma, slash, tilde
-    if [[ "$pattern" =~ [^a-zA-Z0-9_*,./-~] ]]; then
+    if [[ "$pattern" =~ [^a-zA-Z0-9_*,./~-] ]]; then
         log-error "Invalid pattern: $pattern"
         log-error "Allowed characters: a-z A-Z 0-9 _ * , . / - ~"
         return $PATTERNS_ERROR_INVALID_PATTERN

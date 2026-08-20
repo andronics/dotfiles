@@ -60,6 +60,7 @@ source "${DOTLIB}/_bspwm" 2>/dev/null || true
 source "${DOTLIB}/_rofi"       || { echo "[ERROR] _tour requires _rofi" >&2; return 1; }
 source "${DOTLIB}/_acpi"       || { echo "[ERROR] _tour requires _acpi" >&2; return 1; }
 source "${DOTLIB}/_network"    || { echo "[ERROR] _tour requires _network" >&2; return 1; }
+source "${DOTLIB}/_patterns"   || { echo "[ERROR] _tour requires _patterns" >&2; return 1; }
 source "${DOTLIB}/_notify"     || { echo "[ERROR] _tour requires _notify" >&2; return 1; }
 source "${DOTLIB}/_test"       || { echo "[ERROR] _tour requires _test" >&2; return 1; }
 
@@ -80,6 +81,7 @@ typeset -gA _TOUR_DESCRIPTIONS=(
     [rofi]="Tour _rofi: config, theme discovery, and formatting (no menus popped)"
     [acpi]="Tour _acpi: live battery/AC/thermal readout"
     [network]="Tour _network: connectivity, interfaces, and routing"
+    [patterns]="Tour _patterns: glob matching and bulk operations"
     [notify]="Tour _notify: a real desktop notification"
     [framework]="Tour _dispatcher's own help/commands/completion/dry-run"
     [run]="Run the full tour end to end (--fast skips pacing)"
@@ -637,6 +639,47 @@ tour-network() {
     fi
 }
 
+tour-patterns() {
+    ui-header "_patterns — glob matching & bulk operations"
+
+    local -a items=(audio-play audio-pause audio-stop video-play video-pause bluetooth-connect network-status)
+    ui-info "sample items: ${items[*]}"
+
+    echo ""
+    ui-info "patterns-match 'audio-*'..."
+    ui-success "$(patterns-match "audio-*" "${items[@]}")"
+
+    echo ""
+    ui-info "patterns-info for '*-play'..."
+    patterns-info "*-play" "${items[@]}"
+
+    echo ""
+    ui-info "pattern type detection (patterns-get-type)..."
+    local p
+    for p in "*" "a,b,c" "config.json" "audio-*"; do
+        printf "  %-15s -> %s\n" "$p" "$(patterns-get-type "$p")"
+    done
+
+    echo ""
+    ui-info "patterns-filter (inverse match) 'audio-*,video-*'..."
+    ui-success "$(patterns-filter "audio-*,video-*" "${items[@]}")"
+
+    echo ""
+    ui-info "patterns-validate..."
+    if patterns-validate "audio-*" >/dev/null 2>&1; then
+        ui-success "'audio-*' is a valid pattern"
+    fi
+    if patterns-validate 'bad$(cmd)' >/dev/null 2>&1; then
+        ui-error "'bad\$(cmd)' should have been rejected"
+    else
+        ui-warning "'bad\$(cmd)' rejected (disallowed characters)"
+    fi
+
+    echo ""
+    ui-info "bulk operation (patterns-foreach 'audio-*' -- echo)..."
+    patterns-foreach "audio-*" "${items[@]}" -- echo "matched:"
+}
+
 tour-notify() {
     ui-header "_notify — desktop notifications"
 
@@ -668,7 +711,7 @@ tour-run() {
     local fast=false
     [[ "$1" == "--fast" ]] && fast=true
 
-    local -a sections=(intro ui format string validate events async rules crypto schema actions plugins bspwm rofi acpi network notify framework)
+    local -a sections=(intro ui format string validate events async rules crypto schema actions plugins bspwm rofi acpi network patterns notify framework)
     local section
 
     for section in "${sections[@]}"; do
@@ -705,6 +748,7 @@ _tour-selftest-cases() {
     test-it "rofi section runs"     _tour-selftest-rofi
     test-it "acpi section runs"     _tour-selftest-acpi
     test-it "network section runs"  _tour-selftest-network
+    test-it "patterns section runs" _tour-selftest-patterns
 }
 
 _tour-selftest-intro()    { test-assert-exit-code 0 _tour-quiet tour-intro; }
@@ -723,6 +767,7 @@ _tour-selftest-bspwm()    { test-assert-exit-code 0 _tour-quiet tour-bspwm; }
 _tour-selftest-rofi()     { test-assert-exit-code 0 _tour-quiet tour-rofi; }
 _tour-selftest-acpi()     { test-assert-exit-code 0 _tour-quiet tour-acpi; }
 _tour-selftest-network()  { test-assert-exit-code 0 _tour-quiet tour-network; }
+_tour-selftest-patterns() { test-assert-exit-code 0 _tour-quiet tour-patterns; }
 
 tour-self-test() {
     test-describe "dotlib tour sections" _tour-selftest-cases
