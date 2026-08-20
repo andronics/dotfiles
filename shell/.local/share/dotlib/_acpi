@@ -303,7 +303,7 @@ _acpi-handle-battery-event() {
             # Check thresholds
             if (( capacity <= ACPI_BATTERY_CRITICAL_THRESHOLD )); then
                 _acpi-emit "$ACPI_EVENT_CRITICAL_BATTERY" "capacity=$capacity"
-                log-warn "Critical battery level" "capacity=${capacity}%"
+                log-warning "Critical battery level" "capacity=${capacity}%"
             elif (( capacity <= ACPI_BATTERY_LOW_THRESHOLD )); then
                 _acpi-emit "$ACPI_EVENT_LOW_BATTERY" "capacity=$capacity"
                 log-info "Low battery level" "capacity=${capacity}%"
@@ -379,7 +379,7 @@ _acpi-handle-thermal-event() {
             log-error "Critical temperature" "temp=$temp" "zone=$id"
         elif (( temp >= ACPI_THERMAL_WARNING_THRESHOLD )); then
             _acpi-emit "$ACPI_EVENT_THERMAL_WARNING" "temp=$temp" "zone=$id"
-            log-warn "High temperature" "temp=$temp" "zone=$id"
+            log-warning "High temperature" "temp=$temp" "zone=$id"
         fi
     fi
 }
@@ -541,7 +541,7 @@ acpi-listen-start() {
     [[ "$_ACPI_INITIALIZED" == "false" ]] && acpi-init
 
     if [[ "$ACPI_LISTENER_ACTIVE" == "true" ]]; then
-        log-warn "ACPI listener already running" "pid=$ACPI_LISTENER_PID"
+        log-warning "ACPI listener already running" "pid=$ACPI_LISTENER_PID"
         return 1
     fi
 
@@ -626,7 +626,7 @@ acpi-listen() {
 #
 acpi-listen-stop() {
     if [[ "$ACPI_LISTENER_ACTIVE" != "true" ]]; then
-        log-warn "ACPI listener not running"
+        log-warning "ACPI listener not running"
         return 1
     fi
 
@@ -730,7 +730,7 @@ acpi-off() {
         log-debug "Unregistered callback" "pattern=$pattern"
         return 0
     else
-        log-warn "No callback registered" "pattern=$pattern"
+        log-warning "No callback registered" "pattern=$pattern"
         return 1
     fi
 }
@@ -859,7 +859,7 @@ acpi-battery-list() {
     fi
 
     local -a batteries=()
-    for bat in "$power_supply_path"/BAT*; do
+    for bat in "$power_supply_path"/BAT*(N); do
         if [[ -d "$bat" ]]; then
             batteries+=($(basename "$bat"))
         fi
@@ -1222,7 +1222,7 @@ acpi-thermal-list() {
     fi
 
     local -a zones=()
-    for zone in "$thermal_path"/thermal_zone*; do
+    for zone in "$thermal_path"/thermal_zone*(N); do
         if [[ -d "$zone" ]]; then
             zones+=($(basename "$zone"))
         fi
@@ -1233,8 +1233,8 @@ acpi-thermal-list() {
         return 1
     fi
 
+    local temp_str
     for zone in "${zones[@]}"; do
-        local temp_str
         temp_str=$(acpi-thermal-temp "$zone" 2>/dev/null || echo "N/A")
         echo "- $zone: $temp_str"
     done
@@ -1318,10 +1318,13 @@ acpi-power-status() {
     echo ""
 
     # Batteries
-    local -a batteries=(${(f)"$(acpi-battery-list 2>/dev/null)"})
-    if [[ ${#batteries[@]} -gt 0 ]]; then
+    local battery_list_output battery_list_exit=0
+    battery_list_output="$(acpi-battery-list 2>/dev/null)" || battery_list_exit=$?
+    if [[ $battery_list_exit -eq 0 ]]; then
+        local -a batteries=(${(f)battery_list_output})
+        local bat_line bat
         for bat_line in "${batteries[@]}"; do
-            local bat=$(echo "$bat_line" | sed 's/^- //')
+            bat=$(echo "$bat_line" | sed 's/^- //')
             acpi-battery-status "$bat" 2>/dev/null || echo "Battery $bat: Unknown"
             echo ""
         done
@@ -1668,7 +1671,7 @@ acpi-self-test() {
         log-info "  $ACPI_SOCKET: Found"
         ((tests_passed++)) || true
     else
-        log-warn "  $ACPI_SOCKET: Not found (is acpid running?)"
+        log-warning "  $ACPI_SOCKET: Not found (is acpid running?)"
         ((tests_failed++)) || true
     fi
 

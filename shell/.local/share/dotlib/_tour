@@ -10,20 +10,27 @@
 # wrapper (see the dotlib README's "Module status" note). This module
 # runs real demos through them -- _ui, _format, _string, _validation,
 # _events, _async, _rules, _crypto, _schema, _actions, _plugins,
-# _bspwm, _rofi, _notify, _test -- using each module's actual public
-# functions. Business logic stays in those modules; this file only
-# supplies narration, sample data, and pacing.
+# _bspwm, _rofi, _acpi, _network, _notify, _test -- using each
+# module's actual public functions. Business logic stays in those
+# modules; this file only supplies narration, sample data, and
+# pacing.
 #
 # tour-rofi deliberately never calls _rofi's interactive menu
 # functions (rofi-select, rofi-confirm, rofi-input, ...) -- they
 # block on real user input, which would hang `tour run` and
 # `tour self-test`. It sticks to config/query/format helpers.
 #
+# tour-network only touches the real network for a single bounded
+# ping (network-is-online, 1 packet/2s timeout) and, only if that
+# succeeds, a single DNS lookup -- never network-get-public-ip or
+# network-download, which hit external services with longer timeouts
+# and would make the tour flaky offline or in a sandbox.
+#
 # Dependencies:
 #   Required:
 #     - _common, _ui, _format, _string, _validation, _events, _async,
-#       _rules, _crypto, _schema, _actions, _plugins, _rofi, _notify,
-#       _test
+#       _rules, _crypto, _schema, _actions, _plugins, _rofi, _acpi,
+#       _network, _notify, _test
 #   Optional:
 #     - _log
 #     - _bspwm (requires the bspc binary; tour-bspwm degrades
@@ -51,6 +58,8 @@ source "${DOTLIB}/_plugins"    || { echo "[ERROR] _tour requires _plugins" >&2; 
 # so this stays optional and tour-bspwm checks availability itself.
 source "${DOTLIB}/_bspwm" 2>/dev/null || true
 source "${DOTLIB}/_rofi"       || { echo "[ERROR] _tour requires _rofi" >&2; return 1; }
+source "${DOTLIB}/_acpi"       || { echo "[ERROR] _tour requires _acpi" >&2; return 1; }
+source "${DOTLIB}/_network"    || { echo "[ERROR] _tour requires _network" >&2; return 1; }
 source "${DOTLIB}/_notify"     || { echo "[ERROR] _tour requires _notify" >&2; return 1; }
 source "${DOTLIB}/_test"       || { echo "[ERROR] _tour requires _test" >&2; return 1; }
 
@@ -69,6 +78,8 @@ typeset -gA _TOUR_DESCRIPTIONS=(
     [plugins]="Tour _plugins: discovery, validation, and dependency-ordered init"
     [bspwm]="Tour _bspwm: live window manager introspection (read-only, skips if unavailable)"
     [rofi]="Tour _rofi: config, theme discovery, and formatting (no menus popped)"
+    [acpi]="Tour _acpi: live battery/AC/thermal readout"
+    [network]="Tour _network: connectivity, interfaces, and routing"
     [notify]="Tour _notify: a real desktop notification"
     [framework]="Tour _dispatcher's own help/commands/completion/dry-run"
     [run]="Run the full tour end to end (--fast skips pacing)"
@@ -566,6 +577,66 @@ tour-rofi() {
     ui-info "try one yourself: rofi-select 'pick one' <<< \$'a\\\\nb\\\\nc'"
 }
 
+tour-acpi() {
+    ui-header "_acpi — live battery / AC / thermal readout"
+
+    ui-info "adapter and battery status..."
+    acpi-power-status
+
+    echo ""
+    ui-info "derived power profile (acpi-power-profile: performance/balanced/powersave)..."
+    ui-list "profile: $(acpi-power-profile)"
+}
+
+tour-network() {
+    ui-header "_network — connectivity, interfaces & routing"
+
+    ui-info "checking dependencies (network-check-dependencies)..."
+    if network-check-dependencies; then
+        ui-success "ping + ip/ifconfig available"
+    else
+        ui-error "missing required network tools"
+    fi
+
+    echo ""
+    ui-info "connectivity check (network-is-online: 1 ping, 2s timeout)..."
+    local online=false
+    if network-is-online; then
+        online=true
+        ui-success "online"
+    else
+        ui-warning "offline (or ICMP blocked)"
+    fi
+
+    echo ""
+    ui-info "local routing..."
+    ui-list \
+        "local IP: $(network-get-local-ip)" \
+        "gateway: $(network-get-gateway)"
+
+    echo ""
+    ui-info "interfaces (network-list-interfaces + per-interface status/mac)..."
+    local -a ifaces
+    ifaces=("${(@f)$(network-list-interfaces)}")
+    ui-table-header "INTERFACE" "STATUS" "MAC" ""
+    ui-table-separator 70
+    local iface shown=0
+    for iface in "${ifaces[@]}"; do
+        (( shown >= 5 )) && break
+        printf "%-25s %-20s %s\n" "$iface" "$(network-get-interface-status "$iface" 2>/dev/null)" "$(network-get-interface-mac "$iface" 2>/dev/null)"
+        ((shown++)) || true
+    done
+    (( ${#ifaces[@]} > 5 )) && ui-info "... and $(( ${#ifaces[@]} - 5 )) more (this host runs a lot of docker veth/bridge interfaces)"
+
+    echo ""
+    if $online; then
+        ui-info "DNS resolution (network-resolve-host, only attempted since we're online)..."
+        ui-list "example.com -> $(network-resolve-host example.com 2>/dev/null || echo 'unresolved')"
+    else
+        ui-info "skipping DNS resolution demo (offline)"
+    fi
+}
+
 tour-notify() {
     ui-header "_notify — desktop notifications"
 
@@ -597,7 +668,7 @@ tour-run() {
     local fast=false
     [[ "$1" == "--fast" ]] && fast=true
 
-    local -a sections=(intro ui format string validate events async rules crypto schema actions plugins bspwm rofi notify framework)
+    local -a sections=(intro ui format string validate events async rules crypto schema actions plugins bspwm rofi acpi network notify framework)
     local section
 
     for section in "${sections[@]}"; do
@@ -632,6 +703,8 @@ _tour-selftest-cases() {
     test-it "plugins section runs"  _tour-selftest-plugins
     test-it "bspwm section runs"    _tour-selftest-bspwm
     test-it "rofi section runs"     _tour-selftest-rofi
+    test-it "acpi section runs"     _tour-selftest-acpi
+    test-it "network section runs"  _tour-selftest-network
 }
 
 _tour-selftest-intro()    { test-assert-exit-code 0 _tour-quiet tour-intro; }
@@ -648,6 +721,8 @@ _tour-selftest-actions()  { test-assert-exit-code 0 _tour-quiet tour-actions; }
 _tour-selftest-plugins()  { test-assert-exit-code 0 _tour-quiet tour-plugins; }
 _tour-selftest-bspwm()    { test-assert-exit-code 0 _tour-quiet tour-bspwm; }
 _tour-selftest-rofi()     { test-assert-exit-code 0 _tour-quiet tour-rofi; }
+_tour-selftest-acpi()     { test-assert-exit-code 0 _tour-quiet tour-acpi; }
+_tour-selftest-network()  { test-assert-exit-code 0 _tour-quiet tour-network; }
 
 tour-self-test() {
     test-describe "dotlib tour sections" _tour-selftest-cases

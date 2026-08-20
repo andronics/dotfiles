@@ -233,7 +233,7 @@ network-get-interface-status() {
     local interface="${1:?Interface required}"
 
     if command -v ip &>/dev/null; then
-        ip link show "$interface" 2>/dev/null | awk '/state/ {print $9}'
+        ip link show "$interface" 2>/dev/null | awk '{for (i=1; i<=NF; i++) if ($i == "state") print $(i+1)}'
     elif command -v ifconfig &>/dev/null; then
         if ifconfig "$interface" 2>/dev/null | grep -q "UP"; then
             echo "UP"
