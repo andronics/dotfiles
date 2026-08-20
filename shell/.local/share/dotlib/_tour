@@ -10,27 +10,37 @@
 # wrapper (see the dotlib README's "Module status" note). This module
 # runs real demos through them -- _ui, _format, _string, _validation,
 # _events, _async, _rules, _crypto, _schema, _actions, _plugins,
-# _bspwm, _rofi, _acpi, _network, _notify, _test -- using each
+# _bspwm, _rofi, _acpi, _network, _patterns, _args, _http, _server,
+# _wifi, _docker, _xidlehook, _vpn, _notify, _test -- using each
 # module's actual public functions. Business logic stays in those
 # modules; this file only supplies narration, sample data, and
 # pacing.
 #
-# tour-rofi deliberately never calls _rofi's interactive menu
-# functions (rofi-select, rofi-confirm, rofi-input, ...) -- they
-# block on real user input, which would hang `tour run` and
-# `tour self-test`. It sticks to config/query/format helpers.
-#
-# tour-network only touches the real network for a single bounded
-# ping (network-is-online, 1 packet/2s timeout) and, only if that
-# succeeds, a single DNS lookup -- never network-get-public-ip or
-# network-download, which hit external services with longer timeouts
-# and would make the tour flaky offline or in a sandbox.
+# House rule for every section: never do anything that would surprise
+# someone running `tour run` unattended. Concretely:
+#   - No interactive prompts (tour-rofi skips rofi-select/-confirm/
+#     -input/-menu; try them yourself, see that section's output).
+#   - No real network calls beyond one bounded ping + DNS lookup in
+#     tour-network (tour-http stays fully offline after an earlier
+#     draft that opened a real loopback listener got killed
+#     unpredictably by this sandbox's network policy).
+#   - No mutation of live system/daemon state: tour-bspwm, tour-rofi,
+#     tour-server, tour-wifi, tour-docker, tour-xidlehook, and
+#     tour-vpn are all read-only against real subsystems (window
+#     manager, rofi config, port probes, wifi/iwd, docker, idle
+#     timers, an actual VPN connection) -- every mutating function in
+#     those modules (connect, start, kill, forget, prune, trigger,
+#     login, ...) is deliberately never called here.
+#   - Graceful skip, not failure, when a subsystem isn't present
+#     (bspwm/wifi/docker/xidlehook/vpn all check availability first
+#     and return 0 with a warning rather than erroring).
 #
 # Dependencies:
 #   Required:
 #     - _common, _ui, _format, _string, _validation, _events, _async,
 #       _rules, _crypto, _schema, _actions, _plugins, _rofi, _acpi,
-#       _network, _notify, _test
+#       _network, _patterns, _args, _http, _server, _wifi, _docker,
+#       _xidlehook, _vpn, _notify, _test
 #   Optional:
 #     - _log
 #     - _bspwm (requires the bspc binary; tour-bspwm degrades
