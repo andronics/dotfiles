@@ -3,6 +3,61 @@ set -e
 
 source "${DOTLIB}/_log" || { echo "missing _log" >&2; exit 1; }
 
+# ------------------------------
+# Rules
+# ------------------------------
+#
+# Each rule is a self-contained match+action: `return 1` means "not mine,
+# try the next rule" - anything else means it handled the window (echo
+# output, run a side effect, or `exit` for a hard stop). Criteria and
+# actions are free to differ arbitrarily between rules; nothing here forces
+# a common shape. Args: $1=window $2=class $3=instance $4=tags $5=role.
+# Order in _BSPWM_EXTERNAL_RULES matters - it's evaluated top to bottom.
+
+# TODO: identify which Chrome extension this is and why its pop-up floats
+# instead of being closed by _bsp_rule_browser_popup_close below.
+BSP_EXEMPT_POPUP_INSTANCE="crx_naepdomgkenhinolocfifgehidddafch"
+
+_bsp_rule_browser_popup_exempt() {
+	local _window=$1 _class=$2 _instance=$3 _tags=$4 _role=$5
+	[[ "$_role" == "pop-up" && "$_instance" == "$BSP_EXEMPT_POPUP_INSTANCE" ]] || return 1
+	echo "state=floating"
+	exit 0
+}
+
+# Any other pop-up gets closed outright.
+_bsp_rule_browser_popup_close() {
+	local _window=$1 _class=$2 _instance=$3 _tags=$4 _role=$5
+	[[ "$_role" == "pop-up" ]] || return 1
+	log-info "pop-up(): closing window: ${_window}"
+	wmctrl -ic "${_window}"
+}
+
+# terminal-draw/terminal-drop: class contract with desktop/.local/bin/terminal,
+# which spawns alacritty with --class "terminal-draw,<rect>" / "terminal-drop,<session>".
+_bsp_rule_terminal_draw() {
+	local _window=$1 _class=$2 _instance=$3 _tags=$4 _role=$5
+	[[ "$_class" == "terminal-draw" ]] || return 1
+	eval "$_tags"
+	[[ -n "$state" ]] || echo "state=floating rectangle=${_instance}"
+}
+
+_bsp_rule_terminal_drop() {
+	local _window=$1 _class=$2 _instance=$3 _tags=$4 _role=$5
+	[[ "$_class" == "terminal-drop" ]] || return 1
+	eval "$_tags"
+	[[ -n "$state" ]] || echo "state=floating rectangle=5120x1152+0+0 sticky=on follow=on"
+}
+
+typeset -ga _BSPWM_EXTERNAL_RULES=(
+	_bsp_rule_browser_popup_exempt
+	_bsp_rule_browser_popup_close
+	_bsp_rule_terminal_draw
+	_bsp_rule_terminal_drop
+)
+
+# ------------------------------
+
 _bsp_external_rules() {
 
 	local _window=$1
@@ -12,30 +67,16 @@ _bsp_external_rules() {
 
 	local _role=$(_bsp_wininfo "$_window" "WM_WINDOW_ROLE")
 
-	log-debug "role(): window: ${_window} | role: ${_role}"
-	log-debug "class(): window: ${_window} | class: ${_class}"
+	log-debug "window=${_window} class=${_class} instance=${_instance} role=${_role}"
 
-	# Browser Pass
-	[[ "${_role}" == "pop-up" ]]  && [[ "${_instance}" == "crx_naepdomgkenhinolocfifgehidddafch" ]] && {
-		[ "$state" ] || echo "state=floating"
-		exit
-	}
-
-	[[ "${_role}" == "pop-up" ]] && {
-		log-info "pop-up(): closing window: ${_window}"
-		wmctrl -ic ${_window}
-	}
-
-	case "${_class}" in
-		terminal-draw)
-			eval "${_tags}"
-			[ "$state" ] || echo "state=floating rectangle=${_instance}"
-			;;
-		terminal-drop)
-			eval "${_tags}"
-			[ "$state" ] || echo "state=floating rectangle=5120x1152+0+0 sticky=on follow=on" 
-			;;
-	esac
+	# `|| true`: a non-matching rule's `return 1` is expected on every
+	# rule but the one that actually applies. This script runs under
+	# set -e - without the guard, the loop would die on the very first
+	# non-matching rule instead of trying the rest.
+	local _rule
+	for _rule in "${_BSPWM_EXTERNAL_RULES[@]}"; do
+		"$_rule" "$_window" "$_class" "$_instance" "$_tags" "$_role" || true
+	done
 
 }
 
