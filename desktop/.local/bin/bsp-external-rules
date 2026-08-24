@@ -1,32 +1,19 @@
 #!/usr/bin/env zsh
+set -e
 
-name=$(basename $0)
-
-# ------------------------------
-
-source $(which _log)
-
-# ------------------------------
-
-LOG_LEVEL=4
-LOG_MODE="daemon"
-
-# ------------------------------
+source "${DOTLIB}/_log" || { echo "missing _log" >&2; exit 1; }
 
 _bsp_external_rules() {
 
-	_window=$1
-	_class=$2
-	_instance=$3
-	_tags=$4
+	local _window=$1
+	local _class=$2
+	local _instance=$3
+	local _tags=$4
 
-	_random_id=$(tr -dc a-z0-9 </dev/urandom | head -c 10)
-	_role=$(_bsp_wininfo "$_window" "WM_WINDOW_ROLE")
-	_title=$(xtitle "${_window}")
+	local _role=$(_bsp_wininfo "$_window" "WM_WINDOW_ROLE")
 
-
-	log-debug "role(): window: %s  | role: %s" "${_window}" "${_role}"
-	log-debug "class(): window: %s  | class: %s" "${_window}" "${_class}"
+	log-debug "role(): window: ${_window} | role: ${_role}"
+	log-debug "class(): window: ${_window} | class: ${_class}"
 
 	# Browser Pass
 	[[ "${_role}" == "pop-up" ]]  && [[ "${_instance}" == "crx_naepdomgkenhinolocfifgehidddafch" ]] && {
@@ -38,12 +25,6 @@ _bsp_external_rules() {
 		log-info "pop-up(): closing window: ${_window}"
 		wmctrl -ic ${_window}
 	}
-
-	log-debug "class(): window: %s | class: %s" \
-		"${_window}" \
-		"${_class}"
-
-	
 
 	case "${_class}" in
 		terminal-draw)
@@ -59,8 +40,11 @@ _bsp_external_rules() {
 }
 
 _bsp_wininfo() {
-    _window=$1
-    _prop=$2
+
+    local _window=$1
+    local _prop=$2
+    local value
+
     value=$(xprop -id "$_window" "$_prop" 2>/dev/null)
     if [[ $? -ne 0 || -z "$value" || "$value" == *"not found"* ]]; then
         echo "n/a"
