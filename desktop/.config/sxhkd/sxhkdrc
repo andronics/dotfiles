@@ -117,15 +117,15 @@ XF86AudioMute
 
 # next track
 XF86AudioNext
-  player action-next
+  player next
 
 # play / pause track
 XF86AudioPlay
-  player action-play-pause
+  player play-pause
 
 # previous track
 XF86AudioPrev
-  player action-previous
+  player previous
 
 # raise audio
 XF86AudioRaiseVolume

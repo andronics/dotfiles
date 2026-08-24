@@ -33,23 +33,6 @@ dispatcher-register-alias "icon"             "get-instance-icon"
 dispatcher-register-alias "instance-icon"    "get-instance-icon"
 dispatcher-register-alias "format"           "format-output"
 
-# Backward-compatibility aliases (actively used by polybar/sxhkd, not legacy cruft)
-dispatcher-register-alias "action-loop"        "loop"
-dispatcher-register-alias "action-next"        "next"
-dispatcher-register-alias "action-play-pause"  "play-pause"
-dispatcher-register-alias "action-previous"    "previous"
-dispatcher-register-alias "action-seek"        "seek"
-dispatcher-register-alias "action-shuffle"     "shuffle"
-dispatcher-register-alias "action-stop"        "stop"
-dispatcher-register-alias "action-pause"       "pause"
-dispatcher-register-alias "action-play"        "play"
-dispatcher-register-alias "metadata-artist"    "get-artist"
-dispatcher-register-alias "metadata-artwork"   "get-artwork"
-dispatcher-register-alias "metadata-length"    "get-duration"
-dispatcher-register-alias "metadata-title"     "get-title"
-dispatcher-register-alias "status-icon"        "get-state-icon"
-dispatcher-register-alias "status-name"        "get-status"
-
 player-init || { echo "ERROR: Failed to initialize player library" >&2; exit 1; }
 trap player-cleanup EXIT
 
