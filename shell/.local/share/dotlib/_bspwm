@@ -134,6 +134,8 @@ declare -r BSPWM_EVENT_NODE_STATE="bspwm.node.state"
 declare -r BSPWM_EVENT_DESKTOP_FOCUS="bspwm.desktop.focus"
 declare -r BSPWM_EVENT_DESKTOP_LAYOUT="bspwm.desktop.layout"
 declare -r BSPWM_EVENT_MONITOR_FOCUS="bspwm.monitor.focus"
+declare -r BSPWM_EVENT_BALANCE_TICK="bspwm.balance.tick"
+declare -r BSPWM_EVENT_DESKTOPS_TICK="bspwm.desktops.tick"
 
 # ------------------------------
 # Internal State
@@ -1285,6 +1287,8 @@ _bspwm-balance-tree() {
         log-debug "balancing node: $_node"
         _bspwm-exec node "$_node" -B || true
     done
+
+    _bspwm-emit "$BSPWM_EVENT_BALANCE_TICK"
 }
 
 # Auto-manage desktop count on a monitor: always keep exactly one spare
@@ -1332,6 +1336,8 @@ _bspwm-desktops-manage() {
 
     [[ "$_occupied" -eq "$_total" ]] && _bspwm-desktops-auto-add "$_monitor"
     [[ "$_occupied" -lt $((_total - 1)) ]] && _bspwm-desktops-auto-remove "$_monitor"
+
+    _bspwm-emit "$BSPWM_EVENT_DESKTOPS_TICK" "monitor=$_monitor"
 }
 
 _bspwm-desktops-total() {
