@@ -526,8 +526,14 @@ dispatcher-execute-command() {
         if dispatcher-is-dry-run; then
             log-info "[DRY RUN] Would call: $fn $@"
         else
-            "$fn" "$@"
-            exit_code=$?
+            # `&& exit_code=0 || exit_code=$?`, not a bare call + `exit_code=$?`:
+            # under the caller's `set -e`, a failing "$fn" as a bare statement
+            # trips errexit right there, before exit_code is even assigned -
+            # skipping _dispatcher-run-after-hooks and the completion event
+            # below on every subcommand failure, for every --route=function
+            # wrapper. This form's last command is always the assignment, so
+            # its own exit status is always 0 regardless of "$fn"'s outcome.
+            "$fn" "$@" && exit_code=0 || exit_code=$?
         fi
 
         _dispatcher-run-after-hooks "$command" "$exit_code" "$@"

@@ -1,0 +1,12 @@
+#!/usr/bin/env zsh
+set -e
+
+source "${DOTLIB}/_dispatcher" || { echo "missing _dispatcher" >&2; exit 1; }
+source "${DOTLIB}/_bspwm"      || { echo "missing _bspwm"      >&2; exit 1; }
+
+dispatcher-init "bsp" \
+    --route=function \
+    --prefix=bspwm \
+    --description="BSPWM window manager utilities"
+
+dispatcher-execute "$@"

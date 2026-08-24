@@ -95,6 +95,12 @@ else
     declare -g BSPWM_LIFECYCLE_AVAILABLE=false
 fi
 
+if source "${DOTLIB}/_singleton" 2>/dev/null; then
+    declare -g BSPWM_SINGLETON_AVAILABLE=true
+else
+    declare -g BSPWM_SINGLETON_AVAILABLE=false
+fi
+
 # ------------------------------
 # Configuration
 # ------------------------------
@@ -143,6 +149,9 @@ declare -g -i _BSPWM_FOCUS_HISTORY_SIZE=10
 
 # Saved layouts
 declare -g -A _BSPWM_SAVED_LAYOUTS=()
+
+# Auto-desktop numbering (bspwm-desktops-daemon)
+declare -g -i _BSPWM_DESKTOPS_NEXT_ID=1
 
 # ------------------------------
 # Internal Helpers
@@ -1215,6 +1224,154 @@ bspwm-equalize() {
 }
 
 # ------------------------------
+# Daemon Loops
+# ------------------------------
+#
+# Long-running, event-driven loops meant to run under a supervisor (systemd
+# etc), one per feature, so each can be enabled/disabled independently. Each
+# blocks forever subscribing to the same bspc event set - kept as two
+# separate subscribe streams (not merged into one) so bspwm-balance-daemon
+# and bspwm-desktops-daemon stay independently startable/stoppable processes.
+
+# Auto-balance the window tree on every layout-affecting event
+#
+# Function: bspwm-balance-daemon
+# Description: Subscribe to node events and rebalance the tree after each
+#   one. Blocks forever - run under a supervisor (systemd, etc).
+# Returns:
+#   1 - Singleton lock held by another instance
+# Example:
+#   bspwm-balance-daemon
+#
+bspwm-balance-daemon() {
+    # Explicit lock name: singleton-get-process-name's basename "$0" always
+    # resolves to its own function name under zsh's FUNCTION_ARGZERO (every
+    # function reassigns $0 to itself on entry), so the bare/auto-detected
+    # form silently collides with any other function-based singleton-lock
+    # caller instead of naming this daemon.
+    [[ "$BSPWM_SINGLETON_AVAILABLE" == "true" ]] && { singleton-lock "bsp-balance-daemon" || return 1; }
+
+    log-info "bspwm-balance-daemon: subscribing to node events"
+
+    bspc subscribe node_add node_remove node_state node_geometry | while read -r _event; do
+        log-debug "event: $_event"
+        _bspwm-balance-tree
+    done
+}
+
+# Balance every window and every intermediate node on the focused desktop
+#
+# Function: _bspwm-balance-tree
+# Description: Private helper for bspwm-balance-daemon. Differs from
+#   bspwm-balance (single root -B) by balancing each window's north anchor
+#   individually, then each non-leaf/non-window node - matches the
+#   granularity the standalone bsp-balance script used.
+#
+_bspwm-balance-tree() {
+    # `|| true` on both -B calls: most windows/nodes have no @north neighbor
+    # or nothing left to balance, so bspc legitimately exits non-zero here
+    # on every other event. The bsp wrapper runs under set -e, so a bare
+    # unguarded failure here would kill the whole daemon on the very next
+    # window move - this loop must tolerate the expected no-op case.
+    local _window
+    for _window in $(bspc query -N -d -n .window); do
+        log-debug "balancing window: $_window"
+        _bspwm-exec node "${_window}#@north" -B || true
+    done
+
+    local _root _node
+    _root=$(bspc query -N '@/' -n)
+    for _node in $(bspc query -N '@/' -n '.descendant_of.!window' | grep -v "$_root"); do
+        log-debug "balancing node: $_node"
+        _bspwm-exec node "$_node" -B || true
+    done
+}
+
+# Auto-manage desktop count on a monitor: always keep exactly one spare
+#
+# Function: bspwm-desktops-daemon
+# Description: Subscribe to node events; add a desktop when the monitor is
+#   fully occupied, remove unoccupied desktops down to one spare. Blocks
+#   forever - run under a supervisor (systemd, etc).
+# Parameters:
+#   $1 - Monitor selector (optional, default: focused)
+# Returns:
+#   1 - Singleton lock held by another instance
+# Example:
+#   bspwm-desktops-daemon
+#   bspwm-desktops-daemon HDMI-1
+#
+bspwm-desktops-daemon() {
+    local _monitor="${1:-focused}"
+
+    # Explicit lock name (see bspwm-balance-daemon) - also correctness-load-
+    # bearing here: a concurrent second instance could race
+    # _bspwm-desktops-manage and add/remove desktops in duplicate.
+    [[ "$BSPWM_SINGLETON_AVAILABLE" == "true" ]] && { singleton-lock "bsp-desktops-daemon" || return 1; }
+
+    log-info "bspwm-desktops-daemon: subscribing to node events (monitor=$_monitor)"
+
+    _bspwm-desktops-manage "$_monitor"
+
+    bspc subscribe node_add node_remove node_state node_geometry | while read -r _event; do
+        log-debug "event: $_event"
+        _bspwm-desktops-manage "$_monitor"
+    done
+}
+
+# Private helpers for bspwm-desktops-daemon. Kept underscore-prefixed (not
+# bspwm-desktop-*) because they auto-number desktops by an incrementing
+# counter rather than taking an explicit name like bspwm-desktop-add/remove -
+# a different contract from the public named-desktop API above.
+_bspwm-desktops-manage() {
+    local _monitor="$1"
+    local _total _occupied
+
+    _total=$(_bspwm-desktops-total "$_monitor")
+    _occupied=$(_bspwm-desktops-occupied "$_monitor")
+
+    [[ "$_occupied" -eq "$_total" ]] && _bspwm-desktops-auto-add "$_monitor"
+    [[ "$_occupied" -lt $((_total - 1)) ]] && _bspwm-desktops-auto-remove "$_monitor"
+}
+
+_bspwm-desktops-total() {
+    _bspwm-exec query -D -m "$1" | wc -l
+}
+
+_bspwm-desktops-occupied() {
+    _bspwm-exec query -D -d ".occupied" -m "$1" | wc -l
+}
+
+_bspwm-desktops-auto-add() {
+    local _monitor="$1"
+    log-debug "adding desktop $_BSPWM_DESKTOPS_NEXT_ID on $_monitor"
+    # || true: e.g. a name collision with an existing desktop. bsp runs
+    # under set -e - an unguarded failure here would kill the whole daemon.
+    # Counter still advances so the next event's attempt uses a fresh id.
+    _bspwm-exec monitor "$_monitor" -a "$_BSPWM_DESKTOPS_NEXT_ID" || true
+    ((_BSPWM_DESKTOPS_NEXT_ID++)) || true
+}
+
+_bspwm-desktops-auto-remove() {
+    local _monitor="$1"
+    local _total _occupied
+
+    _total=$(_bspwm-desktops-total "$_monitor")
+    _occupied=$(_bspwm-desktops-occupied "$_monitor")
+
+    while [[ "$_occupied" -lt $((_total - 1)) ]]; do
+        log-debug "removing unoccupied desktop on $_monitor"
+        # || break, not || true: if -r fails, occupied/total won't change
+        # and the while condition stays true forever - break instead of
+        # busy-looping. set -e still needs the guard either way.
+        _bspwm-exec desktop "any.!occupied" -r || break
+
+        _total=$(_bspwm-desktops-total "$_monitor")
+        _occupied=$(_bspwm-desktops-occupied "$_monitor")
+    done
+}
+
+# ------------------------------
 # Help and Information
 # ------------------------------
 
@@ -1268,6 +1425,10 @@ EVENT MONITORING:
   bspwm-event-monitor-start            Start event monitor
   bspwm-event-monitor-stop             Stop event monitor
 
+DAEMON LOOPS (run under a supervisor, e.g. systemd):
+  bspwm-balance-daemon                 Auto-balance tree on node events
+  bspwm-desktops-daemon [MONITOR]      Auto-manage desktop count on MONITOR
+
 CONFIGURATION:
   bspwm-config-apply [FILE]            Apply configuration
   bspwm-config-set KEY VALUE           Set config value
@@ -1315,6 +1476,7 @@ Integration Status:
   _cache:         ${BSPWM_CACHE_AVAILABLE:-false}
   _config:        ${BSPWM_CONFIG_AVAILABLE:-false}
   _lifecycle:     ${BSPWM_LIFECYCLE_AVAILABLE:-false}
+  _singleton:     ${BSPWM_SINGLETON_AVAILABLE:-false}
   jq:             $(common-command-exists jq && echo "true" || echo "false")
 
 BSPWM Status:
