@@ -14,6 +14,9 @@ desktop/.local/share/icons/hicolor/icon-theme.cache
 **/tokens.json
 **/**/hosts.yml
 
+# git-crypt-encrypted exception: tracked (encrypted at rest), not a plaintext leak
+!shell/.config/remote/credentials.json
+
 # allow template files
 !**/*.tmpl
 !**/*.example

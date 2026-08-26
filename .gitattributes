@@ -12,3 +12,4 @@
 # this file to a fresh clone is harmless.
 
 *.env filter=git-crypt diff=git-crypt
+shell/.config/remote/credentials.json filter=git-crypt diff=git-crypt
