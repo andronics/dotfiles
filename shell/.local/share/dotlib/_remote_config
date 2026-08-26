@@ -25,7 +25,7 @@ source "${DOTLIB}/_xdg"    || { echo "[ERROR] _remote_config requires _xdg" >&2;
 
 declare -g _REMOTE_CONFIG_DIR="$(xdg-config-dir "remote")"
 declare -g _REMOTE_CONFIG_CREDENTIALS="$(cat "${_REMOTE_CONFIG_DIR}/credentials.json")"
-declare -g _REMOTE_CONFIG_FILTERS="$(cat "${_REMOTE_CONFIG_DIR}/filters2.json")"
+declare -g _REMOTE_CONFIG_FILTERS="$(cat "${_REMOTE_CONFIG_DIR}/filters.json")"
 declare -g _REMOTE_CONFIG_ROOTS="$(cat "${_REMOTE_CONFIG_DIR}/roots.json")"
 declare -g _REMOTE_CONFIG_UNITS="$(cat "${_REMOTE_CONFIG_DIR}/units.json")"
 

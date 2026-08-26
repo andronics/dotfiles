@@ -3,7 +3,7 @@
 # _remote_filters - media-property filter evaluation engine for _remote
 # Part of the dotfiles library v2.0
 #
-# Filter rules live in filters2.json: { "<filename regex>": [[prop, op, value], ...] }
+# Filter rules live in filters.json: { "<filename regex>": [[prop, op, value], ...] }
 # Media properties beyond mimetype are extracted with mediainfo.
 #
 # Usage:

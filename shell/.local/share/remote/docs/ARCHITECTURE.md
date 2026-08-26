@@ -67,9 +67,9 @@ shell/
 │   │   └── systemd/user/
 │   │       ├── remote-mount@.service  # Type=simple template unit
 │   │       └── remote-sync@.service   # Type=oneshot template unit
-└── .config/remote/                    # not tracked in git except the schema files below
-    ├── credentials.json                # OAuth credentials - gitignored, never commit
-    ├── filters2.json                   # sync filter rules (current schema)
+└── .config/remote/
+    ├── credentials.json                # OAuth credentials - tracked, git-crypt encrypted at rest
+    ├── filters.json                    # sync filter rules
     ├── roots.json                      # local/remote mount roots
     └── units.json                      # unit definitions
 ```
@@ -118,10 +118,13 @@ passed to any `*-all` command silently matched nothing. Fixed here.
 
 `remote-filters-evaluate` (the `eq`/`ne`/`lt`/`le`/`gt`/`ge`/`in` comparator)
 and `remote-filters-check-file` (looks up a pattern's rules from
-`filters2.json`, extracts `mimetype` via `file` or audio/video properties via
-`mediainfo`, evaluates every rule). Only the current `filters2.json` schema
-is supported — the legacy `filters.json` schema and its validator are gone
-(they were unreachable from the dispatcher already).
+`filters.json`, extracts `mimetype` via `file` or audio/video properties via
+`mediainfo`, evaluates every rule). This is the only schema supported today —
+an older, differently-shaped `filters.json` and its validator existed before
+this rewrite and are gone (they were unreachable from the dispatcher
+already). The file was briefly named `filters2.json` during the transition
+to disambiguate from that removed legacy schema; renamed back to
+`filters.json` once there was nothing left to disambiguate from.
 
 ### `_remote`
 
@@ -196,7 +199,7 @@ practice.
 
 ## Configuration Files
 
-### units.json / roots.json / filters2.json
+### units.json / roots.json / filters.json
 
 Unchanged from before — see the JSON examples inline in each file. No schema
 changes.
