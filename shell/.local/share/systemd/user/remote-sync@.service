@@ -1,5 +1,7 @@
 [Unit]
 Description=Remote Cloud Syncronisation
+Requisite=remote-mount@%i.service
+After=remote-mount@%i.service
 
 [Service]
 Type=oneshot

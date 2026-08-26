@@ -289,8 +289,12 @@ singleton-lock() {
                 }
                 ;;
             ignore)
-                log-warn "Lock exists but ignoring"
-                return 0
+                # Despite the name, callers here (singleton-try-lock) want a
+                # non-blocking "did we get it?" check - return 1 so the lock
+                # miss is reported as failure, matching singleton-try-lock's
+                # documented contract instead of silently claiming success.
+                log-warn "Lock exists, not acquired"
+                return 1
                 ;;
             *)
                 log-error "Invalid SINGLETON_ACTION_ON_CONFLICT: $SINGLETON_ACTION_ON_CONFLICT"

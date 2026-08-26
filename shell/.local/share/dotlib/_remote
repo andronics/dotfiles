@@ -30,6 +30,7 @@
 #   Required:
 #     - _common, _log, _jq, _xdg: core utilities
 #     - _rclone, _systemd: delegated mount/unmount/sync/service-control
+#     - _singleton: per-unit sync lock (prevents overlapping remote-sync runs)
 #     - _remote_config, _remote_patterns, _remote_filters: domain modules
 
 [[ -n "${REMOTE_LOADED:-}" ]] && return 0
@@ -41,6 +42,7 @@ source "${DOTLIB}/_jq"            || { echo "[ERROR] _remote requires _jq" >&2; 
 source "${DOTLIB}/_xdg"           || { echo "[ERROR] _remote requires _xdg" >&2; return 1; }
 source "${DOTLIB}/_rclone"        || { echo "[ERROR] _remote requires _rclone" >&2; return 1; }
 source "${DOTLIB}/_systemd"       || { echo "[ERROR] _remote requires _systemd" >&2; return 1; }
+source "${DOTLIB}/_singleton"     || { echo "[ERROR] _remote requires _singleton" >&2; return 1; }
 source "${DOTLIB}/_remote_config"   || { echo "[ERROR] _remote requires _remote_config" >&2; return 1; }
 source "${DOTLIB}/_remote_patterns" || { echo "[ERROR] _remote requires _remote_patterns" >&2; return 1; }
 source "${DOTLIB}/_remote_filters"  || { echo "[ERROR] _remote requires _remote_filters" >&2; return 1; }
@@ -205,16 +207,23 @@ remote-sync() {
     [[ $# -eq 0 ]] && { log-error "No unit specified for syncing."; return 1; }
     local _unit_name="$1"
 
+    local _lock_name="remote-sync-${_unit_name}"
+    singleton-try-lock "${_lock_name}" || { log-error "Sync already in progress for ${_unit_name}"; return 1; }
+
     local _runtime_dir="$(xdg-runtime-dir "remote")/${_unit_name}"
     local _cfg="${_runtime_dir}/rclone.conf"
-    [[ ! -f "${_cfg}" ]] && { log-error "Specified unit config does not exist (mount it first)."; return 1; }
 
-    local _mountpoint _root_local _local_mount_point
+    local _mountpoint _root_local _root_remote _local_mount_point
     _mountpoint=$(_remote-config-unit-mountpoint "${_unit_name}")
     _root_local=$(_remote-config-root "local")
+    _root_remote=$(_remote-config-root "remote")
     _local_mount_point="${_root_local}/${_mountpoint}"
 
-    [[ ! -d "${_local_mount_point}" ]] && { log-error "Local mountpoint does not exist: ${_local_mount_point}"; return 1; }
+    # Supersedes a plain `-f "${_cfg}"` check: a rendered config only proves
+    # the unit was mounted at some point, not that the mount is live now.
+    rclone-is-mounted "${_root_remote}/${_mountpoint}" || { log-error "Unit not currently mounted: ${_unit_name}"; singleton-unlock "${_lock_name}"; return 1; }
+
+    [[ ! -d "${_local_mount_point}" ]] && { log-error "Local mountpoint does not exist: ${_local_mount_point}"; singleton-unlock "${_lock_name}"; return 1; }
 
     local _filter_patterns
     _filter_patterns=$(_remote-config-filter-patterns)
@@ -252,11 +261,13 @@ remote-sync() {
         for _f in "${_matched_files[@]}"; do
             echo "  ${_f}"
         done
+        singleton-unlock "${_lock_name}"
         return 0
     fi
 
     if [[ ${_file_count} -eq 0 ]]; then
         log-info "No files to sync"
+        singleton-unlock "${_lock_name}"
         return 0
     fi
 
@@ -276,6 +287,7 @@ remote-sync() {
     rclone-move "${_local_mount_point}" "${_unit_name}:" --progress --delete-empty-src-dirs
 
     rm -f "${_filter_file}"
+    singleton-unlock "${_lock_name}"
     log-info "Sync complete"
 }
 
