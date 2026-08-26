@@ -253,14 +253,20 @@ _log-output() {
     shift 2
     local message="$*"
 
+    # Every level goes to stderr, never stdout, in every mode below: stdout is
+    # reserved for functions that return data via command substitution
+    # (jq-query, _remote-config-*, and anything else that does `x=$(fn)`).
+    # Levels used to split by severity - error/fatal/warning to stderr,
+    # debug/info/trace to stdout - which meant any function that logged
+    # internally AND returned a value via echo silently corrupted its own
+    # return value the moment a log call was actually active (e.g. log-trace
+    # is a no-op below LOG_LEVEL=trace, so the corruption only appeared at
+    # the most verbose setting, looking like a level-dependent bug rather
+    # than what it was: log output leaking into a captured return value).
     case "$LOG_MODE" in
         cli)
-            # Console only - stderr for errors/warnings, stdout for others
-            if [[ "$level" == "error" ]] || [[ "$level" == "fatal" ]] || [[ "$level" == "warning" ]]; then
-                echo "$message" >&2
-            else
-                echo "$message"
-            fi
+            # Console only
+            echo "$message" >&2
             ;;
 
         daemon)
@@ -271,11 +277,7 @@ _log-output() {
 
             # Also output to console if TTY is available (for debugging)
             if [[ -t 1 ]] || [[ -t 2 ]]; then
-                if [[ "$level" == "error" ]] || [[ "$level" == "fatal" ]] || [[ "$level" == "warning" ]]; then
-                    echo "$message" >&2
-                else
-                    echo "$message"
-                fi
+                echo "$message" >&2
             fi
             ;;
 
@@ -286,11 +288,7 @@ _log-output() {
             fi
 
             # Always output to console
-            if [[ "$level" == "error" ]] || [[ "$level" == "fatal" ]] || [[ "$level" == "warning" ]]; then
-                echo "$message" >&2
-            else
-                echo "$message"
-            fi
+            echo "$message" >&2
             ;;
 
         file)

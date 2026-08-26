@@ -253,8 +253,15 @@ singleton-lock() {
     # assigns it to $lock_fd, sidestepping the whole eval'd-string approach too.
     local lock_fd
 
-    # Open lock file
-    exec {lock_fd}>"${lock_file}" 2>/dev/null || {
+    # Open lock file. No `2>/dev/null` here: this is the bare-exec redirection
+    # form (no trailing command), which in zsh makes the redirect PERSIST for
+    # the rest of the process, not just this statement - a trailing
+    # `2>/dev/null` would silently blackhole the process's stderr from this
+    # point on (every later log-error/log-warning call routes there and would
+    # vanish with no trace). The log-error fallback below already gives a
+    # clear message on open failure; a redundant raw shell diagnostic
+    # alongside it is a fine trade for not losing stderr for good.
+    exec {lock_fd}>"${lock_file}" || {
         log-error "Failed to open lock file: $lock_file"
         return 1
     }
