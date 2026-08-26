@@ -1,5 +1,5 @@
 [Default Applications]
-inode/directory=ranger.desktop
+inode/directory=nemo.desktop
 text/html=google-chrome.desktop
 x-scheme-handler/http=google-chrome.desktop
 x-scheme-handler/https=google-chrome.desktop
@@ -8,6 +8,7 @@ x-scheme-handler/unknown=google-chrome.desktop
 application/octet-stream=userapp-code-9LZXP2.desktop
 x-scheme-handler/magnet=google-chrome.desktop
 x-scheme-handler/discord-1038970224050962582=nuclear.desktop
+x-scheme-handler/claude-cli=claude-code-url-handler.desktop
 
 [Added Associations]
 inode/directory=mpv.desktop;nemo.desktop;

@@ -4,13 +4,12 @@ This repo is the user's personal dotfiles. Read this before making changes.
 
 ## Shape
 
-GNU Stow + three composable profiles:
+GNU Stow + two composable profiles:
 
 | Package | Always install? | Contents |
 |---|---|---|
-| `shell/` | yes (servers too) | zsh dispatcher, tmux, gh, git, gpg/ssh keys (private submodules), starship, fzf, dotlib |
+| `shell/` | yes (servers too) | zsh dispatcher, tmux, gh, git, gpg/ssh keys (private submodules), starship, fzf, dotlib, neofetch |
 | `desktop/` | desktops only | bspwm, sxhkd, polybar, picom, dunst, rofi, alacritty, X-session boot |
-| `optional/` | per-host | neofetch, ranger, spotifyd, Claude Code config |
 
 `./dotfiles install <pkg...>` is a thin Stow wrapper. Subcommands: `install` (`i`), `uninstall` (`u`), `reinstall` (`r`). Per-package hooks: `.preinstall` / `.postinstall` (sourced — they share the wrapper's `err`/`info`/`ok`/`warn` helpers and the `dotfiles_source_root` / `_pkg` vars).
 
@@ -51,7 +50,7 @@ source "${DOTLIB}/_cache"  2>/dev/null || true   # optional
 
 Don't add an "auto-loader" — the manual pattern is intentional and works.
 
-Scripts in `shell/.local/bin/` (e.g. `audio`, `player`) should be thin dispatchers over `dotlib` modules, not standalone reimplementations.
+Scripts in `shell/.local/bin/` (e.g. `audio`, `player`) should be thin dispatchers over `dotlib` modules, not standalone reimplementations. The wrapper contract — ≤30-line wrapper that sources `_dispatcher` + its `_<module>` and calls `dispatcher-init <name> --route=function` then `dispatcher-execute "$@"` — is documented at `shell/.local/share/dotlib/README.md`. Business logic lives in modules, not in wrapper scripts.
 
 ## Secrets architecture
 

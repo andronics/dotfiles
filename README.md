@@ -6,9 +6,8 @@ Stow-managed dotfiles organized into three composable profiles.
 
 | Package | What it is | When to install |
 |---------|-----------|-----------------|
-| `shell/` | zsh + integrations (autosuggestions, syntax-highlighting, fzf-tab, fzf, dircolors, starship, zoxide, deno, pnpm, docker, gpg-agent, etc.), tmux + tmuxinator, gnupg keys, ssh keys, git config, gh config | Always — including servers |
+| `shell/` | zsh + integrations (autosuggestions, syntax-highlighting, fzf-tab, fzf, dircolors, starship, zoxide, deno, pnpm, docker, gpg-agent, etc.), tmux + tmuxinator, gnupg keys, ssh keys, git config, gh config, neofetch | Always — including servers |
 | `desktop/` | bspwm + sxhkd + bsp helpers, polybar, picom, dunst, rofi, alacritty, gtk 2/3/4, X11 (.xinitrc, .Xresources), backgrounds, themes, palette, X-session boot scripts in `.zlogin.d/` | Linux desktops only |
-| `optional/` | Claude Code config, neofetch, ranger, spotifyd | Per-machine opt-in |
 
 ## Bootstrap
 
@@ -44,22 +43,18 @@ If you forgot `--recurse-submodules`, the `shell` package's `.preinstall` hook w
 ```sh
 # core (always)
 sudo pacman -S --needed zsh tmux gnupg pass git-crypt \
-                        zoxide starship fzf eza bat \
+                        zoxide starship fzf eza bat neofetch \
                         zsh-autosuggestions zsh-syntax-highlighting
 paru   -S --needed fzf-tab
 
 # desktop (if installing desktop/)
 sudo pacman -S --needed bspwm sxhkd polybar picom dunst rofi gtk3 \
                         alacritty papirus-icon-theme feh nemo
-
-# optional
-sudo pacman -S --needed neofetch ranger spotifyd
 ```
 
 ```sh
 ./dotfiles install shell                        # server
 ./dotfiles install shell desktop                # workstation
-./dotfiles install shell desktop optional       # everything
 ```
 
 `./dotfiles` is a thin stow wrapper. Subcommands: `install` (`i`), `uninstall` (`u`), `reinstall` (`r`). With no args, acts on every package. Per-package `.preinstall` / `.postinstall` hooks run automatically when present.
@@ -126,12 +121,10 @@ Currently no files are encrypted — the wiring is symbolic. Add a pattern to `.
   - `60–89` plugin sources
   - `90–99` runs-last (syntax highlighting must be `99`)
 - **Desktop X-session boot** lives in `desktop/.config/zsh/.zlogin.d/`. Stowing `desktop` activates polybar, picom, dunst, polkit-agent, sxhkd, feh, x11. Stowing only `shell` does not.
-- **Per-host opt-ins** go in `optional/`. Don't put desktop-essential tools (terminal emulator, launcher) here.
 
 ## Profiles cheat sheet
 
 ```
 server:        shell
 linux desktop: shell desktop
-workstation:   shell desktop optional
 ```
