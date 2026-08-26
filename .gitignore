@@ -13,10 +13,6 @@ desktop/.local/share/icons/hicolor/icon-theme.cache
 **/credentials.json
 **/tokens.json
 **/**/hosts.yml
-drive/.config/drive/config.json
-remote/.config/remote/config.json
-pastebin/.config/pastebin/config.json
-mambembe/.config/mambembe/tokens.json
 
 # allow template files
 !**/*.tmpl
