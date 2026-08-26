@@ -15,7 +15,13 @@
 #   - Multiple singleton strategies
 #   - Lock status checking and cleanup
 #   - Graceful handling of stale locks
-#   - Automatic cleanup on exit
+#
+# No automatic cleanup-on-exit: a trap set inside singleton-lock() would fire
+# when that function returns in zsh (not at actual process exit), deleting
+# the lock file immediately and defeating the lock. Callers must call
+# singleton-unlock explicitly; the OS releases the underlying flock/fd on
+# real process exit regardless, and singleton-clean-stale-lock reaps any
+# leftover lock file (dead PID) on the next acquisition attempt.
 #
 # Dependencies:
 #   Layer 1: _common v2.0 (required)
@@ -76,9 +82,6 @@ declare -g SINGLETON_STALE_TIMEOUT="${SINGLETON_STALE_TIMEOUT:-300}"
 
 # SINGLETON_ACTION_ON_CONFLICT: What to do when instance exists (exit, wait, kill, ignore)
 declare -g SINGLETON_ACTION_ON_CONFLICT="${SINGLETON_ACTION_ON_CONFLICT:-exit}"
-
-# SINGLETON_CLEANUP_ON_EXIT: Auto-cleanup lock on exit
-declare -g SINGLETON_CLEANUP_ON_EXIT="${SINGLETON_CLEANUP_ON_EXIT:-true}"
 
 # SINGLETON_NAME: Override process name for lock
 declare -g SINGLETON_NAME="${SINGLETON_NAME:-}"
@@ -309,10 +312,16 @@ singleton-lock() {
     # Track this lock
     _SINGLETON_LOCKS[$name]=$lock_file
 
-    # Setup cleanup trap
-    if [[ "$SINGLETON_CLEANUP_ON_EXIT" == "true" ]]; then
-        trap "singleton-unlock '$name'" EXIT INT TERM
-    fi
+    # No EXIT/INT/TERM trap here: in zsh, a trap set inside a function fires
+    # when THAT function returns, not at actual process exit - since
+    # singleton-lock is always called through something else (singleton-try-lock,
+    # a caller's own function), the trap used to fire immediately on return,
+    # deleting the lock file and defeating the lock entirely. Not needed for
+    # correctness anyway: the OS releases the flock and closes the fd when the
+    # process truly exits, no shell cooperation required, and
+    # singleton-clean-stale-lock already reaps the leftover lock file (dead
+    # PID) on the next acquisition attempt. Callers that need the lock file
+    # itself removed promptly must call singleton-unlock explicitly.
 
     log-info "Singleton lock acquired: $name (PID: $$)"
     return 0
@@ -817,7 +826,6 @@ singleton-get-config() {
     echo "  Lock Timeout:        ${SINGLETON_LOCK_TIMEOUT}s"
     echo "  Stale Timeout:       ${SINGLETON_STALE_TIMEOUT}s"
     echo "  Conflict Action:     $SINGLETON_ACTION_ON_CONFLICT"
-    echo "  Cleanup on Exit:     $SINGLETON_CLEANUP_ON_EXIT"
     echo "  Process Name:        $(singleton-get-process-name)"
 }
 
@@ -851,12 +859,11 @@ Features:
   - Timeout support
   - Stale lock detection and cleanup
   - Multiple conflict strategies
-  - Automatic cleanup on exit
 
 Configuration:
   SINGLETON_LOCK_DIR, SINGLETON_LOCK_TIMEOUT
   SINGLETON_STALE_TIMEOUT, SINGLETON_ACTION_ON_CONFLICT
-  SINGLETON_CLEANUP_ON_EXIT, SINGLETON_NAME
+  SINGLETON_NAME
 
 Functions:
   Acquire: singleton-lock, singleton-lock-wait, singleton-try-lock
@@ -921,18 +928,13 @@ ENVIRONMENT VARIABLES:
     SINGLETON_LOCK_TIMEOUT             Lock acquisition timeout
     SINGLETON_STALE_TIMEOUT            Stale lock age threshold
     SINGLETON_ACTION_ON_CONFLICT       Action when lock exists
-    SINGLETON_CLEANUP_ON_EXIT          Auto-cleanup on exit
     SINGLETON_NAME                     Override process name
 
 EXAMPLES:
-    # Basic usage
+    # Basic usage - always release explicitly, there is no auto-cleanup
     singleton-lock
     # ... your code ...
     singleton-unlock
-
-    # With automatic cleanup
-    singleton-lock "myapp"
-    # Lock auto-releases on exit
 
     # Wait for lock
     singleton-lock-wait "myapp" 30
