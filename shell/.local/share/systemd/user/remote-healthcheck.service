@@ -1,0 +1,9 @@
+[Unit]
+Description=Remote mount health check
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/remote health
+
+[Install]
+WantedBy=timers.target

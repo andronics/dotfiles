@@ -55,6 +55,7 @@ typeset -gA _REMOTE_DESCRIPTIONS=(
     [sync]="Sync filtered local files to a unit's remote"
     [list]="List units with status and cache size"
     [verify]="Verify unit configuration and mount status"
+    [health]="Check enabled units are actually mounted and responsive, restart if not"
     [cleanup]="Remove stale runtime configs and empty caches"
     [enable]="Enable and start a unit's systemd service"
     [disable]="Stop and disable a unit's systemd service"
@@ -486,6 +487,49 @@ remote-verify() {
     echo ""
     log-info "Verification complete: ${_passed} passed, ${_failed} failed"
     return ${_failed}
+}
+
+# Liveness sweep for remote-healthcheck.timer: unlike remote-verify (a
+# read-only diagnostic also used as remote-mount@.service's ExecStartPre
+# gate), this restarts what it finds unhealthy. Only considers units whose
+# remote-mount@<unit>.service is actually enabled - "should be running" per
+# systemd, not just present in units.json. rclone-is-mounted alone only
+# checks the kernel mount table; a wedged-but-still-mounted FUSE endpoint
+# (network drop, revoked token) passes that check while I/O hangs, so a
+# bounded stat is also required to catch it.
+remote-health() {
+    local _pattern="${1:-*}"
+    local _units _checked=0 _restarted=0
+    _units=$(_remote-patterns-match-units "${_pattern}")
+    [[ -z "${_units}" ]] && { log-error "No units match pattern: ${_pattern}"; return 1; }
+
+    local _unit
+    while read -r _unit; do
+        [[ -z "${_unit}" ]] && continue
+        systemd-is-enabled "remote-mount@${_unit}" || continue
+        ((_checked++)) || true
+
+        local _mountpoint _root_remote _mount_path
+        _mountpoint=$(_remote-config-unit-mountpoint "${_unit}")
+        _root_remote=$(_remote-config-root "remote")
+        _mount_path="${_root_remote}/${_mountpoint}"
+
+        local _healthy=true
+        rclone-is-mounted "${_mount_path}" || _healthy=false
+        if [[ "${_healthy}" == "true" ]]; then
+            timeout --kill-after=5s 10s stat "${_mount_path}" >/dev/null 2>&1 || _healthy=false
+        fi
+
+        if [[ "${_healthy}" != "true" ]]; then
+            log-warning "Unhealthy mount detected: ${_unit} - restarting"
+            systemd-restart "remote-mount@${_unit}"
+            ((_restarted++)) || true
+        else
+            log-debug "Healthy: ${_unit}"
+        fi
+    done <<< "${_units}"
+
+    log-info "Health check complete: ${_checked} checked, ${_restarted} restarted"
 }
 
 remote-cleanup() {

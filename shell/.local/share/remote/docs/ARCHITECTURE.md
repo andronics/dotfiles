@@ -125,7 +125,7 @@ is supported — the legacy `filters.json` schema and its validator are gone
 
 ### `_remote`
 
-The 15 subcommand functions, grouped below. `--dry-run` and `--preview` are
+The 16 subcommand functions, grouped below. `--dry-run` and `--preview` are
 **local, per-subcommand flags** read from the subcommand's own arguments
 (`remote mount --dry-run <unit>`), not dispatcher's global `--dry-run`. See
 "Dry-run Mode" for why.
@@ -140,7 +140,8 @@ The 15 subcommand functions, grouped below. `--dry-run` and `--preview` are
 | `unmount-all [pattern]` | `systemd-stop "remote-mount@<unit>"` | |
 | `sync [--preview] <unit>` | `rclone-set-config`, `rclone-set-filter-file`, `rclone-move` | Scan/filter/preview logic stays in `_remote` |
 | `list [pattern]` | `systemd-get-state` | Table of unit/mountpoint/status/cache size |
-| `verify [pattern]` | `rclone-is-mounted` | Config sanity + mount-state check |
+| `verify [pattern]` | `rclone-is-mounted` | Config sanity + mount-state check (read-only) |
+| `health [pattern]` | `rclone-is-mounted`, `systemd-restart` | Liveness sweep for enabled units; restarts what's unhealthy — see below |
 | `cleanup [--force]` | `rclone-is-mounted` | Stale runtime config / empty cache cleanup |
 | `enable <unit>` | `systemd-enable-start` | |
 | `disable <unit>` | `systemd-disable-stop` | |
@@ -168,6 +169,30 @@ systemd template unit per matched name, so each mount is its own supervised
 process. This is different from `enable-all`/`disable-all`/`restart-all`,
 which safely loop over their singular counterparts since those are
 non-blocking systemctl calls.
+
+### Why `health` is a separate function from `verify`
+
+`remote-verify` is read-only by design — it's also used as
+`remote-mount@.service`'s `ExecStartPre` gate, so it must never have
+side effects. `remote-health` is the mutating counterpart: driven by
+`remote-healthcheck.timer` (every 10 minutes), it only looks at units whose
+`remote-mount@<unit>.service` is currently systemd-enabled (the actual
+"should be running" signal, not just present in `units.json`), and restarts
+anything unhealthy via `systemd-restart`.
+
+"Healthy" is checked two ways, not one: `rclone-is-mounted` only confirms the
+kernel mount table has an entry — a wedged FUSE endpoint (network drop,
+revoked token) still passes that check while actual I/O hangs. A bounded
+`timeout --kill-after=5s 10s stat <mountpoint>` catches that case. Note
+`timeout` can't guarantee killing a process stuck in uninterruptible sleep
+(D-state) on a truly wedged FUSE mount — the per-unit timeout is scoped
+inside the sweep loop specifically so one stuck probe can't block the rest
+of the sweep, even in that worst case.
+
+No consecutive-failure backoff — a persistently broken unit (e.g. revoked
+OAuth grant) gets a restart attempt every 10 minutes indefinitely. Considered
+and deliberately skipped for now; add it later if it turns out to matter in
+practice.
 
 ## Configuration Files
 
@@ -229,12 +254,30 @@ remote verify *-backup           # glob
 
 ## Systemd Integration
 
-Unchanged from before. `remote-mount@.service` is the `Type=simple` template
-unit (`ExecStartPre=remote verify %i`, `ExecStart=remote mount %i`,
-`ExecStop=remote unmount %i`). `remote-sync@.service` is `Type=oneshot`
-(`ExecStart=remote sync %i`). Both have matching `.timer` units. The CLI
-surface these units call (`remote mount "%i"`, `remote sync "%i"`, etc.)
-didn't change, so neither unit file needed editing for this rewrite.
+`remote-mount@.service` is the `Type=simple` template unit
+(`ExecStartPre=remote verify %i`, `ExecStart=remote mount %i`,
+`ExecStop=remote unmount %i`), started via `WantedBy=default.target` and kept
+alive by `Restart=on-failure`; it has no timer. `remote-sync@.service` is
+`Type=oneshot` (`ExecStart=remote sync %i`), driven entirely by
+`remote-sync@.timer` (every 4h) since nothing else would ever run it, and now
+also gated by `Requisite=`/`After=remote-mount@%i.service` so it fails fast
+if the mount isn't active rather than racing a dead mountpoint.
+
+A `remote-mount@.timer` existed previously (same 4h schedule, description
+copy-pasted from the sync timer) but had no real purpose beyond what
+`Restart=on-failure` already covers and was never documented — removed.
+
+`remote-healthcheck.service` (oneshot, `ExecStart=remote health`, not
+templated — sweeps every enabled unit in one run) is driven by
+`remote-healthcheck.timer`: `OnBootSec=2min` / `OnUnitActiveSec=10min`, a
+fixed interval (an env-configurable interval was attempted first, but
+`[Timer]` sections can't read `Environment=`/`EnvironmentFile=` — those only
+apply to `[Service]` — so making it configurable would have meant either a
+foreground-loop daemon instead of a timer, or a self-throttling stamp file;
+skipped as not worth the complexity for now). This is what actually catches
+a wedged-but-still-running mount, which neither `Restart=on-failure` nor the
+old `remote-mount@.timer` could. See "Why `health` is a separate function
+from `verify`" above for the mechanism.
 
 ```bash
 systemctl --user start remote-mount@audio
@@ -263,8 +306,12 @@ alongside the existing four, expose typed getters as needed.
 - Sandbox mode, designed against `_dispatcher`'s own dry-run/flag handling
   rather than the old recursive-toggle approach.
 - Remote-to-remote sync.
-- Mount health monitoring / cache size quotas.
+- Cache size quotas (mount health monitoring is now handled by `remote
+  health` / `remote-healthcheck.timer` — see Systemd Integration).
 - Parallel bulk mount (currently sequential per matched unit).
+- Consecutive-failure backoff for `remote-health`, if restarting a
+  persistently broken unit every 10 minutes turns out to be a problem in
+  practice.
 
 ---
 
