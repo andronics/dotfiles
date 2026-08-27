@@ -1,0 +1,36 @@
+#!/usr/bin/env zsh
+
+name=$(basename $0)
+
+# ------------------------------
+
+source "${DOTLIB}/_log"       || { echo "missing _log" >&2; exit 1; }
+source "${DOTLIB}/_singleton" || { echo "missing _singleton" >&2; exit 1; }
+
+# ------------------------------
+
+singleton-lock "$name" || exit 1
+
+# ------------------------------
+
+_bsp_floating_borders() {
+
+	log-info "subscribing to events"
+
+	while read -r _ _ _ _node _state _status; do
+		
+		[[ "${_state}" == "floating" && "${_status}" == "on" ]] && \
+			bspc config -n ${_node} border_width 0
+
+	done < <(bspc subscribe node_state)
+
+}
+
+# ------------------------------
+
+_bsp_floating_borders "$@"
+
+
+
+
+

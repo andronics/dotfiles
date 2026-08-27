@@ -39,6 +39,12 @@ if ! source "${DOTLIB}/_common" 2>/dev/null; then
     return 1
 fi
 
+# Load _validation (required)
+if ! source "${DOTLIB}/_validation" 2>/dev/null; then
+    echo "[ERROR] _events requires _validation - cannot load" >&2
+    return 1
+fi
+
 # Load _log (optional with fallback)
 if ! source "${DOTLIB}/_log" 2>/dev/null; then
     log-info() { echo "[INFO] $*"; }
@@ -62,7 +68,10 @@ declare -g EVENTS_HISTORY_SIZE="${EVENTS_HISTORY_SIZE:-1000}"
 declare -g EVENTS_ENABLE_LOGGING="${EVENTS_ENABLE_LOGGING:-false}"
 
 # Directory for persistent event logs (XDG-compliant)
-declare -g EVENTS_LOG_DIR="${EVENTS_LOG_DIR:-$(common-lib-state-dir)/events}"
+# Not sourcing _xdg here: _xdg optionally sources _lifecycle, which optionally
+# sources _events, which would source _xdg again - a needless load cycle for
+# one path. Inlining the same XDG Base Directory default _xdg itself uses.
+declare -g EVENTS_LOG_DIR="${EVENTS_LOG_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/events}"
 
 # Timestamp format for events
 declare -g EVENTS_TIMESTAMP_FORMAT="${EVENTS_TIMESTAMP_FORMAT:-%Y-%m-%d %H:%M:%S}"
@@ -141,9 +150,9 @@ events-on() {
     [[ "$_EVENTS_INITIALIZED" == "false" ]] && events-init
 
     # Validate inputs
-    common-validate-required "$event_name" "event name" || return 2
-    common-validate-required "$handler" "handler function" || return 2
-    common-validate-numeric "$priority" || {
+    validate-type-string "$event_name" || return 2
+    validate-type-string "$handler" || return 2
+    validate-type-integer "$priority" || {
         log-error "Priority must be numeric: $priority"
         return 2
     }
@@ -190,8 +199,8 @@ events-once() {
     local handler="$2"
     local priority="${3:-$EVENTS_DEFAULT_PRIORITY}"
 
-    common-validate-required "$event_name" "event name" || return 2
-    common-validate-required "$handler" "handler function" || return 2
+    validate-type-string "$event_name" || return 2
+    validate-type-string "$handler" || return 2
 
     # Create wrapper that unregisters after execution
     local wrapper_name="_events_once_${_EVENTS_NEXT_HANDLER_ID}_${handler//[^a-zA-Z0-9_]/}"
@@ -223,7 +232,7 @@ events-off() {
     local event_name="$1"
     local handler="${2:-}"
 
-    common-validate-required "$event_name" "event name" || return 2
+    validate-type-string "$event_name" || return 2
 
     if [[ -z "$handler" ]]; then
         # Remove all handlers for this event
@@ -305,7 +314,7 @@ events-emit() {
 
     [[ "$_EVENTS_INITIALIZED" == "false" ]] && events-init
 
-    common-validate-required "$event_name" "event name" || return 2
+    validate-type-string "$event_name" || return 2
 
     # Create event metadata
     local timestamp=$(/bin/date +"$EVENTS_TIMESTAMP_FORMAT")
@@ -425,7 +434,7 @@ _events-cleanup-async-workers() {
 events-filter() {
     local pattern="${1:-*}"
 
-    common-validate-required "$pattern" "pattern" || return 2
+    validate-type-string "$pattern" || return 2
 
     local -a matched_events=()
     local -A seen_events=()
@@ -477,7 +486,7 @@ events-list() {
 events-list-handlers() {
     local event_name="$1"
 
-    common-validate-required "$event_name" "event name" || return 2
+    validate-type-string "$event_name" || return 2
 
     # Get matching handlers, sorted by priority
     local -a matching_keys=()
@@ -506,7 +515,7 @@ events-list-handlers() {
 events-handler-count() {
     local event_name="$1"
 
-    common-validate-required "$event_name" "event name" || return 2
+    validate-type-string "$event_name" || return 2
 
     local count=0
     for key in "${(@k)_EVENTS_HANDLERS}"; do
@@ -637,7 +646,7 @@ events-queue() {
     shift
     local event_data=("$@")
 
-    common-validate-required "$event_name" "event name" || return 2
+    validate-type-string "$event_name" || return 2
 
     # Serialize event for queue
     local queued_event="${event_name}|${event_data[*]}"
@@ -865,7 +874,7 @@ events-disable-async() {
 events-set-history-size() {
     local size="$1"
 
-    common-validate-numeric "$size" || return 2
+    validate-type-integer "$size" || return 2
 
     EVENTS_HISTORY_SIZE="$size"
     log-debug "Set history size to: $EVENTS_HISTORY_SIZE"
@@ -876,7 +885,7 @@ events-set-history-size() {
 events-set-timestamp-format() {
     local format="$1"
 
-    common-validate-required "$format" "timestamp format" || return 2
+    validate-type-string "$format" || return 2
 
     EVENTS_TIMESTAMP_FORMAT="$format"
     log-debug "Set timestamp format to: $EVENTS_TIMESTAMP_FORMAT"
@@ -973,7 +982,7 @@ events-emit-many() {
 events-has-handlers() {
     local event_name="$1"
 
-    common-validate-required "$event_name" "event name" || return 2
+    validate-type-string "$event_name" || return 2
 
     for key in "${(@k)_EVENTS_HANDLERS}"; do
         local key_event="${key%%:*}"

@@ -51,22 +51,21 @@ declare -r RCLONE_VERSION="2.1.0"
 # Load foundation (required, with minimal fallbacks if missing)
 if ! source "${DOTLIB}/_common" 2>/dev/null; then
     common-command-exists() { command -v "$1" &>/dev/null; }
-    common-validate-required() {
-        local value="$1"
-        local name="$2"
-        if [[ -z "$value" ]]; then
-            log-error "${name} is required"
-            return 2
-        fi
-        return 0
+fi
+
+# Load validation (required, with minimal fallbacks if _common/_validation missing)
+if ! source "${DOTLIB}/_validation" 2>/dev/null; then
+    validate-type-string() {
+        [[ -n "$1" ]] && return 0
+        log-error "Required value is missing"
+        return 1
     }
-    common-validate-numeric() {
-        local value="$1"
-        if ! [[ "$value" =~ ^[0-9]+$ ]]; then
-            log-error "Value must be numeric: $value"
-            return 2
+    validate-type-integer() {
+        if [[ "$1" =~ ^-?[0-9]+$ ]]; then
+            return 0
         fi
-        return 0
+        log-error "Value must be numeric: $1"
+        return 1
     }
 fi
 
@@ -110,16 +109,9 @@ fi
 # ------------------------------
 
 # Paths (XDG-compliant)
-if typeset -f common-lib-cache-dir >/dev/null 2>&1; then
-    declare -g RCLONE_CACHE_DIR="$(common-lib-cache-dir)/rclone"
-    declare -g RCLONE_STATE_DIR="$(common-lib-state-dir)/rclone"
-    declare -g RCLONE_CONFIG_DIR="$(common-lib-config-dir)/rclone"
-else
-    # Fallback to XDG standard paths
-    declare -g RCLONE_CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/rclone"
-    declare -g RCLONE_STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/rclone"
-    declare -g RCLONE_CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/rclone"
-fi
+declare -g RCLONE_CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/rclone"
+declare -g RCLONE_STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/rclone"
+declare -g RCLONE_CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/rclone"
 
 # Rclone configuration file remote_path
 declare -g RCLONE_CONFIG="${RCLONE_CONFIG:-${RCLONE_CONFIG_DIR}/rclone.conf}"
@@ -413,7 +405,7 @@ rclone-get-config() {
 rclone-set-config() {
     local remote_path="$1"
 
-    common-validate-required "$remote_path" "config file remote_path" || return 2
+    validate-type-string "$remote_path" || return 2
 
     RCLONE_CONFIG="$remote_path"
     mkdir -p "$(dirname "$RCLONE_CONFIG")" 2>/dev/null || true
@@ -435,8 +427,8 @@ rclone-set-config() {
 rclone-set-transfers() {
     local count="$1"
 
-    common-validate-required "$count" "transfer count" || return 2
-    common-validate-numeric "$count" || return 2
+    validate-type-string "$count" || return 2
+    validate-type-integer "$count" || return 2
 
     RCLONE_TRANSFERS="$count"
     log-debug "Transfers set" "count=$count"
@@ -457,8 +449,8 @@ rclone-set-transfers() {
 rclone-set-checkers() {
     local count="$1"
 
-    common-validate-required "$count" "checker count" || return 2
-    common-validate-numeric "$count" || return 2
+    validate-type-string "$count" || return 2
+    validate-type-integer "$count" || return 2
 
     RCLONE_CHECKERS="$count"
     log-debug "Checkers set" "count=$count"
@@ -479,7 +471,7 @@ rclone-set-checkers() {
 rclone-set-bandwidth() {
     local limit="$1"
 
-    common-validate-required "$limit" "bandwidth limit" || return 2
+    validate-type-string "$limit" || return 2
 
     if [[ "$limit" == "off" ]]; then
         RCLONE_BANDWIDTH_LIMIT=""
@@ -582,7 +574,7 @@ rclone-set-log-level() {
 rclone-set-exclude-file() {
     local file="$1"
 
-    common-validate-required "$file" "exclude file remote_path" || return 2
+    validate-type-string "$file" || return 2
 
     if [[ ! -f "$file" ]]; then
         log-error "Exclude file not found: $file"
@@ -609,7 +601,7 @@ rclone-set-exclude-file() {
 rclone-set-filter-file() {
     local file="$1"
 
-    common-validate-required "$file" "filter file remote_path" || return 2
+    validate-type-string "$file" || return 2
 
     if [[ ! -f "$file" ]]; then
         log-error "Filter file not found: $file"
@@ -707,7 +699,7 @@ rclone-list-remotes-long() {
 rclone-get-remote-type() {
     local remote="$1"
 
-    common-validate-required "$remote" "remote name" || return 2
+    validate-type-string "$remote" || return 2
 
     if ! rclone-check-available; then
         return 1
@@ -803,7 +795,7 @@ rclone-create-remote() {
 rclone-delete-remote() {
     local remote="$1"
 
-    common-validate-required "$remote" "remote name" || return 2
+    validate-type-string "$remote" || return 2
 
     if ! rclone-check-available; then
         return 1
@@ -847,7 +839,7 @@ rclone-delete-remote() {
 rclone-show-remote() {
     local remote="$1"
 
-    common-validate-required "$remote" "remote name" || return 2
+    validate-type-string "$remote" || return 2
 
     if ! rclone-check-available; then
         return 1
@@ -879,8 +871,8 @@ rclone-copy() {
     local src="$1"
     local dst="$2"
 
-    common-validate-required "$src" "source remote_path" || return 2
-    common-validate-required "$dst" "destination remote_path" || return 2
+    validate-type-string "$src" || return 2
+    validate-type-string "$dst" || return 2
 
     if ! rclone-check-available; then
         return 1
@@ -925,8 +917,8 @@ rclone-move() {
     shift 2
     local -a extra_opts=("$@")
 
-    common-validate-required "$src" "source remote_path" || return 2
-    common-validate-required "$dst" "destination remote_path" || return 2
+    validate-type-string "$src" || return 2
+    validate-type-string "$dst" || return 2
 
     if ! rclone-check-available; then
         return 1
@@ -973,8 +965,8 @@ rclone-sync() {
     local src="$1"
     local dst="$2"
 
-    common-validate-required "$src" "source remote_path" || return 2
-    common-validate-required "$dst" "destination remote_path" || return 2
+    validate-type-string "$src" || return 2
+    validate-type-string "$dst" || return 2
 
     if ! rclone-check-available; then
         return 1
@@ -1017,8 +1009,8 @@ rclone-bisync() {
     local path1="$1"
     local path2="$2"
 
-    common-validate-required "$path1" "remote_path 1" || return 2
-    common-validate-required "$path2" "remote_path 2" || return 2
+    validate-type-string "$path1" || return 2
+    validate-type-string "$path2" || return 2
 
     if ! rclone-check-available; then
         return 1
@@ -1061,8 +1053,8 @@ rclone-check-files() {
     local src="$1"
     local dst="$2"
 
-    common-validate-required "$src" "source remote_path" || return 2
-    common-validate-required "$dst" "destination remote_path" || return 2
+    validate-type-string "$src" || return 2
+    validate-type-string "$dst" || return 2
 
     if ! rclone-check-available; then
         return 1
@@ -1091,7 +1083,7 @@ rclone-check-files() {
 rclone-ls() {
     local remote_path="$1"
 
-    common-validate-required "$remote_path" "remote_path" || return 2
+    validate-type-string "$remote_path" || return 2
 
     if ! rclone-check-available; then
         return 1
@@ -1118,7 +1110,7 @@ rclone-ls() {
 rclone-lsl() {
     local remote_path="$1"
 
-    common-validate-required "$remote_path" "remote_path" || return 2
+    validate-type-string "$remote_path" || return 2
 
     if ! rclone-check-available; then
         return 1
@@ -1145,7 +1137,7 @@ rclone-lsl() {
 rclone-lsd() {
     local remote_path="$1"
 
-    common-validate-required "$remote_path" "remote_path" || return 2
+    validate-type-string "$remote_path" || return 2
 
     if ! rclone-check-available; then
         return 1
@@ -1173,7 +1165,7 @@ rclone-lsd() {
 rclone-lsjson() {
     local remote_path="$1"
 
-    common-validate-required "$remote_path" "remote_path" || return 2
+    validate-type-string "$remote_path" || return 2
 
     if ! rclone-check-available; then
         return 1
@@ -1200,7 +1192,7 @@ rclone-lsjson() {
 rclone-size() {
     local remote_path="$1"
 
-    common-validate-required "$remote_path" "remote_path" || return 2
+    validate-type-string "$remote_path" || return 2
 
     if ! rclone-check-available; then
         return 1
@@ -1227,7 +1219,7 @@ rclone-size() {
 rclone-delete() {
     local remote_path="$1"
 
-    common-validate-required "$remote_path" "remote_path" || return 2
+    validate-type-string "$remote_path" || return 2
 
     if ! rclone-check-available; then
         return 1
@@ -1264,7 +1256,7 @@ rclone-delete() {
 rclone-purge() {
     local remote_path="$1"
 
-    common-validate-required "$remote_path" "remote_path" || return 2
+    validate-type-string "$remote_path" || return 2
 
     if ! rclone-check-available; then
         return 1
@@ -1301,7 +1293,7 @@ rclone-purge() {
 rclone-rmdirs() {
     local remote_path="$1"
 
-    common-validate-required "$remote_path" "remote_path" || return 2
+    validate-type-string "$remote_path" || return 2
 
     if ! rclone-check-available; then
         return 1
@@ -1330,7 +1322,7 @@ rclone-rmdirs() {
 rclone-mkdir() {
     local remote_path="$1"
 
-    common-validate-required "$remote_path" "remote_path" || return 2
+    validate-type-string "$remote_path" || return 2
 
     if ! rclone-check-available; then
         return 1
@@ -1359,7 +1351,7 @@ rclone-mkdir() {
 rclone-rmdir() {
     local remote_path="$1"
 
-    common-validate-required "$remote_path" "remote_path" || return 2
+    validate-type-string "$remote_path" || return 2
 
     if ! rclone-check-available; then
         return 1
@@ -1397,8 +1389,8 @@ rclone-mount() {
     shift 2
     local -a extra_opts=("$@")
 
-    common-validate-required "$remote" "remote remote_path" || return 2
-    common-validate-required "$mountpoint" "mountpoint" || return 2
+    validate-type-string "$remote" || return 2
+    validate-type-string "$mountpoint" || return 2
 
     if ! rclone-check-available; then
         return 1
@@ -1469,7 +1461,7 @@ rclone-mount() {
 rclone-unmount() {
     local mountpoint="$1"
 
-    common-validate-required "$mountpoint" "mountpoint" || return 2
+    validate-type-string "$mountpoint" || return 2
 
     if ! mountpoint -q "$mountpoint" 2>/dev/null; then
         log-error "Not mounted" "remote_path=$mountpoint"
@@ -1565,7 +1557,7 @@ rclone-serve-http() {
     local remote_path="$1"
     local addr="${2:-localhost:8080}"
 
-    common-validate-required "$remote_path" "remote_path" || return 2
+    validate-type-string "$remote_path" || return 2
 
     if ! rclone-check-available; then
         return 1
@@ -1596,7 +1588,7 @@ rclone-serve-webdav() {
     local remote_path="$1"
     local addr="${2:-localhost:8080}"
 
-    common-validate-required "$remote_path" "remote_path" || return 2
+    validate-type-string "$remote_path" || return 2
 
     if ! rclone-check-available; then
         return 1
@@ -1627,7 +1619,7 @@ rclone-serve-ftp() {
     local remote_path="$1"
     local addr="${2:-localhost:2121}"
 
-    common-validate-required "$remote_path" "remote_path" || return 2
+    validate-type-string "$remote_path" || return 2
 
     if ! rclone-check-available; then
         return 1
@@ -1658,7 +1650,7 @@ rclone-serve-sftp() {
     local remote_path="$1"
     local addr="${2:-localhost:2022}"
 
-    common-validate-required "$remote_path" "remote_path" || return 2
+    validate-type-string "$remote_path" || return 2
 
     if ! rclone-check-available; then
         return 1
@@ -1689,7 +1681,7 @@ rclone-serve-restic() {
     local remote_path="$1"
     local addr="${2:-localhost:8080}"
 
-    common-validate-required "$remote_path" "remote_path" || return 2
+    validate-type-string "$remote_path" || return 2
 
     if ! rclone-check-available; then
         return 1
@@ -1834,7 +1826,7 @@ rclone-rc-call() {
     shift
     local json_data="$@"
 
-    common-validate-required "$endpoint" "endpoint" || return 2
+    validate-type-string "$endpoint" || return 2
 
     if ! rclone-check-available; then
         return 1
@@ -1900,7 +1892,7 @@ rclone-rc-version() {
 rclone-stats() {
     local remote_path="$1"
 
-    common-validate-required "$remote_path" "remote_path" || return 2
+    validate-type-string "$remote_path" || return 2
 
     if ! rclone-check-available; then
         return 1
@@ -1927,7 +1919,7 @@ rclone-stats() {
 rclone-cleanup() {
     local remote_path="$1"
 
-    common-validate-required "$remote_path" "remote_path" || return 2
+    validate-type-string "$remote_path" || return 2
 
     if ! rclone-check-available; then
         return 1
@@ -1959,7 +1951,7 @@ rclone-dedupe() {
     local remote_path="$1"
     local mode="${2:-interactive}"
 
-    common-validate-required "$remote_path" "remote_path" || return 2
+    validate-type-string "$remote_path" || return 2
 
     if ! rclone-check-available; then
         return 1
@@ -1988,7 +1980,7 @@ rclone-dedupe() {
 rclone-about() {
     local remote="$1"
 
-    common-validate-required "$remote" "remote" || return 2
+    validate-type-string "$remote" || return 2
 
     if ! rclone-check-available; then
         return 1

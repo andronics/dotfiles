@@ -51,6 +51,12 @@ if ! source "${DOTLIB}/_common" 2>/dev/null; then
     return 1
 fi
 
+# Load _xdg (required)
+if ! source "${DOTLIB}/_xdg" 2>/dev/null; then
+    echo "[ERROR] _singleton requires _xdg - cannot load" >&2
+    return 1
+fi
+
 # ------------------------------
 # Layer 2: Load Infrastructure (Optional)
 # ------------------------------
@@ -72,7 +78,7 @@ source "${DOTLIB}/_lifecycle" 2>/dev/null || true
 # ------------------------------
 
 # SINGLETON_LOCK_DIR: Directory for lock files
-declare -g SINGLETON_LOCK_DIR="${SINGLETON_LOCK_DIR:-$(common-xdg-runtime-dir)/locks}"
+declare -g SINGLETON_LOCK_DIR="${SINGLETON_LOCK_DIR:-$(xdg-runtime-dir locks)}"
 
 # SINGLETON_LOCK_TIMEOUT: Timeout for acquiring lock (seconds, 0 = no wait)
 declare -g SINGLETON_LOCK_TIMEOUT="${SINGLETON_LOCK_TIMEOUT:-0}"

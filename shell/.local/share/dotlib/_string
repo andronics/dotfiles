@@ -69,6 +69,12 @@ if ! source "${DOTLIB}/_common" 2>/dev/null; then
     return 6
 fi
 
+# Load _validation (required)
+if ! source "${DOTLIB}/_validation" 2>/dev/null; then
+    echo "[ERROR] _string requires _validation - cannot load" >&2
+    return 6
+fi
+
 # Load _log (optional with fallback)
 if ! source "${DOTLIB}/_log" 2>/dev/null; then
     log-error() { echo "[ERROR] $*" >&2; }
@@ -224,7 +230,7 @@ string-pad-right() {
     local width="$2"
     local char="${3:-$STRING_PAD_CHAR}"
 
-    if ! common-validate-numeric "$width" 2>/dev/null; then
+    if ! validate-type-integer "$width" 2>/dev/null; then
         log-error "string-pad-right: width must be numeric: $width"
         return 1
     fi
@@ -240,7 +246,7 @@ string-pad-left() {
     local width="$2"
     local char="${3:-$STRING_PAD_CHAR}"
 
-    if ! common-validate-numeric "$width" 2>/dev/null; then
+    if ! validate-type-integer "$width" 2>/dev/null; then
         log-error "string-pad-left: width must be numeric: $width"
         return 1
     fi
@@ -255,7 +261,7 @@ string-pad-center() {
     local width="$2"
     local char="${3:-$STRING_PAD_CHAR}"
 
-    if ! common-validate-numeric "$width" 2>/dev/null; then
+    if ! validate-type-integer "$width" 2>/dev/null; then
         log-error "string-pad-center: width must be numeric: $width"
         return 1
     fi
@@ -391,7 +397,7 @@ string-repeat() {
     local str="$1"
     local count="$2"
 
-    if ! common-validate-numeric "$count" 2>/dev/null; then
+    if ! validate-type-integer "$count" 2>/dev/null; then
         log-error "string-repeat: count must be numeric: $count"
         return 1
     fi

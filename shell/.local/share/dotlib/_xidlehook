@@ -48,6 +48,12 @@ if ! source "${DOTLIB}/_common" 2>/dev/null; then
     return 1
 fi
 
+# Load _xdg (required)
+if ! source "${DOTLIB}/_xdg" 2>/dev/null; then
+    print -u2 "ERROR: _xidlehook requires _xdg - cannot load"
+    return 1
+fi
+
 # Load _log (optional, with fallback)
 if ! source "${DOTLIB}/_log" 2>/dev/null; then
     log-error() { print -u2 "ERROR: $*"; }
@@ -67,7 +73,7 @@ source "${DOTLIB}/_process" 2>/dev/null || true
 # ------------------------------
 
 # XIDLEHOOK_SOCKET: Socket file path
-declare -g XIDLEHOOK_SOCKET="${XIDLEHOOK_SOCKET:-$(common-xdg-runtime-dir)/xidlehook.sock}"
+declare -g XIDLEHOOK_SOCKET="${XIDLEHOOK_SOCKET:-$(xdg-runtime-file xidlehook xidlehook.sock)}"
 
 # XIDLEHOOK_TIMER_DURATION: Idle timeout in seconds
 declare -g XIDLEHOOK_TIMER_DURATION="${XIDLEHOOK_TIMER_DURATION:-300}"

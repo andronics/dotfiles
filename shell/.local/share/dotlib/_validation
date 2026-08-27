@@ -330,7 +330,7 @@ validate-type-enum() {
     local enum_values="$2"
     ((_VALIDATION_TOTAL_CHECKS++)) || true
 
-    common-validate-required "$enum_values" "enum_values" || return 2
+    validate-type-string "$enum_values" || return 2
 
     # Split enum_values by pipe character
     local -a allowed=("${(@s:|:)enum_values}")
@@ -416,7 +416,7 @@ validate-type() {
     local type="$2"
     local type_param="${3:-}"
 
-    common-validate-required "$type" "type" || return 2
+    validate-type-string "$type" || return 2
 
     _validation-log-debug "Validating type: '$type' for value: '$value'"
 
@@ -606,6 +606,33 @@ validate-constraint-pattern() {
     fi
 }
 
+# Path readable by the current user - covers what common-validate-file/-directory
+# used to check alongside existence
+validate-constraint-readable() {
+    local value="$1"
+    ((_VALIDATION_TOTAL_CHECKS++)) || true
+
+    if [[ -r "$value" ]]; then
+        return 0
+    else
+        _validation-log-error "Path not readable: '$value'"
+        return 1
+    fi
+}
+
+# Path writable by the current user
+validate-constraint-writable() {
+    local value="$1"
+    ((_VALIDATION_TOTAL_CHECKS++)) || true
+
+    if [[ -w "$value" ]]; then
+        return 0
+    else
+        _validation-log-error "Path not writable: '$value'"
+        return 1
+    fi
+}
+
 # Generic constraint validation dispatcher
 # Usage: validate-constraint <value> <constraint_string>
 # Constraint string format: "constraint1:param1,constraint2:param2"
@@ -614,7 +641,7 @@ validate-constraint() {
     local value="$1"
     local constraint_string="$2"
 
-    common-validate-required "$constraint_string" "constraint_string" || return 2
+    validate-type-string "$constraint_string" || return 2
 
     # Split constraint string by comma
     local -a constraints=("${(@s:,:)constraint_string}")
@@ -657,6 +684,12 @@ validate-constraint() {
             pattern|regex)
                 validate-constraint-pattern "$value" "$constraint_param" || return 1
                 ;;
+            readable)
+                validate-constraint-readable "$value" || return 1
+                ;;
+            writable)
+                validate-constraint-writable "$value" || return 1
+                ;;
             *)
                 _validation-log-warning "Unknown constraint: $constraint_name"
                 if [[ "$VALIDATION_STRICT" == "true" ]]; then
@@ -680,8 +713,8 @@ validate-required() {
     local data="$1"
     local required_fields="$2"
 
-    common-validate-required "$data" "data" || return 2
-    common-validate-required "$required_fields" "required_fields" || return 2
+    validate-type-string "$data" || return 2
+    validate-type-string "$required_fields" || return 2
 
     local -a fields=("${(@s:,:)required_fields}")
     local missing_fields=()
@@ -714,8 +747,8 @@ validate-register() {
     local type_name="$1"
     local validator_func="$2"
 
-    common-validate-required "$type_name" "type_name" || return 2
-    common-validate-required "$validator_func" "validator_func" || return 2
+    validate-type-string "$type_name" || return 2
+    validate-type-string "$validator_func" || return 2
 
     if ! common-function-exists "$validator_func"; then
         _validation-log-error "Validator function does not exist: $validator_func"
@@ -733,7 +766,7 @@ validate-register() {
 validate-unregister() {
     local type_name="$1"
 
-    common-validate-required "$type_name" "type_name" || return 2
+    validate-type-string "$type_name" || return 2
 
     if [[ -n "${_VALIDATION_CUSTOM[$type_name]}" ]]; then
         unset "_VALIDATION_CUSTOM[$type_name]"

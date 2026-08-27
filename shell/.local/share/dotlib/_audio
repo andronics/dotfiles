@@ -54,6 +54,12 @@ if ! source "${DOTLIB}/_common" 2>/dev/null; then
     return 1
 fi
 
+# Load _validation (required)
+if ! source "${DOTLIB}/_validation" 2>/dev/null; then
+    echo "[ERROR] _audio requires _validation - cannot load" >&2
+    return 1
+fi
+
 # Load required extensions
 if ! source "${DOTLIB}/_jq" 2>/dev/null; then
     echo "[ERROR] _audio requires _jq v2.0 - cannot load" >&2
@@ -346,7 +352,7 @@ audio-device-find() {
     local pattern="$1"
 
     _audio-init
-    common-validate-required "$pattern" "pattern" || return 2
+    validate-type-string "$pattern" || return 2
 
     # Get all sink names
     local sinks
@@ -513,7 +519,7 @@ audio-sink-get-name() {
     local sink="$1"
 
     _audio-init
-    common-validate-required "$sink" "sink ID" || return 2
+    validate-type-string "$sink" || return 2
 
     local name
     if [[ "$AUDIO_USE_PACTL" == "true" ]] && _audio-check-command "pactl" >/dev/null 2>&1; then
@@ -591,7 +597,7 @@ audio-sink-set() {
     local sink="$1"
 
     _audio-init
-    common-validate-required "$sink" "sink" || return 2
+    validate-type-string "$sink" || return 2
 
     log-info "Setting default sink" "sink=$sink"
 
@@ -798,8 +804,8 @@ audio-volume-set() {
     local sink="${2:-$(audio-sink-get-current)}"
 
     _audio-init
-    common-validate-required "$volume" "volume" || return 2
-    common-validate-numeric "$volume" || {
+    validate-type-string "$volume" || return 2
+    validate-type-integer "$volume" || {
         log-error "Volume must be numeric" "volume=$volume"
         return 2
     }

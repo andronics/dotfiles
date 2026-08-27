@@ -88,7 +88,7 @@ declare -gr XDG_ERROR_NOT_FOUND=4
 # Returns: full path to config directory
 xdg-config-dir() {
     local app_name="${1:?Application name required}"
-    echo "$(common-xdg-config-home)/$app_name"
+    echo "${XDG_CONFIG_HOME:-$HOME/.config}/$app_name"
 }
 
 # Get XDG cache directory for application
@@ -97,7 +97,7 @@ xdg-config-dir() {
 # Returns: full path to cache directory
 xdg-cache-dir() {
     local app_name="${1:?Application name required}"
-    echo "$(common-xdg-cache-home)/$app_name"
+    echo "${XDG_CACHE_HOME:-$HOME/.cache}/$app_name"
 }
 
 # Get XDG data directory for application
@@ -106,7 +106,7 @@ xdg-cache-dir() {
 # Returns: full path to data directory
 xdg-data-dir() {
     local app_name="${1:?Application name required}"
-    echo "$(common-xdg-data-home)/$app_name"
+    echo "${XDG_DATA_HOME:-$HOME/.local/share}/$app_name"
 }
 
 # Get XDG state directory for application
@@ -115,7 +115,7 @@ xdg-data-dir() {
 # Returns: full path to state directory
 xdg-state-dir() {
     local app_name="${1:?Application name required}"
-    echo "$(common-xdg-state-home)/$app_name"
+    echo "${XDG_STATE_HOME:-$HOME/.local/state}/$app_name"
 }
 
 # Get XDG runtime directory for application
@@ -124,7 +124,7 @@ xdg-state-dir() {
 # Returns: full path to runtime directory
 xdg-runtime-dir() {
     local app_name="${1:?Application name required}"
-    echo "$(common-xdg-runtime-dir)/$app_name"
+    echo "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/$app_name"
 }
 
 # ------------------------------

@@ -70,6 +70,12 @@ if ! source "${DOTLIB}/_common" 2>/dev/null; then
     return 6
 fi
 
+# Required: _xdg
+if ! source "${DOTLIB}/_xdg" 2>/dev/null; then
+    echo "[ERROR] _notify requires _xdg - cannot load" >&2
+    return 6
+fi
+
 # Optional: _log (use fallbacks if unavailable)
 if ! source "${DOTLIB}/_log" 2>/dev/null; then
     log-debug() { : ; }
@@ -113,7 +119,7 @@ declare -g NOTIFY_HISTORY_SIZE="${NOTIFY_HISTORY_SIZE:-100}"
 declare -g NOTIFY_APP_NAME="${NOTIFY_APP_NAME:-Shell}"
 
 # State directory for notification data
-declare -g NOTIFY_STATE_DIR="$(common-xdg-state-home)/notify"
+declare -g NOTIFY_STATE_DIR="$(xdg-state-dir notify)"
 
 # ------------------------------
 # Event Constants

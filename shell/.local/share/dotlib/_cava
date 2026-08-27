@@ -53,6 +53,12 @@ if ! source "${DOTLIB}/_common" 2>/dev/null; then
     return 1
 fi
 
+# Load _xdg (required)
+if ! source "${DOTLIB}/_xdg" 2>/dev/null; then
+    echo "[ERROR] _cava requires _xdg - cannot load" >&2
+    return 1
+fi
+
 # Load infrastructure (optional with fallbacks)
 if ! source "${DOTLIB}/_log" 2>/dev/null; then
     log-info() { echo "[INFO] $*"; }
@@ -163,9 +169,9 @@ _cava-init() {
     log-debug "Initializing _cava v$CAVA_VERSION"
 
     # Initialize XDG paths (requires _common to be loaded)
-    CAVA_CACHE_DIR="$(common-lib-cache-dir)/cava"
-    CAVA_STATE_DIR="$(common-lib-state-dir)/cava"
-    CAVA_CONFIG_DIR="$(common-lib-config-dir)/cava"
+    CAVA_CACHE_DIR="$(xdg-cache-dir cava)"
+    CAVA_STATE_DIR="$(xdg-state-dir cava)"
+    CAVA_CONFIG_DIR="$(xdg-config-dir cava)"
 
     # Initialize directories
     _cava-init-dirs

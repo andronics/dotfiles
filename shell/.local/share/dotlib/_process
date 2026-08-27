@@ -52,6 +52,11 @@ if ! source "${DOTLIB}/_common" 2>/dev/null; then
     return 1
 fi
 
+if ! source "${DOTLIB}/_xdg" 2>/dev/null; then
+    echo "[ERROR] _process requires _xdg - cannot load" >&2
+    return 1
+fi
+
 # Load infrastructure (optional with fallbacks)
 if ! source "${DOTLIB}/_log" 2>/dev/null; then
     log-info() { echo "[INFO] $*"; }
@@ -76,13 +81,13 @@ declare -g PROCESS_LIFECYCLE_AVAILABLE=$(common-command-exists "lifecycle-add-cl
 # ------------------------------
 
 # PID file directory
-declare -g PROCESS_PID_DIR="${PROCESS_PID_DIR:-$(common-xdg-runtime-dir)/process}"
+declare -g PROCESS_PID_DIR="${PROCESS_PID_DIR:-$(xdg-runtime-dir process)}"
 
 # State directory
-declare -g PROCESS_STATE_DIR="${PROCESS_STATE_DIR:-$(common-lib-state-dir)/process}"
+declare -g PROCESS_STATE_DIR="${PROCESS_STATE_DIR:-$(xdg-state-dir process)}"
 
 # Log directory
-declare -g PROCESS_LOG_DIR="${PROCESS_LOG_DIR:-$(common-lib-state-dir)/process/logs}"
+declare -g PROCESS_LOG_DIR="${PROCESS_LOG_DIR:-$(xdg-state-dir process)/logs}"
 
 # Default timeout for graceful shutdown (seconds)
 declare -g PROCESS_DEFAULT_TIMEOUT="${PROCESS_DEFAULT_TIMEOUT:-10}"

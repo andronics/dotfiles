@@ -1,6 +1,6 @@
 #!/usr/bin/env zsh
 
-# _lifecycle - Comprehensive signal handling, event management, and cleanup system
+# _lifecycle - Signal handling and cleanup coordination
 # Part of the dotfiles library v2.0
 # Version: 3.2.0
 #
@@ -9,28 +9,19 @@
 #
 # Provides:
 #   - Multi-handler signal management
-#   - Integrated event system via _events extension
-#   - Comprehensive cleanup coordination (LIFO and dependency-ordered)
-#   - Background job and PID tracking
-#   - Temporary resource management
-#   - State directory management (XDG-compliant)
+#   - Event emission via _events (signal/exit/cleanup events)
+#   - Cleanup coordination (LIFO and dependency-ordered)
+#   - Background job (PID) tracking
 #   - Exit code propagation
-#   - Timeout handling
 #   - Dry-run mode support
-#   - Systemd service integration
-#   - Process restart capabilities (v3.1 NEW)
-#   - Process groups management (v3.1 NEW)
-#   - Dependency-ordered cleanup (v3.1 NEW)
-#   - Execution tracking and history (v3.2 NEW)
-#   - Checkpoint/resume support (v3.2 NEW)
 #
 # Dependencies:
 #   Required:
-#     - _common v2.0: Core utilities
+#     - _common: Core utilities
+#     - _validation: Type validation
 #   Optional (gracefully degraded):
-#     - _log v2.0: Logging functions
-#     - _events v2.0: Full event system
-#     - _dryrun: Dry-run mode support (deprecated, using LIFECYCLE_DRY_RUN)
+#     - _log: Logging functions
+#     - _events: Event emission on signal/exit/cleanup
 
 # ------------------------------
 # Source Guard
@@ -55,6 +46,12 @@ if ! source "${DOTLIB}/_common" 2>/dev/null; then
     return 1
 fi
 
+# Load _validation (required)
+if ! source "${DOTLIB}/_validation" 2>/dev/null; then
+    echo "[ERROR] _lifecycle requires _validation - cannot load" >&2
+    return 1
+fi
+
 # Load infrastructure (optional with fallbacks)
 if ! source "${DOTLIB}/_log" 2>/dev/null; then
     log-info() { echo "[INFO] $*"; }
@@ -76,14 +73,8 @@ fi
 # Configuration
 # ------------------------------
 
-# State directory
-declare -g LIFECYCLE_STATE_DIR="${LIFECYCLE_STATE_DIR:-$(common-lib-state-dir)/lifecycle}"
-
 # Cleanup behavior
 declare -g LIFECYCLE_CLEANUP_JOBS="${LIFECYCLE_CLEANUP_JOBS:-false}"      # Auto-kill tracked background jobs on exit
-declare -g LIFECYCLE_CLEANUP_STATE="${LIFECYCLE_CLEANUP_STATE:-false}"    # Remove state directory on exit
-declare -g LIFECYCLE_CLEANUP_TEMP="${LIFECYCLE_CLEANUP_TEMP:-true}"       # Remove tracked temp files/dirs on exit
-declare -g LIFECYCLE_CLEANUP_SERVICES="${LIFECYCLE_CLEANUP_SERVICES:-false}"  # Stop tracked systemd services on exit
 
 # Behavior
 declare -g LIFECYCLE_DEBUG="${LIFECYCLE_DEBUG:-false}"                    # Enable debug logging
@@ -93,17 +84,8 @@ declare -g LIFECYCLE_TRAP_ERRORS="${LIFECYCLE_TRAP_ERRORS:-true}"        # Insta
 declare -g LIFECYCLE_GRACEFUL_SHUTDOWN_TIMEOUT="${LIFECYCLE_GRACEFUL_SHUTDOWN_TIMEOUT:-10}"  # Timeout for graceful shutdown
 declare -g LIFECYCLE_DRY_RUN="${LIFECYCLE_DRY_RUN:-false}"               # Dry-run mode
 
-# v3.1 NEW: Restart capabilities
-declare -g LIFECYCLE_RESTART_MONITOR_INTERVAL="${LIFECYCLE_RESTART_MONITOR_INTERVAL:-5}"  # Check interval in seconds
-declare -g LIFECYCLE_RESTART_DEFAULT_MAX_ATTEMPTS="${LIFECYCLE_RESTART_DEFAULT_MAX_ATTEMPTS:-3}"
-declare -g LIFECYCLE_RESTART_DEFAULT_BACKOFF="${LIFECYCLE_RESTART_DEFAULT_BACKOFF:-1}"
-
-# v3.1 NEW: Dependency-ordered cleanup
+# Dependency-ordered cleanup
 declare -g LIFECYCLE_CLEANUP_USE_DEPENDENCY_ORDER="${LIFECYCLE_CLEANUP_USE_DEPENDENCY_ORDER:-true}"
-
-# v3.2 NEW: Execution tracking
-declare -g LIFECYCLE_TRACK_EXECUTION="${LIFECYCLE_TRACK_EXECUTION:-true}"
-declare -g LIFECYCLE_CHECKPOINT_DIR="${LIFECYCLE_CHECKPOINT_DIR:-$(common-lib-state-dir)/lifecycle/checkpoints}"
 
 # Event names (if _events is available)
 declare -g LIFECYCLE_EVENT_SIGNAL_RECEIVED="lifecycle.signal.received"
@@ -119,23 +101,16 @@ declare -g LIFECYCLE_EVENT_EXIT_COMPLETE="lifecycle.exit.complete"
 # Signal handlers registry (signal -> space-separated handler list)
 declare -g -A _LIFECYCLE_SIGNAL_HANDLERS=()
 
-# Event handlers registry (event -> space-separated handler list)
-# Note: If _events is available, we use it instead
-declare -g -A _LIFECYCLE_EVENT_HANDLERS=()
-
 # Cleanup function registry (LIFO order - backward compatibility)
 declare -g -a _LIFECYCLE_CLEANUP_FUNCTIONS=()
 
-# v3.1 NEW: Dependency-ordered cleanup
+# Dependency-ordered cleanup
 declare -g -A _LIFECYCLE_CLEANUP_REGISTRY=()    # id -> function/command
 declare -g -A _LIFECYCLE_CLEANUP_DEPS=()        # id -> space-separated dependency IDs
 declare -g -a _LIFECYCLE_CLEANUP_ORDER=()       # Computed execution order
 
 # Resource tracking
 declare -g -a _LIFECYCLE_TRACKED_PIDS=()
-declare -g -a _LIFECYCLE_TRACKED_TEMP_FILES=()
-declare -g -a _LIFECYCLE_TRACKED_TEMP_DIRS=()
-declare -g -a _LIFECYCLE_TRACKED_SERVICES=()  # Format: "service_name:scope" (e.g., "myapp:--user")
 
 # Active traps
 declare -g -A _LIFECYCLE_ACTIVE_TRAPS=()
@@ -143,64 +118,20 @@ declare -g -A _LIFECYCLE_ACTIVE_TRAPS=()
 # Graceful shutdown flag
 declare -g LIFECYCLE_SHUTDOWN_REQUESTED=false
 
-# v3.1 NEW: Restart capabilities
-declare -g -A _LIFECYCLE_RESTART_ENABLED=()      # pid -> true/false
-declare -g -A _LIFECYCLE_RESTART_COMMAND=()      # pid -> restart command
-declare -g -A _LIFECYCLE_RESTART_MAX=()          # pid -> max attempts
-declare -g -A _LIFECYCLE_RESTART_ATTEMPTS=()     # pid -> current attempts
-declare -g -A _LIFECYCLE_RESTART_BACKOFF=()      # pid -> current backoff seconds
-declare -g _LIFECYCLE_RESTART_MONITOR_PID=""     # Background monitor PID
-
-# v3.1 NEW: Process groups
-declare -g -A _LIFECYCLE_PROCESS_GROUPS=()       # group_name -> space-separated PIDs
-declare -g -A _LIFECYCLE_PROCESS_GROUP_META=()   # group_name -> metadata
-
-# v3.2 NEW: Execution tracking
-declare -g -a _LIFECYCLE_EXECUTION_HISTORY=()    # Array of execution records (JSON)
-declare -g -A _LIFECYCLE_EXECUTION_STATE=()      # task_id -> state (pending|running|completed|failed|skipped)
-declare -g -A _LIFECYCLE_EXECUTION_START=()      # task_id -> start timestamp
-declare -g -A _LIFECYCLE_EXECUTION_END=()        # task_id -> end timestamp
-declare -g -A _LIFECYCLE_EXECUTION_RESULT=()     # task_id -> result/output
-declare -g -A _LIFECYCLE_EXECUTION_ERROR=()      # task_id -> error message
-
 # ------------------------------
 # Utility Functions
 # ------------------------------
 
-# Emit event (uses _events if available, otherwise internal)
+# Emit event via _events if available, otherwise a no-op
 _lifecycle_emit() {
     local event_name="$1"
     shift
     local event_data=("$@")
 
-    if [[ "$LIFECYCLE_EMIT_EVENTS" != "true" ]]; then
-        return 0
-    fi
+    [[ "$LIFECYCLE_EMIT_EVENTS" != "true" ]] && return 0
+    [[ "$LIFECYCLE_EVENTS_AVAILABLE" != "true" ]] && return 0
 
-    if [[ "$LIFECYCLE_EVENTS_AVAILABLE" == "true" ]]; then
-        events-emit "$event_name" "${event_data[@]}"
-    else
-        # Fallback to internal event system
-        _lifecycle_internal_event_dispatch "$event_name" "${event_data[@]}"
-    fi
-}
-
-# Internal event dispatcher (fallback when _events not available)
-_lifecycle_internal_event_dispatch() {
-    local event_name="$1"
-    shift
-    local event_data=("$@")
-
-    local handlers="${_LIFECYCLE_EVENT_HANDLERS[$event_name]}"
-    if [[ -z "$handlers" ]]; then
-        return 0
-    fi
-
-    for handler in $handlers; do
-        if typeset -f "$handler" >/dev/null 2>&1; then
-            "$handler" "${event_data[@]}" || true
-        fi
-    done
+    events-emit "$event_name" "${event_data[@]}"
 }
 
 # Check dry-run mode
@@ -376,12 +307,6 @@ lifecycle-exit() {
 
     log-debug "EXIT handler triggered (code: $LIFECYCLE_EXIT_CODE)"
 
-    # Stop restart monitor if running
-    if [[ -n "$_LIFECYCLE_RESTART_MONITOR_PID" ]]; then
-        kill "$_LIFECYCLE_RESTART_MONITOR_PID" 2>/dev/null || true
-        wait "$_LIFECYCLE_RESTART_MONITOR_PID" 2>/dev/null || true
-    fi
-
     # Run cleanup functions
     _lifecycle_run_cleanup
 
@@ -390,19 +315,6 @@ lifecycle-exit() {
         _lifecycle_cleanup_jobs
     fi
     _lifecycle_cleanup_pids
-
-    if [[ "$LIFECYCLE_CLEANUP_TEMP" == "true" ]]; then
-        _lifecycle_cleanup_temp_files
-        _lifecycle_cleanup_temp_dirs
-    fi
-
-    if [[ "$LIFECYCLE_CLEANUP_SERVICES" == "true" ]]; then
-        _lifecycle_cleanup_services
-    fi
-
-    if [[ "$LIFECYCLE_CLEANUP_STATE" == "true" ]]; then
-        _lifecycle_cleanup_state
-    fi
 
     _lifecycle_emit "$LIFECYCLE_EVENT_EXIT_COMPLETE" "$LIFECYCLE_EXIT_CODE"
 
@@ -500,130 +412,6 @@ lifecycle-graceful-shutdown() {
 }
 
 # ------------------------------
-# Event System (Wraps _events or provides fallback)
-# ------------------------------
-
-# Register an event handler
-#
-# Usage: lifecycle-event EVENT_NAME HANDLER_FUNCTION
-#
-lifecycle-event() {
-    local event_name="$1"
-    local handler="$2"
-
-    if [[ -z "$event_name" ]] || [[ -z "$handler" ]]; then
-        log-error "Event name and handler required"
-        return 1
-    fi
-
-    if [[ "$LIFECYCLE_EVENTS_AVAILABLE" == "true" ]]; then
-        events-on "$event_name" "$handler"
-    else
-        # Fallback to internal event system
-        if [[ -z "${_LIFECYCLE_EVENT_HANDLERS[$event_name]}" ]]; then
-            _LIFECYCLE_EVENT_HANDLERS[$event_name]="$handler"
-        else
-            _LIFECYCLE_EVENT_HANDLERS[$event_name]="${_LIFECYCLE_EVENT_HANDLERS[$event_name]} $handler"
-        fi
-    fi
-
-    log-debug "Registered handler '$handler' for event '$event_name'"
-    return 0
-}
-
-# Trigger an event
-#
-# Usage: lifecycle-event-trigger EVENT_NAME [ARGS...]
-#
-lifecycle-event-trigger() {
-    local event_name="$1"
-    shift
-    local args=("$@")
-
-    if [[ "$LIFECYCLE_EVENTS_AVAILABLE" == "true" ]]; then
-        events-emit "$event_name" "${args[@]}"
-    else
-        _lifecycle_internal_event_dispatch "$event_name" "${args[@]}"
-    fi
-}
-
-# Remove an event handler
-#
-# Usage: lifecycle-event-remove EVENT_NAME HANDLER_FUNCTION
-#
-lifecycle-event-remove() {
-    local event_name="$1"
-    local handler="$2"
-
-    if [[ "$LIFECYCLE_EVENTS_AVAILABLE" == "true" ]]; then
-        events-off "$event_name" "$handler"
-    else
-        # Fallback to internal event system
-        local current_handlers="${_LIFECYCLE_EVENT_HANDLERS[$event_name]}"
-        local new_handlers=""
-
-        for h in $current_handlers; do
-            if [[ "$h" != "$handler" ]]; then
-                new_handlers="${new_handlers} ${h}"
-            fi
-        done
-
-        if [[ -n "$new_handlers" ]]; then
-            _LIFECYCLE_EVENT_HANDLERS[$event_name]="${new_handlers## }"
-        else
-            unset "_LIFECYCLE_EVENT_HANDLERS[$event_name]"
-        fi
-    fi
-
-    log-debug "Removed handler '$handler' from event '$event_name'"
-    return 0
-}
-
-# Clear all handlers from an event
-#
-# Usage: lifecycle-event-clear EVENT_NAME
-#
-lifecycle-event-clear() {
-    local event_name="$1"
-
-    if [[ "$LIFECYCLE_EVENTS_AVAILABLE" == "true" ]]; then
-        events-off "$event_name"
-    else
-        unset "_LIFECYCLE_EVENT_HANDLERS[$event_name]"
-    fi
-
-    log-debug "Cleared all handlers for event '$event_name'"
-    return 0
-}
-
-# Register one-time event handler
-#
-# Usage: lifecycle-event-once EVENT_NAME HANDLER_FUNCTION
-#
-lifecycle-event-once() {
-    local event_name="$1"
-    local handler="$2"
-
-    if [[ "$LIFECYCLE_EVENTS_AVAILABLE" == "true" ]]; then
-        events-once "$event_name" "$handler"
-    else
-        # Create wrapper for fallback
-        local wrapper_name="_lifecycle_once_${RANDOM}_${handler//[^a-zA-Z0-9_]/}"
-        eval "
-        ${wrapper_name}() {
-            ${handler} \"\$@\"
-            lifecycle-event-remove \"${event_name}\" \"${wrapper_name}\"
-            unfunction ${wrapper_name} 2>/dev/null
-        }
-        "
-        lifecycle-event "$event_name" "$wrapper_name"
-    fi
-
-    log-debug "Registered one-time handler '$handler' for event '$event_name'"
-    return 0
-}
-
-# ------------------------------
 # Cleanup Management (Legacy LIFO)
 # ------------------------------
 
@@ -684,7 +472,7 @@ lifecycle-cleanup-list() {
 }
 
 # ------------------------------
-# v3.1 NEW: Dependency-Ordered Cleanup
+# Dependency-Ordered Cleanup
 # ------------------------------
 
 # Register cleanup with ID and optional dependencies
@@ -713,8 +501,8 @@ lifecycle-cleanup-add() {
     local dependencies=("$@")
 
     # Validation
-    common-validate-required "$cleanup_id" "cleanup ID" || return 2
-    common-validate-required "$cleanup_func_or_cmd" "cleanup function/command" || return 2
+    validate-type-string "$cleanup_id" || return 2
+    validate-type-string "$cleanup_func_or_cmd" || return 2
 
     # Store cleanup
     _LIFECYCLE_CLEANUP_REGISTRY[$cleanup_id]="$cleanup_func_or_cmd"
@@ -752,8 +540,8 @@ lifecycle-cleanup-add-dependency() {
     local cleanup_id="$1"
     local depends_on_id="$2"
 
-    common-validate-required "$cleanup_id" "cleanup ID" || return 2
-    common-validate-required "$depends_on_id" "dependency ID" || return 2
+    validate-type-string "$cleanup_id" || return 2
+    validate-type-string "$depends_on_id" || return 2
 
     # Add to dependencies
     local current_deps="${_LIFECYCLE_CLEANUP_DEPS[$cleanup_id]}"
@@ -942,371 +730,6 @@ _lifecycle_run_cleanup() {
 }
 
 # ------------------------------
-# v3.1 NEW: Restart Capabilities
-# ------------------------------
-
-# Enable auto-restart for a process
-#
-# Function: lifecycle-restart-enable
-# Description: Enable auto-restart for a process with configurable retry limits
-# Parameters:
-#   $1 - PID to monitor (required)
-#   $2 - Restart command (required)
-#   $3 - Max restart attempts (optional, default: 3)
-#   $4 - Initial backoff seconds (optional, default: 1)
-# Returns:
-#   0 - Success
-#   2 - Invalid arguments
-# Events:
-#   lifecycle.restart.enabled - Emitted when restart is enabled
-# Example:
-#   lifecycle-restart-enable 1234 "myapp --daemon" 5 2
-#
-lifecycle-restart-enable() {
-    local pid="$1"
-    local restart_command="$2"
-    local max_attempts="${3:-$LIFECYCLE_RESTART_DEFAULT_MAX_ATTEMPTS}"
-    local initial_backoff="${4:-$LIFECYCLE_RESTART_DEFAULT_BACKOFF}"
-
-    # Validation
-    common-validate-required "$pid" "PID" || return 2
-    common-validate-required "$restart_command" "restart command" || return 2
-    common-validate-numeric "$pid" || {
-        log-error "Invalid PID: $pid"
-        return 2
-    }
-
-    # Store configuration
-    _LIFECYCLE_RESTART_ENABLED[$pid]="true"
-    _LIFECYCLE_RESTART_COMMAND[$pid]="$restart_command"
-    _LIFECYCLE_RESTART_MAX[$pid]="$max_attempts"
-    _LIFECYCLE_RESTART_ATTEMPTS[$pid]=0
-    _LIFECYCLE_RESTART_BACKOFF[$pid]="$initial_backoff"
-
-    # Start monitor if not running
-    _lifecycle-restart-monitor-start
-
-    log-info "Restart enabled for PID $pid" "max_attempts=$max_attempts"
-    _lifecycle_emit "lifecycle.restart.enabled" "pid=$pid" "max_attempts=$max_attempts"
-
-    return 0
-}
-
-# Disable auto-restart
-#
-# Usage: lifecycle-restart-disable PID
-#
-lifecycle-restart-disable() {
-    local pid="$1"
-
-    common-validate-required "$pid" "PID" || return 2
-
-    unset "_LIFECYCLE_RESTART_ENABLED[$pid]"
-    unset "_LIFECYCLE_RESTART_COMMAND[$pid]"
-    unset "_LIFECYCLE_RESTART_MAX[$pid]"
-    unset "_LIFECYCLE_RESTART_ATTEMPTS[$pid]"
-    unset "_LIFECYCLE_RESTART_BACKOFF[$pid]"
-
-    log-debug "Restart disabled for PID $pid"
-    _lifecycle_emit "lifecycle.restart.disabled" "pid=$pid"
-
-    return 0
-}
-
-# Start background monitor (internal)
-_lifecycle-restart-monitor-start() {
-    # Don't start if already running
-    if [[ -n "$_LIFECYCLE_RESTART_MONITOR_PID" ]] && kill -0 "$_LIFECYCLE_RESTART_MONITOR_PID" 2>/dev/null; then
-        return 0
-    fi
-
-    # Start monitor in background
-    (
-        while true; do
-            lifecycle-restart-check
-            sleep "$LIFECYCLE_RESTART_MONITOR_INTERVAL"
-        done
-    ) &
-
-    _LIFECYCLE_RESTART_MONITOR_PID=$!
-    log-debug "Started restart monitor" "pid=$_LIFECYCLE_RESTART_MONITOR_PID"
-}
-
-# Check all restart-enabled PIDs and restart dead ones
-#
-# Usage: lifecycle-restart-check
-# Returns: number of restarts performed
-#
-lifecycle-restart-check() {
-    local restarts=0
-
-    for pid in "${(@k)_LIFECYCLE_RESTART_ENABLED}"; do
-        [[ "${_LIFECYCLE_RESTART_ENABLED[$pid]}" != "true" ]] && continue
-
-        # Check if process is alive
-        if ! kill -0 "$pid" 2>/dev/null; then
-            if _lifecycle-restart-process "$pid"; then
-                ((restarts++)) || true
-            fi
-        fi
-    done
-
-    return $restarts
-}
-
-# Restart a specific process (internal)
-_lifecycle-restart-process() {
-    local old_pid="$1"
-    local attempts="${_LIFECYCLE_RESTART_ATTEMPTS[$old_pid]:-0}"
-    local max_attempts="${_LIFECYCLE_RESTART_MAX[$old_pid]:-3}"
-    local backoff="${_LIFECYCLE_RESTART_BACKOFF[$old_pid]:-1}"
-    local command="${_LIFECYCLE_RESTART_COMMAND[$old_pid]}"
-
-    # Check if max attempts reached
-    if [[ $attempts -ge $max_attempts ]]; then
-        log-error "Max restart attempts reached for PID $old_pid" "attempts=$attempts"
-        _lifecycle_emit "lifecycle.restart.exhausted" "pid=$old_pid" "attempts=$attempts"
-        lifecycle-restart-disable "$old_pid"
-        return 1
-    fi
-
-    # Increment attempts
-    ((attempts++)) || true
-    _LIFECYCLE_RESTART_ATTEMPTS[$old_pid]=$attempts
-
-    log-info "Restarting process" "old_pid=$old_pid" "attempt=$attempts/$max_attempts"
-    _lifecycle_emit "lifecycle.restart.attempt" "pid=$old_pid" "attempt=$attempts"
-
-    # Wait for backoff
-    sleep "$backoff"
-
-    # Restart process
-    if eval "$command" &>/dev/null &; then
-        local new_pid=$!
-        log-info "Process restarted successfully" "old_pid=$old_pid" "new_pid=$new_pid"
-        _lifecycle_emit "lifecycle.restart.success" "old_pid=$old_pid" "new_pid=$new_pid" "attempt=$attempts"
-
-        # Transfer restart config to new PID
-        _LIFECYCLE_RESTART_ENABLED[$new_pid]="${_LIFECYCLE_RESTART_ENABLED[$old_pid]}"
-        _LIFECYCLE_RESTART_COMMAND[$new_pid]="${_LIFECYCLE_RESTART_COMMAND[$old_pid]}"
-        _LIFECYCLE_RESTART_MAX[$new_pid]="${_LIFECYCLE_RESTART_MAX[$old_pid]}"
-        _LIFECYCLE_RESTART_ATTEMPTS[$new_pid]=$attempts
-
-        # Exponential backoff for next attempt
-        _LIFECYCLE_RESTART_BACKOFF[$new_pid]=$((backoff * 2))
-
-        # Remove old PID config
-        lifecycle-restart-disable "$old_pid"
-
-        return 0
-    else
-        log-error "Process restart failed" "old_pid=$old_pid" "attempt=$attempts"
-        _lifecycle_emit "lifecycle.restart.failed" "pid=$old_pid" "attempt=$attempts"
-
-        # Exponential backoff
-        _LIFECYCLE_RESTART_BACKOFF[$old_pid]=$((backoff * 2))
-
-        return 1
-    fi
-}
-
-# Query restart status
-#
-# Usage: lifecycle-restart-status PID
-#
-lifecycle-restart-status() {
-    local pid="$1"
-
-    common-validate-required "$pid" "PID" || return 2
-
-    if [[ "${_LIFECYCLE_RESTART_ENABLED[$pid]}" == "true" ]]; then
-        echo "enabled"
-        echo "attempts: ${_LIFECYCLE_RESTART_ATTEMPTS[$pid]:-0}"
-        echo "max_attempts: ${_LIFECYCLE_RESTART_MAX[$pid]:-3}"
-        echo "backoff: ${_LIFECYCLE_RESTART_BACKOFF[$pid]:-1}s"
-    else
-        echo "disabled"
-    fi
-}
-
-# ------------------------------
-# v3.1 NEW: Process Groups
-# ------------------------------
-
-# Create named process group
-#
-# Usage: lifecycle-process-group-create GROUP_NAME
-#
-lifecycle-process-group-create() {
-    local group_name="$1"
-
-    common-validate-required "$group_name" "group name" || return 2
-
-    if [[ -n "${_LIFECYCLE_PROCESS_GROUPS[$group_name]}" ]]; then
-        log-warn "Process group already exists: $group_name"
-        return 1
-    fi
-
-    _LIFECYCLE_PROCESS_GROUPS[$group_name]=""
-    _LIFECYCLE_PROCESS_GROUP_META[$group_name]="created=$(common-timestamp)"
-
-    log-info "Process group created: $group_name"
-    _lifecycle_emit "lifecycle.group.created" "name=$group_name"
-
-    return 0
-}
-
-# Add PID to group
-#
-# Usage: lifecycle-process-group-add GROUP_NAME PID
-#
-lifecycle-process-group-add() {
-    local group_name="$1"
-    local pid="$2"
-
-    common-validate-required "$group_name" "group name" || return 2
-    common-validate-required "$pid" "PID" || return 2
-    common-validate-numeric "$pid" || {
-        log-error "Invalid PID: $pid"
-        return 2
-    }
-
-    # Create group if doesn't exist
-    if [[ -z "${_LIFECYCLE_PROCESS_GROUPS[$group_name]}" ]]; then
-        lifecycle-process-group-create "$group_name"
-    fi
-
-    # Check if already in group
-    if [[ " ${_LIFECYCLE_PROCESS_GROUPS[$group_name]} " == *" $pid "* ]]; then
-        log-debug "PID already in group: $pid in $group_name"
-        return 0
-    fi
-
-    # Add to group
-    _LIFECYCLE_PROCESS_GROUPS[$group_name]="${_LIFECYCLE_PROCESS_GROUPS[$group_name]} $pid"
-    _LIFECYCLE_PROCESS_GROUPS[$group_name]="${_LIFECYCLE_PROCESS_GROUPS[$group_name]## }"
-
-    log-debug "Added PID to group: $pid -> $group_name"
-    _lifecycle_emit "lifecycle.group.pid_added" "name=$group_name" "pid=$pid"
-
-    return 0
-}
-
-# Remove PID from group
-#
-# Usage: lifecycle-process-group-remove GROUP_NAME PID
-#
-lifecycle-process-group-remove() {
-    local group_name="$1"
-    local pid="$2"
-
-    common-validate-required "$group_name" "group name" || return 2
-    common-validate-required "$pid" "PID" || return 2
-
-    local new_pids=""
-    for p in ${_LIFECYCLE_PROCESS_GROUPS[$group_name]}; do
-        [[ "$p" != "$pid" ]] && new_pids="${new_pids} ${p}"
-    done
-
-    _LIFECYCLE_PROCESS_GROUPS[$group_name]="${new_pids## }"
-
-    log-debug "Removed PID from group: $pid from $group_name"
-    _lifecycle_emit "lifecycle.group.pid_removed" "name=$group_name" "pid=$pid"
-
-    return 0
-}
-
-# Send signal to entire group
-#
-# Usage: lifecycle-process-group-signal GROUP_NAME SIGNAL
-#
-lifecycle-process-group-signal() {
-    local group_name="$1"
-    local signal="$2"
-
-    common-validate-required "$group_name" "group name" || return 2
-    common-validate-required "$signal" "signal" || return 2
-
-    log-info "Sending signal to group: $signal -> $group_name"
-    _lifecycle_emit "lifecycle.group.signal" "name=$group_name" "signal=$signal"
-
-    for pid in ${_LIFECYCLE_PROCESS_GROUPS[$group_name]}; do
-        if kill -0 "$pid" 2>/dev/null; then
-            kill -$signal "$pid" 2>/dev/null || log-warn "Failed to signal PID: $pid"
-        fi
-    done
-
-    return 0
-}
-
-# Cleanup entire group
-#
-# Usage: lifecycle-process-group-cleanup GROUP_NAME [SIGNAL]
-#
-lifecycle-process-group-cleanup() {
-    local group_name="$1"
-    local signal="${2:-TERM}"
-
-    common-validate-required "$group_name" "group name" || return 2
-
-    log-info "Cleaning up process group: $group_name"
-    _lifecycle_emit "lifecycle.group.cleanup" "name=$group_name" "signal=$signal"
-
-    # Send TERM
-    lifecycle-process-group-signal "$group_name" "$signal"
-
-    # Wait briefly
-    sleep 0.5
-
-    # Send KILL to any survivors
-    for pid in ${_LIFECYCLE_PROCESS_GROUPS[$group_name]}; do
-        if kill -0 "$pid" 2>/dev/null; then
-            kill -9 "$pid" 2>/dev/null || true
-        fi
-    done
-
-    return 0
-}
-
-# List groups or PIDs in a group
-#
-# Usage: lifecycle-process-group-list [GROUP_NAME]
-#
-lifecycle-process-group-list() {
-    local group_name="$1"
-
-    if [[ -z "$group_name" ]]; then
-        # List all groups
-        for group in "${(@k)_LIFECYCLE_PROCESS_GROUPS}"; do
-            echo "$group"
-        done
-    else
-        # List PIDs in specific group
-        for pid in ${_LIFECYCLE_PROCESS_GROUPS[$group_name]}; do
-            echo "$pid"
-        done
-    fi
-}
-
-# Delete group (doesn't kill processes)
-#
-# Usage: lifecycle-process-group-delete GROUP_NAME
-#
-lifecycle-process-group-delete() {
-    local group_name="$1"
-
-    common-validate-required "$group_name" "group name" || return 2
-
-    unset "_LIFECYCLE_PROCESS_GROUPS[$group_name]"
-    unset "_LIFECYCLE_PROCESS_GROUP_META[$group_name]"
-
-    log-info "Process group deleted: $group_name"
-    _lifecycle_emit "lifecycle.group.deleted" "name=$group_name"
-
-    return 0
-}
-
-# ------------------------------
 # Background Job Management
 # ------------------------------
 
@@ -1317,8 +740,8 @@ lifecycle-process-group-delete() {
 lifecycle-track-job() {
     local pid="$1"
 
-    common-validate-required "$pid" "PID" || return 1
-    common-validate-numeric "$pid" || {
+    validate-type-string "$pid" || return 1
+    validate-type-integer "$pid" || {
         log-error "Invalid PID: $pid"
         return 1
     }
@@ -1409,277 +832,6 @@ _lifecycle_cleanup_pids() {
 }
 
 # ------------------------------
-# Temp File Management
-# ------------------------------
-
-# Track a temporary file
-#
-# Usage: lifecycle-track-temp-file FILE_PATH
-#
-lifecycle-track-temp-file() {
-    local file_path="$1"
-
-    common-validate-required "$file_path" "file path" || return 1
-
-    _LIFECYCLE_TRACKED_TEMP_FILES+=("$file_path")
-    log-debug "Tracking temp file: $file_path"
-    return 0
-}
-
-# Track a temporary directory
-#
-# Usage: lifecycle-track-temp-dir DIR_PATH
-#
-lifecycle-track-temp-dir() {
-    local dir_path="$1"
-
-    common-validate-required "$dir_path" "directory path" || return 1
-
-    _LIFECYCLE_TRACKED_TEMP_DIRS+=("$dir_path")
-    log-debug "Tracking temp directory: $dir_path"
-    return 0
-}
-
-# Stop tracking a temp file
-#
-# Usage: lifecycle-untrack-temp-file FILE_PATH
-#
-lifecycle-untrack-temp-file() {
-    local file_path="$1"
-    local new_files=()
-
-    for f in "${_LIFECYCLE_TRACKED_TEMP_FILES[@]}"; do
-        if [[ "$f" != "$file_path" ]]; then
-            new_files+=("$f")
-        fi
-    done
-
-    _LIFECYCLE_TRACKED_TEMP_FILES=("${new_files[@]}")
-    log-debug "Stopped tracking temp file: $file_path"
-    return 0
-}
-
-# Stop tracking a temp directory
-#
-# Usage: lifecycle-untrack-temp-dir DIR_PATH
-#
-lifecycle-untrack-temp-dir() {
-    local dir_path="$1"
-    local new_dirs=()
-
-    for d in "${_LIFECYCLE_TRACKED_TEMP_DIRS[@]}"; do
-        if [[ "$d" != "$dir_path" ]]; then
-            new_dirs+=("$d")
-        fi
-    done
-
-    _LIFECYCLE_TRACKED_TEMP_DIRS=("${new_dirs[@]}")
-    log-debug "Stopped tracking temp directory: $dir_path"
-    return 0
-}
-
-# List tracked temp files
-#
-# Usage: lifecycle-list-temp-files
-#
-lifecycle-list-temp-files() {
-    for file in "${_LIFECYCLE_TRACKED_TEMP_FILES[@]}"; do
-        echo "$file"
-    done
-}
-
-# List tracked temp directories
-#
-# Usage: lifecycle-list-temp-dirs
-#
-lifecycle-list-temp-dirs() {
-    for dir in "${_LIFECYCLE_TRACKED_TEMP_DIRS[@]}"; do
-        echo "$dir"
-    done
-}
-
-# Internal: Cleanup temp files
-_lifecycle_cleanup_temp_files() {
-    if [[ ${#_LIFECYCLE_TRACKED_TEMP_FILES[@]} -eq 0 ]]; then
-        return 0
-    fi
-
-    log-debug "Cleaning up ${#_LIFECYCLE_TRACKED_TEMP_FILES[@]} temp files"
-
-    for file in "${_LIFECYCLE_TRACKED_TEMP_FILES[@]}"; do
-        if [[ -f "$file" ]]; then
-            log-debug "Removing temp file: $file"
-
-            if _lifecycle_is_dryrun; then
-                log-info "[DRY RUN] Would remove temp file: $file"
-            else
-                rm -f "$file" 2>/dev/null || log-warn "Failed to remove temp file: $file"
-            fi
-        fi
-    done
-}
-
-# Internal: Cleanup temp directories
-_lifecycle_cleanup_temp_dirs() {
-    if [[ ${#_LIFECYCLE_TRACKED_TEMP_DIRS[@]} -eq 0 ]]; then
-        return 0
-    fi
-
-    log-debug "Cleaning up ${#_LIFECYCLE_TRACKED_TEMP_DIRS[@]} temp directories"
-
-    for dir in "${_LIFECYCLE_TRACKED_TEMP_DIRS[@]}"; do
-        if [[ -d "$dir" ]]; then
-            log-debug "Removing temp directory: $dir"
-
-            if _lifecycle_is_dryrun; then
-                log-info "[DRY RUN] Would remove temp directory: $dir"
-            else
-                rm -rf "$dir" 2>/dev/null || log-warn "Failed to remove temp directory: $dir"
-            fi
-        fi
-    done
-}
-
-# ------------------------------
-# Systemd Service Management
-# ------------------------------
-
-# Track a systemd service for cleanup
-#
-# Usage: lifecycle-track-service SERVICE_NAME [SCOPE]
-#   SCOPE: --user (default) or --system
-#
-lifecycle-track-service() {
-    local service="$1"
-    local scope="${2:---user}"
-
-    common-validate-required "$service" "service name" || return 1
-
-    _LIFECYCLE_TRACKED_SERVICES+=("${service}:${scope}")
-    log-debug "Tracking systemd service: $service ($scope)"
-    return 0
-}
-
-# Stop tracking a systemd service
-#
-# Usage: lifecycle-untrack-service SERVICE_NAME [SCOPE]
-#
-lifecycle-untrack-service() {
-    local service="$1"
-    local scope="${2:---user}"
-    local target="${service}:${scope}"
-    local new_services=()
-
-    for svc in "${_LIFECYCLE_TRACKED_SERVICES[@]}"; do
-        if [[ "$svc" != "$target" ]]; then
-            new_services+=("$svc")
-        fi
-    done
-
-    _LIFECYCLE_TRACKED_SERVICES=("${new_services[@]}")
-    log-debug "Stopped tracking service: $service ($scope)"
-    return 0
-}
-
-# List tracked services
-#
-# Usage: lifecycle-list-services
-#
-lifecycle-list-services() {
-    for svc in "${_LIFECYCLE_TRACKED_SERVICES[@]}"; do
-        echo "$svc"
-    done
-}
-
-# Internal: Cleanup systemd services
-_lifecycle_cleanup_services() {
-    if [[ ${#_LIFECYCLE_TRACKED_SERVICES[@]} -eq 0 ]]; then
-        return 0
-    fi
-
-    if ! common-command-exists "systemctl"; then
-        log-warn "systemctl not found, cannot cleanup services"
-        return 0
-    fi
-
-    log-debug "Cleaning up ${#_LIFECYCLE_TRACKED_SERVICES[@]} systemd services"
-
-    for svc_entry in "${_LIFECYCLE_TRACKED_SERVICES[@]}"; do
-        local service="${svc_entry%%:*}"
-        local scope="${svc_entry#*:}"
-
-        # Check if service is active
-        if systemctl $scope is-active --quiet "$service" 2>/dev/null; then
-            log-debug "Stopping service: $service ($scope)"
-
-            if _lifecycle_is_dryrun; then
-                log-info "[DRY RUN] Would stop service: $service ($scope)"
-            else
-                systemctl $scope stop "$service" 2>/dev/null || log-warn "Failed to stop service: $service"
-            fi
-        fi
-    done
-}
-
-# ------------------------------
-# State Management
-# ------------------------------
-
-# Initialize state directory
-#
-# Usage: lifecycle-state-init [NAME]
-#
-lifecycle-state-init() {
-    local name="${1:-${SCRIPT_NAME:-script}}"
-
-    LIFECYCLE_STATE_DIR="${LIFECYCLE_STATE_DIR}/${name}"
-
-    if [[ ! -d "$LIFECYCLE_STATE_DIR" ]]; then
-        log-debug "Creating state directory: $LIFECYCLE_STATE_DIR"
-
-        if _lifecycle_is_dryrun; then
-            log-info "[DRY RUN] Would create state directory: $LIFECYCLE_STATE_DIR"
-        else
-            mkdir -p "$LIFECYCLE_STATE_DIR" 2>/dev/null || {
-                log-error "Failed to create state directory: $LIFECYCLE_STATE_DIR"
-                return 1
-            }
-        fi
-    fi
-
-    log-debug "State directory initialized: $LIFECYCLE_STATE_DIR"
-    return 0
-}
-
-# Cleanup state directory
-#
-# Usage: lifecycle-state-cleanup
-#
-lifecycle-state-cleanup() {
-    if [[ ! -d "$LIFECYCLE_STATE_DIR" ]]; then
-        return 0
-    fi
-
-    log-debug "Removing state directory: $LIFECYCLE_STATE_DIR"
-
-    if _lifecycle_is_dryrun; then
-        log-info "[DRY RUN] Would remove state directory: $LIFECYCLE_STATE_DIR"
-    else
-        rm -rf "$LIFECYCLE_STATE_DIR" 2>/dev/null || {
-            log-warn "Failed to remove state directory: $LIFECYCLE_STATE_DIR"
-            return 1
-        }
-    fi
-
-    return 0
-}
-
-# Internal: Cleanup state
-_lifecycle_cleanup_state() {
-    lifecycle-state-cleanup
-}
-
-# ------------------------------
 # Exit Code Management
 # ------------------------------
 
@@ -1690,8 +842,8 @@ _lifecycle_cleanup_state() {
 lifecycle-set-exit-code() {
     local code="$1"
 
-    common-validate-required "$code" "exit code" || return 1
-    common-validate-numeric "$code" || {
+    validate-type-string "$code" || return 1
+    validate-type-integer "$code" || {
         log-error "Invalid exit code: $code"
         return 1
     }
@@ -1774,453 +926,10 @@ lifecycle-trap-list() {
         return 0
     fi
 
-    # Simple output (no dependency on _ui)
     for signal in "${(@k)_LIFECYCLE_ACTIVE_TRAPS}"; do
         local handlers="${_LIFECYCLE_SIGNAL_HANDLERS[$signal]}"
         echo "$signal: $handlers"
     done
-}
-
-# ------------------------------
-# Timeout Handling
-# ------------------------------
-
-# Execute command with timeout
-#
-# Usage: lifecycle-timeout SECONDS COMMAND [ARGS...]
-#
-lifecycle-timeout() {
-    local timeout_seconds="$1"
-    shift
-    local command=("$@")
-
-    if [[ -z "$timeout_seconds" ]] || [[ ${#command[@]} -eq 0 ]]; then
-        log-error "Timeout and command required"
-        return 1
-    fi
-
-    # Execute command in background
-    "${command[@]}" &
-    local cmd_pid=$!
-
-    # Monitor timeout
-    (
-        sleep "$timeout_seconds"
-        if kill -0 "$cmd_pid" 2>/dev/null; then
-            log-warn "Command timed out after ${timeout_seconds}s"
-            kill -TERM "$cmd_pid" 2>/dev/null || true
-            sleep 0.5
-            kill -9 "$cmd_pid" 2>/dev/null || true
-            exit 124
-        fi
-    ) &
-    local timeout_pid=$!
-
-    # Wait for command
-    wait "$cmd_pid" 2>/dev/null
-    local cmd_exit=$?
-
-    # Kill timeout monitor
-    kill "$timeout_pid" 2>/dev/null || true
-    wait "$timeout_pid" 2>/dev/null || true
-
-    return $cmd_exit
-}
-
-# ------------------------------
-# v3.2 NEW: Execution Tracking
-# ------------------------------
-
-# Track execution of a task (start tracking)
-#
-# Function: lifecycle-execution-start
-# Description: Start tracking execution of a task
-# Parameters:
-#   $1 - Task ID (required)
-#   $2 - Task description (optional)
-# Returns: 0 on success
-# Example:
-#   lifecycle-execution-start "backup_volumes" "Backup all Docker volumes"
-#
-lifecycle-execution-start() {
-    local task_id="$1"
-    local description="${2:-}"
-
-    [[ "$LIFECYCLE_TRACK_EXECUTION" != "true" ]] && return 0
-
-    common-validate-required "$task_id" "task ID" || return 1
-
-    # Initialize state
-    _LIFECYCLE_EXECUTION_STATE[$task_id]="running"
-    _LIFECYCLE_EXECUTION_START[$task_id]="$(common-timestamp)"
-    _LIFECYCLE_EXECUTION_RESULT[$task_id]=""
-    _LIFECYCLE_EXECUTION_ERROR[$task_id]=""
-
-    log-debug "Execution started: $task_id"
-    _lifecycle_emit "lifecycle.execution.started" "id=$task_id" "description=$description"
-
-    return 0
-}
-
-# Mark task execution as completed
-#
-# Usage: lifecycle-execution-complete TASK_ID [RESULT]
-#
-lifecycle-execution-complete() {
-    local task_id="$1"
-    local result="${2:-}"
-
-    [[ "$LIFECYCLE_TRACK_EXECUTION" != "true" ]] && return 0
-
-    common-validate-required "$task_id" "task ID" || return 1
-
-    _LIFECYCLE_EXECUTION_STATE[$task_id]="completed"
-    _LIFECYCLE_EXECUTION_END[$task_id]="$(common-timestamp)"
-    _LIFECYCLE_EXECUTION_RESULT[$task_id]="$result"
-
-    # Add to history
-    _lifecycle-execution-add-history "$task_id" "completed"
-
-    log-debug "Execution completed: $task_id"
-    _lifecycle_emit "lifecycle.execution.completed" "id=$task_id"
-
-    return 0
-}
-
-# Mark task execution as failed
-#
-# Usage: lifecycle-execution-fail TASK_ID ERROR_MESSAGE
-#
-lifecycle-execution-fail() {
-    local task_id="$1"
-    local error_msg="${2:-Unknown error}"
-
-    [[ "$LIFECYCLE_TRACK_EXECUTION" != "true" ]] && return 0
-
-    common-validate-required "$task_id" "task ID" || return 1
-
-    _LIFECYCLE_EXECUTION_STATE[$task_id]="failed"
-    _LIFECYCLE_EXECUTION_END[$task_id]="$(common-timestamp)"
-    _LIFECYCLE_EXECUTION_ERROR[$task_id]="$error_msg"
-
-    # Add to history
-    _lifecycle-execution-add-history "$task_id" "failed"
-
-    log-debug "Execution failed: $task_id - $error_msg"
-    _lifecycle_emit "lifecycle.execution.failed" "id=$task_id" "error=$error_msg"
-
-    return 0
-}
-
-# Mark task execution as skipped
-#
-# Usage: lifecycle-execution-skip TASK_ID [REASON]
-#
-lifecycle-execution-skip() {
-    local task_id="$1"
-    local reason="${2:-}"
-
-    [[ "$LIFECYCLE_TRACK_EXECUTION" != "true" ]] && return 0
-
-    common-validate-required "$task_id" "task ID" || return 1
-
-    _LIFECYCLE_EXECUTION_STATE[$task_id]="skipped"
-    _LIFECYCLE_EXECUTION_END[$task_id]="$(common-timestamp)"
-    _LIFECYCLE_EXECUTION_RESULT[$task_id]="$reason"
-
-    # Add to history
-    _lifecycle-execution-add-history "$task_id" "skipped"
-
-    log-debug "Execution skipped: $task_id - $reason"
-    _lifecycle_emit "lifecycle.execution.skipped" "id=$task_id" "reason=$reason"
-
-    return 0
-}
-
-# Get execution state of a task
-#
-# Usage: lifecycle-execution-get-state TASK_ID
-#
-lifecycle-execution-get-state() {
-    local task_id="$1"
-    common-validate-required "$task_id" "task ID" || return 1
-    echo "${_LIFECYCLE_EXECUTION_STATE[$task_id]:-pending}"
-}
-
-# Get execution result of a task
-#
-# Usage: lifecycle-execution-get-result TASK_ID
-#
-lifecycle-execution-get-result() {
-    local task_id="$1"
-    common-validate-required "$task_id" "task ID" || return 1
-    echo "${_LIFECYCLE_EXECUTION_RESULT[$task_id]:-}"
-}
-
-# Get execution error of a task
-#
-# Usage: lifecycle-execution-get-error TASK_ID
-#
-lifecycle-execution-get-error() {
-    local task_id="$1"
-    common-validate-required "$task_id" "task ID" || return 1
-    echo "${_LIFECYCLE_EXECUTION_ERROR[$task_id]:-}"
-}
-
-# Get execution duration in seconds
-#
-# Usage: lifecycle-execution-get-duration TASK_ID
-#
-lifecycle-execution-get-duration() {
-    local task_id="$1"
-    common-validate-required "$task_id" "task ID" || return 1
-
-    local start="${_LIFECYCLE_EXECUTION_START[$task_id]:-}"
-    local end="${_LIFECYCLE_EXECUTION_END[$task_id]:-}"
-
-    if [[ -z "$start" ]]; then
-        echo "0"
-        return 1
-    fi
-
-    if [[ -z "$end" ]]; then
-        # Still running, calculate from now
-        end="$(common-timestamp)"
-    fi
-
-    # Simple duration calculation (timestamps should be compatible)
-    local duration=$((end - start))
-    echo "$duration"
-}
-
-# Get execution history (all completed/failed/skipped tasks)
-#
-# Usage: lifecycle-execution-get-history
-#
-lifecycle-execution-get-history() {
-    for record in "${_LIFECYCLE_EXECUTION_HISTORY[@]}"; do
-        echo "$record"
-    done
-}
-
-# Clear execution history
-#
-# Usage: lifecycle-execution-clear-history
-#
-lifecycle-execution-clear-history() {
-    _LIFECYCLE_EXECUTION_HISTORY=()
-    _LIFECYCLE_EXECUTION_STATE=()
-    _LIFECYCLE_EXECUTION_START=()
-    _LIFECYCLE_EXECUTION_END=()
-    _LIFECYCLE_EXECUTION_RESULT=()
-    _LIFECYCLE_EXECUTION_ERROR=()
-
-    log-debug "Execution history cleared"
-    _lifecycle_emit "lifecycle.execution.cleared"
-
-    return 0
-}
-
-# Internal: Add task to history
-_lifecycle-execution-add-history() {
-    local task_id="$1"
-    local final_state="$2"
-
-    local start="${_LIFECYCLE_EXECUTION_START[$task_id]:-}"
-    local end="${_LIFECYCLE_EXECUTION_END[$task_id]:-}"
-    local result="${_LIFECYCLE_EXECUTION_RESULT[$task_id]:-}"
-    local error="${_LIFECYCLE_EXECUTION_ERROR[$task_id]:-}"
-
-    # Build JSON record (requires jq to be really robust, but simple for now)
-    local record="{\"id\":\"$task_id\",\"state\":\"$final_state\",\"start\":\"$start\",\"end\":\"$end\",\"result\":\"$result\",\"error\":\"$error\"}"
-
-    _LIFECYCLE_EXECUTION_HISTORY+=("$record")
-}
-
-# ------------------------------
-# v3.2 NEW: Checkpoint/Resume Support
-# ------------------------------
-
-# Save checkpoint (execution state snapshot)
-#
-# Function: lifecycle-checkpoint-save
-# Description: Save current execution state to a checkpoint file
-# Parameters:
-#   $1 - Checkpoint name (required)
-#   $2 - Additional metadata (optional, JSON string)
-# Returns: 0 on success, 1 on error
-# Example:
-#   lifecycle-checkpoint-save "after_backup" '{"volumes_backed_up": 3}'
-#
-lifecycle-checkpoint-save() {
-    local checkpoint_name="$1"
-    local metadata="${2:-{}}"
-
-    common-validate-required "$checkpoint_name" "checkpoint name" || return 1
-
-    # Create checkpoint directory
-    mkdir -p "$LIFECYCLE_CHECKPOINT_DIR" || {
-        log-error "Failed to create checkpoint directory: $LIFECYCLE_CHECKPOINT_DIR"
-        return 1
-    }
-
-    local checkpoint_file="$LIFECYCLE_CHECKPOINT_DIR/${checkpoint_name}.checkpoint"
-
-    # Build checkpoint data
-    local checkpoint_data=""
-    checkpoint_data+="# Lifecycle Checkpoint: $checkpoint_name\n"
-    checkpoint_data+="# Created: $(date -Iseconds)\n"
-    checkpoint_data+="# Metadata: $metadata\n"
-    checkpoint_data+="\n"
-
-    # Save execution states
-    for task_id in "${(@k)_LIFECYCLE_EXECUTION_STATE}"; do
-        local state="${_LIFECYCLE_EXECUTION_STATE[$task_id]}"
-        local start="${_LIFECYCLE_EXECUTION_START[$task_id]:-}"
-        local end="${_LIFECYCLE_EXECUTION_END[$task_id]:-}"
-        local result="${_LIFECYCLE_EXECUTION_RESULT[$task_id]:-}"
-        local error="${_LIFECYCLE_EXECUTION_ERROR[$task_id]:-}"
-
-        checkpoint_data+="TASK|$task_id|$state|$start|$end|$result|$error\n"
-    done
-
-    # Write checkpoint file
-    echo -e "$checkpoint_data" > "$checkpoint_file" || {
-        log-error "Failed to write checkpoint: $checkpoint_file"
-        return 1
-    }
-
-    log-info "Checkpoint saved: $checkpoint_name"
-    _lifecycle_emit "lifecycle.checkpoint.saved" "name=$checkpoint_name" "file=$checkpoint_file"
-
-    return 0
-}
-
-# Load checkpoint (restore execution state)
-#
-# Function: lifecycle-checkpoint-load
-# Description: Load execution state from a checkpoint file
-# Parameters:
-#   $1 - Checkpoint name (required)
-# Returns: 0 on success, 1 on error
-# Example:
-#   lifecycle-checkpoint-load "after_backup"
-#
-lifecycle-checkpoint-load() {
-    local checkpoint_name="$1"
-
-    common-validate-required "$checkpoint_name" "checkpoint name" || return 1
-
-    local checkpoint_file="$LIFECYCLE_CHECKPOINT_DIR/${checkpoint_name}.checkpoint"
-
-    if [[ ! -f "$checkpoint_file" ]]; then
-        log-error "Checkpoint not found: $checkpoint_name"
-        return 1
-    fi
-
-    # Clear current execution state
-    _LIFECYCLE_EXECUTION_STATE=()
-    _LIFECYCLE_EXECUTION_START=()
-    _LIFECYCLE_EXECUTION_END=()
-    _LIFECYCLE_EXECUTION_RESULT=()
-    _LIFECYCLE_EXECUTION_ERROR=()
-
-    # Load checkpoint
-    while IFS='|' read -r type task_id state start end result error; do
-        [[ "$type" != "TASK" ]] && continue
-
-        _LIFECYCLE_EXECUTION_STATE[$task_id]="$state"
-        _LIFECYCLE_EXECUTION_START[$task_id]="$start"
-        _LIFECYCLE_EXECUTION_END[$task_id]="$end"
-        _LIFECYCLE_EXECUTION_RESULT[$task_id]="$result"
-        _LIFECYCLE_EXECUTION_ERROR[$task_id]="$error"
-    done < "$checkpoint_file"
-
-    log-info "Checkpoint loaded: $checkpoint_name"
-    _lifecycle_emit "lifecycle.checkpoint.loaded" "name=$checkpoint_name" "file=$checkpoint_file"
-
-    return 0
-}
-
-# List available checkpoints
-#
-# Usage: lifecycle-checkpoint-list
-#
-lifecycle-checkpoint-list() {
-    if [[ ! -d "$LIFECYCLE_CHECKPOINT_DIR" ]]; then
-        echo "No checkpoints found"
-        return 0
-    fi
-
-    local found=0
-    for checkpoint in "$LIFECYCLE_CHECKPOINT_DIR"/*.checkpoint(N); do
-        [[ ! -f "$checkpoint" ]] && continue
-        local name="$(basename "$checkpoint" .checkpoint)"
-        local created="$(grep '^# Created:' "$checkpoint" | cut -d' ' -f3-)"
-        echo "$name ($created)"
-        ((found++)) || true
-    done
-
-    if [[ $found -eq 0 ]]; then
-        echo "No checkpoints found"
-    fi
-
-    return 0
-}
-
-# Delete checkpoint
-#
-# Usage: lifecycle-checkpoint-delete CHECKPOINT_NAME
-#
-lifecycle-checkpoint-delete() {
-    local checkpoint_name="$1"
-
-    common-validate-required "$checkpoint_name" "checkpoint name" || return 1
-
-    local checkpoint_file="$LIFECYCLE_CHECKPOINT_DIR/${checkpoint_name}.checkpoint"
-
-    if [[ ! -f "$checkpoint_file" ]]; then
-        log-error "Checkpoint not found: $checkpoint_name"
-        return 1
-    fi
-
-    rm -f "$checkpoint_file" || {
-        log-error "Failed to delete checkpoint: $checkpoint_name"
-        return 1
-    }
-
-    log-info "Checkpoint deleted: $checkpoint_name"
-    _lifecycle_emit "lifecycle.checkpoint.deleted" "name=$checkpoint_name"
-
-    return 0
-}
-
-# Get tasks that need to be re-run based on checkpoint
-#
-# Function: lifecycle-checkpoint-get-pending
-# Description: Get list of tasks that haven't completed based on checkpoint
-# Usage: lifecycle-checkpoint-get-pending
-# Returns: List of task IDs that are pending or failed
-#
-lifecycle-checkpoint-get-pending() {
-    for task_id in "${(@k)_LIFECYCLE_EXECUTION_STATE}"; do
-        local state="${_LIFECYCLE_EXECUTION_STATE[$task_id]}"
-        if [[ "$state" == "pending" || "$state" == "failed" || "$state" == "running" ]]; then
-            echo "$task_id"
-        fi
-    done
-}
-
-# Check if task was completed in checkpoint
-#
-# Usage: lifecycle-checkpoint-is-completed TASK_ID
-#
-lifecycle-checkpoint-is-completed() {
-    local task_id="$1"
-    common-validate-required "$task_id" "task ID" || return 1
-
-    local state="${_LIFECYCLE_EXECUTION_STATE[$task_id]:-pending}"
-    [[ "$state" == "completed" ]]
 }
 
 # ------------------------------
@@ -2241,7 +950,7 @@ lifecycle-version() {
 #
 lifecycle-help() {
     cat <<EOF
-_lifecycle - Signal handling, event management, and cleanup system
+_lifecycle - Signal handling and cleanup coordination
 
 Version: $LIFECYCLE_VERSION
 
@@ -2249,22 +958,13 @@ USAGE:
   source "\${DOTLIB}/_lifecycle"
 
 CONFIGURATION:
-  LIFECYCLE_STATE_DIR              State directory (default: XDG_STATE_HOME/lifecycle)
   LIFECYCLE_CLEANUP_JOBS           Auto-kill tracked jobs on exit (default: false)
-  LIFECYCLE_CLEANUP_STATE          Remove state directory on exit (default: false)
-  LIFECYCLE_CLEANUP_TEMP           Remove tracked temp files/dirs on exit (default: true)
-  LIFECYCLE_CLEANUP_SERVICES       Stop tracked systemd services on exit (default: false)
   LIFECYCLE_DEBUG                  Enable debug logging (default: false)
   LIFECYCLE_EXIT_CODE              Exit code to use (default: 0)
   LIFECYCLE_EMIT_EVENTS            Emit events via _events extension (default: true)
   LIFECYCLE_TRAP_ERRORS            Install ERR trap automatically (default: true)
   LIFECYCLE_GRACEFUL_SHUTDOWN_TIMEOUT  Timeout for graceful shutdown (default: 10)
   LIFECYCLE_DRY_RUN                Dry-run mode (default: false)
-
-  v3.1 NEW:
-  LIFECYCLE_RESTART_MONITOR_INTERVAL        Restart check interval (default: 5)
-  LIFECYCLE_RESTART_DEFAULT_MAX_ATTEMPTS    Default max restart attempts (default: 3)
-  LIFECYCLE_RESTART_DEFAULT_BACKOFF         Default initial backoff (default: 1)
   LIFECYCLE_CLEANUP_USE_DEPENDENCY_ORDER    Use dependency-ordered cleanup (default: true)
 
 SIGNAL HANDLERS:
@@ -2275,84 +975,28 @@ SIGNAL HANDLERS:
   lifecycle-trap-uninstall                 Uninstall all handlers
   lifecycle-trap-list                      List active traps
 
-EVENT SYSTEM:
-  lifecycle-event EVENT HANDLER            Register event handler
-  lifecycle-event-trigger EVENT [ARGS]     Trigger event
-  lifecycle-event-remove EVENT HANDLER     Remove event handler
-  lifecycle-event-clear EVENT              Clear all handlers for event
-  lifecycle-event-once EVENT HANDLER       Register one-time handler
-
 CLEANUP (LEGACY LIFO):
   lifecycle-cleanup FUNCTION               Register cleanup function
   lifecycle-cleanup-remove FUNCTION        Remove cleanup function
   lifecycle-cleanup-clear                  Clear all cleanup functions
   lifecycle-cleanup-list                   List cleanup functions
 
-DEPENDENCY-ORDERED CLEANUP (v3.1 NEW):
+DEPENDENCY-ORDERED CLEANUP:
   lifecycle-cleanup-add ID FUNC [DEPS...]  Add cleanup with dependencies
   lifecycle-cleanup-add-dependency ID DEP  Add dependency to cleanup
   lifecycle-cleanup-validate               Validate dependency graph
   lifecycle-cleanup-order                  Show execution order
 
-RESTART CAPABILITIES (v3.1 NEW):
-  lifecycle-restart-enable PID CMD [MAX] [BACKOFF]  Enable auto-restart
-  lifecycle-restart-disable PID                     Disable auto-restart
-  lifecycle-restart-status PID                      Query restart status
-  lifecycle-restart-check                           Manually check all PIDs
-
-PROCESS GROUPS (v3.1 NEW):
-  lifecycle-process-group-create GROUP              Create group
-  lifecycle-process-group-add GROUP PID             Add PID to group
-  lifecycle-process-group-remove GROUP PID          Remove PID
-  lifecycle-process-group-signal GROUP SIGNAL       Send signal to group
-  lifecycle-process-group-cleanup GROUP [SIGNAL]    Cleanup group
-  lifecycle-process-group-list [GROUP]              List groups or PIDs
-  lifecycle-process-group-delete GROUP              Delete group
-
 RESOURCE TRACKING:
   lifecycle-track-job PID                  Track background job
-  lifecycle-track-temp-file FILE           Track temp file
-  lifecycle-track-temp-dir DIR             Track temp directory
-  lifecycle-track-service SERVICE [SCOPE]  Track systemd service
   lifecycle-untrack-job PID                Stop tracking job
-  lifecycle-untrack-temp-file FILE         Stop tracking temp file
-  lifecycle-untrack-temp-dir DIR           Stop tracking temp directory
-  lifecycle-untrack-service SERVICE [SCOPE] Stop tracking service
   lifecycle-list-jobs                      List tracked jobs
-  lifecycle-list-temp-files                List tracked temp files
-  lifecycle-list-temp-dirs                 List tracked temp dirs
-  lifecycle-list-services                  List tracked services
-
-STATE MANAGEMENT:
-  lifecycle-state-init [NAME]              Initialize state directory
-  lifecycle-state-cleanup                  Cleanup state directory
 
 EXIT CODE:
   lifecycle-set-exit-code CODE             Set exit code
   lifecycle-get-exit-code                  Get exit code
 
-EXECUTION TRACKING (v3.2 NEW):
-  lifecycle-execution-start ID [DESC]      Start tracking task execution
-  lifecycle-execution-complete ID [RESULT] Mark task as completed
-  lifecycle-execution-fail ID ERROR        Mark task as failed
-  lifecycle-execution-skip ID [REASON]     Mark task as skipped
-  lifecycle-execution-get-state ID         Get task execution state
-  lifecycle-execution-get-result ID        Get task result
-  lifecycle-execution-get-error ID         Get task error message
-  lifecycle-execution-get-duration ID      Get task duration in seconds
-  lifecycle-execution-get-history          Get execution history
-  lifecycle-execution-clear-history        Clear execution history
-
-CHECKPOINT/RESUME (v3.2 NEW):
-  lifecycle-checkpoint-save NAME [META]    Save execution state checkpoint
-  lifecycle-checkpoint-load NAME           Load checkpoint and restore state
-  lifecycle-checkpoint-list                List available checkpoints
-  lifecycle-checkpoint-delete NAME         Delete checkpoint
-  lifecycle-checkpoint-get-pending         Get tasks needing re-run
-  lifecycle-checkpoint-is-completed ID     Check if task completed
-
 UTILITIES:
-  lifecycle-timeout SECONDS CMD [ARGS]     Execute command with timeout
   lifecycle-version                        Display version
   lifecycle-help                           Display this help
   lifecycle-self-test                      Run self-tests
@@ -2360,8 +1004,6 @@ UTILITIES:
 
 INTEGRATION STATUS:
   _events:  ${LIFECYCLE_EVENTS_AVAILABLE:-false}
-
-For detailed documentation: cat ~/.local/docs/lib/_lifecycle.md
 EOF
 }
 
@@ -2374,13 +1016,9 @@ lifecycle-info() {
 _lifecycle Extension Information
 
 Version:          $LIFECYCLE_VERSION
-State Directory:  $LIFECYCLE_STATE_DIR
 
 Configuration:
   Cleanup Jobs:      $LIFECYCLE_CLEANUP_JOBS
-  Cleanup State:     $LIFECYCLE_CLEANUP_STATE
-  Cleanup Temp:      $LIFECYCLE_CLEANUP_TEMP
-  Cleanup Services:  $LIFECYCLE_CLEANUP_SERVICES
   Debug Mode:        $LIFECYCLE_DEBUG
   Exit Code:         $LIFECYCLE_EXIT_CODE
   Emit Events:       $LIFECYCLE_EMIT_EVENTS
@@ -2392,20 +1030,11 @@ Integration Status:
 
 Active Handlers:
   Signal handlers:    ${#_LIFECYCLE_SIGNAL_HANDLERS[@]}
-  Event handlers:     ${#_LIFECYCLE_EVENT_HANDLERS[@]}
   Cleanup functions:  ${#_LIFECYCLE_CLEANUP_FUNCTIONS[@]}
   Dependency cleanups: ${#_LIFECYCLE_CLEANUP_REGISTRY[@]}
 
 Tracked Resources:
   Background jobs:    ${#_LIFECYCLE_TRACKED_PIDS[@]}
-  Temp files:         ${#_LIFECYCLE_TRACKED_TEMP_FILES[@]}
-  Temp directories:   ${#_LIFECYCLE_TRACKED_TEMP_DIRS[@]}
-  Systemd services:   ${#_LIFECYCLE_TRACKED_SERVICES[@]}
-  Process groups:     ${#_LIFECYCLE_PROCESS_GROUPS[@]}
-
-Restart Monitoring:
-  Monitor PID:        ${_LIFECYCLE_RESTART_MONITOR_PID:-not running}
-  Tracked processes:  ${#_LIFECYCLE_RESTART_ENABLED[@]}
 EOF
 }
 
@@ -2429,22 +1058,7 @@ lifecycle-self-test() {
     fi
     lifecycle-signal-remove INT true
 
-    # Test 2: Event system
-    local test_event_fired=false
-    test_event_handler() { test_event_fired=true; }
-    lifecycle-event test-event test_event_handler
-    lifecycle-event-trigger test-event
-    if [[ "$test_event_fired" == "true" ]]; then
-        log-info "✓ Event system works"
-        ((tests_passed++)) || true
-    else
-        log-error "✗ Event system failed"
-        ((tests_failed++)) || true
-    fi
-    lifecycle-event-remove test-event test_event_handler
-    unfunction test_event_handler 2>/dev/null
-
-    # Test 3: Cleanup registry (LIFO)
+    # Test 2: Cleanup registry (LIFO)
     lifecycle-cleanup true
     if [[ ${#_LIFECYCLE_CLEANUP_FUNCTIONS[@]} -eq 1 ]]; then
         log-info "✓ LIFO cleanup registry works"
@@ -2455,7 +1069,7 @@ lifecycle-self-test() {
     fi
     lifecycle-cleanup-clear
 
-    # Test 4: Job tracking
+    # Test 3: Job tracking
     lifecycle-track-job 999999
     if [[ ${#_LIFECYCLE_TRACKED_PIDS[@]} -eq 1 ]]; then
         log-info "✓ Job tracking works"
@@ -2466,18 +1080,7 @@ lifecycle-self-test() {
     fi
     lifecycle-untrack-job 999999
 
-    # Test 5: Temp file tracking
-    lifecycle-track-temp-file "/tmp/test-file"
-    if [[ ${#_LIFECYCLE_TRACKED_TEMP_FILES[@]} -eq 1 ]]; then
-        log-info "✓ Temp file tracking works"
-        ((tests_passed++)) || true
-    else
-        log-error "✗ Temp file tracking failed"
-        ((tests_failed++)) || true
-    fi
-    lifecycle-untrack-temp-file "/tmp/test-file"
-
-    # Test 6: Exit code management
+    # Test 4: Exit code management
     lifecycle-set-exit-code 42
     if [[ "$(lifecycle-get-exit-code)" == "42" ]]; then
         log-info "✓ Exit code management works"
@@ -2488,12 +1091,12 @@ lifecycle-self-test() {
     fi
     lifecycle-set-exit-code 0
 
-    # Test 7: Integration detection
+    # Test 5: Integration detection
     log-info "Integration availability:"
     log-info "  _events: ${LIFECYCLE_EVENTS_AVAILABLE:-false}"
     ((tests_passed++)) || true
 
-    # NEW Test 8: Dependency-ordered cleanup
+    # Test 6: Dependency-ordered cleanup
     lifecycle-cleanup-add "task1" "echo task1"
     lifecycle-cleanup-add "task2" "echo task2" "task1"
     if [[ ${#_LIFECYCLE_CLEANUP_REGISTRY[@]} -eq 2 ]]; then
@@ -2518,30 +1121,6 @@ lifecycle-self-test() {
     unset "_LIFECYCLE_CLEANUP_DEPS[task1]"
     unset "_LIFECYCLE_CLEANUP_DEPS[task2]"
 
-    # NEW Test 9: Process groups
-    lifecycle-process-group-create "test_group"
-    lifecycle-process-group-add "test_group" "999999"
-    local group_pids=$(lifecycle-process-group-list "test_group" | wc -l)
-    if [[ $group_pids -eq 1 ]]; then
-        log-info "✓ Process groups work"
-        ((tests_passed++)) || true
-    else
-        log-error "✗ Process groups failed"
-        ((tests_failed++)) || true
-    fi
-    lifecycle-process-group-delete "test_group"
-
-    # NEW Test 10: Restart capabilities (basic registration)
-    lifecycle-restart-enable 999999 "echo restart" 3 1
-    if [[ "${_LIFECYCLE_RESTART_ENABLED[999999]}" == "true" ]]; then
-        log-info "✓ Restart registration works"
-        ((tests_passed++)) || true
-    else
-        log-error "✗ Restart registration failed"
-        ((tests_failed++)) || true
-    fi
-    lifecycle-restart-disable 999999
-
     log-info ""
     log-info "Self-tests complete: $tests_passed passed, $tests_failed failed"
 
@@ -2555,25 +1134,6 @@ lifecycle-self-test() {
 # ------------------------------
 # Module Initialization
 # ------------------------------
-
-# Export v3.2 NEW functions
-export -f lifecycle-execution-start
-export -f lifecycle-execution-complete
-export -f lifecycle-execution-fail
-export -f lifecycle-execution-skip
-export -f lifecycle-execution-get-state
-export -f lifecycle-execution-get-result
-export -f lifecycle-execution-get-error
-export -f lifecycle-execution-get-duration
-export -f lifecycle-execution-get-history
-export -f lifecycle-execution-clear-history
-
-export -f lifecycle-checkpoint-save
-export -f lifecycle-checkpoint-load
-export -f lifecycle-checkpoint-list
-export -f lifecycle-checkpoint-delete
-export -f lifecycle-checkpoint-get-pending
-export -f lifecycle-checkpoint-is-completed
 
 # Log module load
 log-debug "_lifecycle extension loaded (version $LIFECYCLE_VERSION)"

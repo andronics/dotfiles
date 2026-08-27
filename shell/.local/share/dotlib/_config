@@ -48,15 +48,27 @@ if ! source "${DOTLIB}/_common" 2>/dev/null; then
     return 1
 fi
 
+# Load _xdg (required)
+if ! source "${DOTLIB}/_xdg" 2>/dev/null; then
+    echo "[ERROR] _config requires _xdg - cannot load" >&2
+    return 1
+fi
+
+# Load _validation (required)
+if ! source "${DOTLIB}/_validation" 2>/dev/null; then
+    echo "[ERROR] _config requires _validation - cannot load" >&2
+    return 1
+fi
+
 # ------------------------------
 # Configuration Variables
 # ------------------------------
 
 # XDG-compliant configuration paths
-declare -g CONFIG_CONFIG_DIR="$(common-xdg-config-home)/config"
-declare -g CONFIG_DATA_DIR="$(common-lib-data-dir)/config"
-declare -g CONFIG_CACHE_DIR="$(common-lib-cache-dir)/config"
-declare -g CONFIG_STATE_DIR="$(common-lib-state-dir)/config"
+declare -g CONFIG_CONFIG_DIR="$(xdg-config-dir config)"
+declare -g CONFIG_DATA_DIR="$(xdg-data-dir config)"
+declare -g CONFIG_CACHE_DIR="$(xdg-cache-dir config)"
+declare -g CONFIG_STATE_DIR="$(xdg-state-dir config)"
 
 # Configuration options
 declare -g CONFIG_VERBOSE="${CONFIG_VERBOSE:-false}"
@@ -249,7 +261,7 @@ _config-auto-save() {
 config-detect-format() {
     local file="$1"
 
-    common-validate-required "$file" "file" || return 2
+    validate-type-string "$file" || return 2
 
     # Detect by extension
     case "${file:e:l}" in
@@ -547,7 +559,7 @@ config-load() {
     local merge="${3:-false}"
 
     # Validate file
-    common-validate-required "$file" "file" || return 2
+    validate-type-string "$file" || return 2
 
     if [[ ! -f "$file" ]]; then
         _config-log-error "File not found: $file"
@@ -649,7 +661,7 @@ config-get() {
     local key="$1"
     local default="${2:-}"
 
-    common-validate-required "$key" "key" || return 2
+    validate-type-string "$key" || return 2
 
     key=$(_config-normalize-key "$key")
 
@@ -692,7 +704,7 @@ config-set() {
     local type="${3:-string}"
 
     # Validate
-    common-validate-required "$key" "key" || return 2
+    validate-type-string "$key" || return 2
 
     key=$(_config-normalize-key "$key")
 
@@ -723,7 +735,7 @@ config-set() {
 config-has() {
     local key="$1"
 
-    common-validate-required "$key" "key" || return 2
+    validate-type-string "$key" || return 2
 
     key=$(_config-normalize-key "$key")
 
@@ -739,7 +751,7 @@ config-has() {
 config-delete() {
     local key="$1"
 
-    common-validate-required "$key" "key" || return 2
+    validate-type-string "$key" || return 2
 
     key=$(_config-normalize-key "$key")
 
@@ -793,7 +805,7 @@ config-merge() {
     local file="$1"
     local format="${2:-}"
 
-    common-validate-required "$file" "file" || return 2
+    validate-type-string "$file" || return 2
 
     config-load "$file" "$format" "true"
 }
@@ -802,8 +814,8 @@ config-set-default() {
     local key="$1"
     local value="$2"
 
-    common-validate-required "$key" "key" || return 2
-    common-validate-required "$value" "value" || return 2
+    validate-type-string "$key" || return 2
+    validate-type-string "$value" || return 2
 
     key=$(_config-normalize-key "$key")
     _CONFIG_DEFAULTS[$key]="$value"
@@ -815,7 +827,7 @@ config-set-default() {
 config-get-type() {
     local key="$1"
 
-    common-validate-required "$key" "key" || return 2
+    validate-type-string "$key" || return 2
 
     key=$(_config-normalize-key "$key")
 
@@ -969,9 +981,6 @@ Examples:
 
   # Check if modified
   config-stats
-
-For complete documentation:
-  cat $(common-lib-docs-dir)/extensions/_config.md
 
 EOF
 }

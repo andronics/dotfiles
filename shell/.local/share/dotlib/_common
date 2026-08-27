@@ -8,12 +8,10 @@
 #   source "${DOTLIB}/_common"
 #
 # Provides:
-#   - XDG Base Directory compliance
+#   - _common's own storage namespace (docs/templates/command-cache)
 #   - Standard color constants
-#   - Path helpers (XDG-aware)
 #   - Command existence checks (cached)
 #   - Security utilities (sanitization)
-#   - Validation helpers
 #   - Retry/timeout wrappers
 #   - Platform detection
 #   - String/array utilities
@@ -31,106 +29,6 @@
 
 declare -gr COMMON_VERSION="1.0.0"
 declare -g COMMON_LOADED=1
-
-# ------------------------------
-# XDG Base Directory Specification
-# ------------------------------
-# Implements XDG Base Directory spec for cross-platform consistency
-# https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html
-
-# Get XDG data home directory
-# Default: $HOME/.local/share
-# Usage: data_dir=$(common-xdg-data-home)
-common-xdg-data-home() {
-    echo "${XDG_DATA_HOME:-$HOME/.local/share}"
-}
-
-# Get XDG config home directory
-# Default: $HOME/.config
-# Usage: config_dir=$(common-xdg-config-home)
-common-xdg-config-home() {
-    echo "${XDG_CONFIG_HOME:-$HOME/.config}"
-}
-
-# Get XDG state home directory
-# Default: $HOME/.local/state
-# Usage: state_dir=$(common-xdg-state-home)
-common-xdg-state-home() {
-    echo "${XDG_STATE_HOME:-$HOME/.local/state}"
-}
-
-# Get XDG cache home directory
-# Default: $HOME/.cache
-# Usage: cache_dir=$(common-xdg-cache-home)
-common-xdg-cache-home() {
-    echo "${XDG_CACHE_HOME:-$HOME/.cache}"
-}
-
-# Get XDG runtime directory
-# Default: /run/user/$(id -u)
-# Usage: runtime_dir=$(common-xdg-runtime-dir)
-common-xdg-runtime-dir() {
-    local default_runtime="/run/user/$(id -u)"
-    echo "${XDG_RUNTIME_DIR:-$default_runtime}"
-}
-
-# ------------------------------
-# Library-Specific XDG Paths
-# ------------------------------
-# These functions provide standard paths for library components
-
-# Get library data directory
-# Usage: data_dir=$(common-lib-data-dir)
-common-lib-data-dir() {
-    echo "$(common-xdg-data-home)/lib"
-}
-
-# Get library cache directory
-# Usage: cache_dir=$(common-lib-cache-dir)
-common-lib-cache-dir() {
-    echo "$(common-xdg-cache-home)/lib"
-}
-
-# Get library state directory
-# Usage: state_dir=$(common-lib-state-dir)
-common-lib-state-dir() {
-    echo "$(common-xdg-state-home)/lib"
-}
-
-# Get library config directory
-# Usage: config_dir=$(common-lib-config-dir)
-common-lib-config-dir() {
-    echo "$(common-xdg-config-home)/lib"
-}
-
-# Get library documentation directory
-# Usage: docs_dir=$(common-lib-docs-dir)
-common-lib-docs-dir() {
-    echo "$(common-lib-data-dir)/docs"
-}
-
-# Get library templates directory
-# Usage: templates_dir=$(common-lib-template-dir)
-common-lib-template-dir() {
-    echo "$(common-lib-data-dir)/templates"
-}
-
-# Ensure library directories exist
-# Usage: common-lib-ensure-dirs
-common-lib-ensure-dirs() {
-    local -a dirs=(
-        "$(common-lib-data-dir)"
-        "$(common-lib-cache-dir)"
-        "$(common-lib-state-dir)"
-        "$(common-lib-config-dir)"
-        "$(common-lib-docs-dir)"
-        "$(common-lib-template-dir)"
-    )
-
-    for dir in "${dirs[@]}"; do
-        [[ ! -d "$dir" ]] && mkdir -p "$dir" 2>/dev/null
-    done
-}
 
 # ------------------------------
 # Color Constants
@@ -181,67 +79,18 @@ declare -r BOLD="$COLOR_BOLD"
 declare -r NC="$COLOR_NC"
 
 # ------------------------------
-# Command Existence Checks (Cached)
+# Command Existence Checks
 # ------------------------------
-# Cache command checks in XDG_CACHE_HOME for performance
 
-# Internal: cache file path
-_COMMON_CMD_CACHE_FILE="$(common-lib-cache-dir)/commands/cache"
-
-# Internal: initialize command cache
-_common-init-cmd-cache() {
-    local cache_dir="${_COMMON_CMD_CACHE_FILE:h}"  # Use zsh :h for dirname
-    [[ ! -d "$cache_dir" ]] && /bin/mkdir -p "$cache_dir" 2>/dev/null
-    [[ ! -f "$_COMMON_CMD_CACHE_FILE" ]] && touch "$_COMMON_CMD_CACHE_FILE" 2>/dev/null
-}
-
-# Check if a command exists (with caching)
+# Check if a command (or function) exists
 # Usage: common-command-exists "ls" && echo "found"
-# Returns: 0 if command exists, 1 otherwise
+# Returns: 0 if it exists, 1 otherwise
 common-command-exists() {
     local cmd="$1"
 
     [[ -z "$cmd" ]] && return 1
 
-    # Check cache first
-    if [[ -f "$_COMMON_CMD_CACHE_FILE" ]]; then
-        if /usr/bin/grep -q "^${cmd}:1$" "$_COMMON_CMD_CACHE_FILE" 2>/dev/null; then
-            return 0
-        elif /usr/bin/grep -q "^${cmd}:0$" "$_COMMON_CMD_CACHE_FILE" 2>/dev/null; then
-            return 1
-        fi
-    fi
-
-    # Not in cache, check for real
-    if command -v "$cmd" &>/dev/null; then
-        _common-cache-command "$cmd" 1
-        return 0
-    else
-        _common-cache-command "$cmd" 0
-        return 1
-    fi
-}
-
-# Internal: cache command result
-_common-cache-command() {
-    local cmd="$1"
-    local exists="$2"
-
-    _common-init-cmd-cache
-
-    # Remove old entry if exists
-    if [[ -f "$_COMMON_CMD_CACHE_FILE" ]]; then
-        /usr/bin/sed -i "/^${cmd}:/d" "$_COMMON_CMD_CACHE_FILE" 2>/dev/null
-    fi
-
-    # Add new entry
-    echo "${cmd}:${exists}" >> "$_COMMON_CMD_CACHE_FILE" 2>/dev/null
-}
-
-# Clear command cache
-# Usage: common-command-cache-clear
-common-command-cache-clear() {
-    [[ -f "$_COMMON_CMD_CACHE_FILE" ]] && rm -f "$_COMMON_CMD_CACHE_FILE"
+    command -v "$cmd" &>/dev/null
 }
 
 # Require a command to exist (returns error if not found)
@@ -352,87 +201,6 @@ common-string-sanitize() {
             echo "$string"
             ;;
     esac
-}
-
-# ------------------------------
-# Validation Helpers
-# ------------------------------
-
-# Validate required parameter
-# Usage: common-validate-required "$param" "param_name" || return 2
-common-validate-required() {
-    local param="$1"
-    local param_name="${2:-parameter}"
-
-    if [[ -z "$param" ]]; then
-        echo "Error: Required $param_name is missing" >&2
-        return 2  # Invalid argument
-    fi
-}
-
-# Validate file exists
-# Usage: common-validate-file "$file" || return $?
-common-validate-file() {
-    local file="$1"
-
-    if [[ -z "$file" ]]; then
-        echo "Error: File path is empty" >&2
-        return 2
-    fi
-
-    if [[ ! -f "$file" ]]; then
-        echo "Error: File not found: $file" >&2
-        return 3  # Resource not found
-    fi
-
-    if [[ ! -r "$file" ]]; then
-        echo "Error: File not readable: $file" >&2
-        return 4  # Permission denied
-    fi
-}
-
-# Validate directory exists
-# Usage: common-validate-directory "$dir" || return $?
-common-validate-directory() {
-    local dir="$1"
-
-    if [[ -z "$dir" ]]; then
-        echo "Error: Directory path is empty" >&2
-        return 2
-    fi
-
-    if [[ ! -d "$dir" ]]; then
-        echo "Error: Directory not found: $dir" >&2
-        return 3
-    fi
-
-    if [[ ! -r "$dir" ]]; then
-        echo "Error: Directory not readable: $dir" >&2
-        return 4
-    fi
-}
-
-# Validate numeric value
-# Usage: common-validate-numeric "$value" || return 2
-common-validate-numeric() {
-    local value="$1"
-
-    if [[ ! "$value" =~ ^-?[0-9]+$ ]]; then
-        echo "Error: Value must be numeric: $value" >&2
-        return 2
-    fi
-}
-
-# Validate enum value
-# Usage: common-validate-enum "$value" "opt1 opt2 opt3" || return 2
-common-validate-enum() {
-    local value="$1"
-    local options="$2"
-
-    if [[ ! " $options " =~ " $value " ]]; then
-        echo "Error: Invalid value: $value (valid: $options)" >&2
-        return 2
-    fi
 }
 
 # ------------------------------
@@ -702,25 +470,6 @@ common-is-not-empty() {
     [[ -n "$1" ]]
 }
 
-# Trim whitespace from string
-# Usage: trimmed=$(common-trim "  hello  ")
-common-trim() {
-    local str="$1"
-    echo "$str" | xargs
-}
-
-# Convert to lowercase
-# Usage: lower=$(common-to-lower "HELLO")
-common-to-lower() {
-    echo "$1" | tr '[:upper:]' '[:lower:]'
-}
-
-# Convert to uppercase
-# Usage: upper=$(common-to-upper "hello")
-common-to-upper() {
-    echo "$1" | tr '[:lower:]' '[:upper:]'
-}
-
 # ------------------------------
 # Array Helpers
 # ------------------------------
@@ -842,23 +591,6 @@ common-self-test() {
 
     local failed=0
 
-    # Test XDG paths
-    echo "✓ XDG Base Directories:"
-    echo "  DATA:    $(common-xdg-data-home)"
-    echo "  CONFIG:  $(common-xdg-config-home)"
-    echo "  CACHE:   $(common-xdg-cache-home)"
-    echo "  STATE:   $(common-xdg-state-home)"
-    echo "  RUNTIME: $(common-xdg-runtime-dir)"
-    echo ""
-
-    # Test library paths
-    echo "✓ Library Directories:"
-    echo "  Data:      $(common-lib-data-dir)"
-    echo "  Cache:     $(common-lib-cache-dir)"
-    echo "  Docs:      $(common-lib-docs-dir)"
-    echo "  Templates: $(common-lib-template-dir)"
-    echo ""
-
     # Test colors
     echo "✓ Color Constants:"
     echo -e "  ${COLOR_GREEN}GREEN${COLOR_RESET} ${COLOR_RED}RED${COLOR_RESET} ${COLOR_BLUE}BLUE${COLOR_RESET} ${COLOR_YELLOW}YELLOW${COLOR_RESET}"
@@ -882,26 +614,11 @@ common-self-test() {
     echo "  Sanitized: '$safe_str'"
     echo ""
 
-    # Test validation
-    echo "✓ Validation:"
-    common-validate-required "test" "param" &>/dev/null && echo "  Required: pass" || { echo "  Required: FAILED"; failed=1; }
-    common-validate-required "" "param" &>/dev/null && { echo "  Empty: FAILED"; failed=1; } || echo "  Empty: correctly rejected"
-    common-validate-numeric "123" &>/dev/null && echo "  Numeric: pass" || { echo "  Numeric: FAILED"; failed=1; }
-    common-validate-numeric "abc" &>/dev/null && { echo "  Non-numeric: FAILED"; failed=1; } || echo "  Non-numeric: correctly rejected"
-    echo ""
-
     # Test platform
     echo "✓ Platform Detection:"
     echo "  OS: $(common-get-os)"
     echo "  Linux: $(common-is-linux && echo "yes" || echo "no")"
     echo "  macOS: $(common-is-macos && echo "yes" || echo "no")"
-    echo ""
-
-    # Test string helpers
-    echo "✓ String Helpers:"
-    echo "  lowercase: $(common-to-lower "HELLO")"
-    echo "  uppercase: $(common-to-upper "hello")"
-    echo "  trim: '$(common-trim "  spaces  ")'"
     echo ""
 
     # Test timestamp

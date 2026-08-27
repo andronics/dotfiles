@@ -40,13 +40,25 @@ if ! source "${DOTLIB}/_common" 2>/dev/null; then
     return 1
 fi
 
+# Load _validation (required)
+if ! source "${DOTLIB}/_validation" 2>/dev/null; then
+    echo "[ERROR] _cache requires _validation - cannot load" >&2
+    return 1
+fi
+
+# Load _xdg (required)
+if ! source "${DOTLIB}/_xdg" 2>/dev/null; then
+    echo "[ERROR] _cache requires _xdg - cannot load" >&2
+    return 1
+fi
+
 # ------------------------------
 # Configuration Variables
 # ------------------------------
 
 # XDG-compliant paths
-declare -g CACHE_DATA_DIR="$(common-lib-data-dir)/cache"
-declare -g CACHE_STATE_DIR="$(common-lib-state-dir)/cache"
+declare -g CACHE_DATA_DIR="$(xdg-data-dir cache)"
+declare -g CACHE_STATE_DIR="$(xdg-state-dir cache)"
 
 # Cache configuration
 declare -g CACHE_DEFAULT_TTL="${CACHE_DEFAULT_TTL:-3600}"  # 1 hour default
@@ -142,10 +154,10 @@ cache-set() {
 
     # Validate inputs. Only the key is required — an empty string is a legitimate,
     # meaningful value to cache (e.g. "no remotes configured"), not a missing argument.
-    common-validate-required "$key" "key" || return 2
+    validate-type-string "$key" || return 2
 
     if [[ -n "$ttl" ]]; then
-        common-validate-numeric "$ttl" || {
+        validate-type-integer "$ttl" || {
             _cache-log-error "TTL must be numeric: $ttl"
             return 2
         }
@@ -183,7 +195,7 @@ cache-set() {
 cache-get() {
     local key="$1"
 
-    common-validate-required "$key" "key" || return 2
+    validate-type-string "$key" || return 2
 
     # Check if key exists
     if [[ -z "${_CACHE_DATA[$key]+exists}" ]]; then
@@ -213,7 +225,7 @@ cache-get() {
 cache-has() {
     local key="$1"
 
-    common-validate-required "$key" "key" || return 2
+    validate-type-string "$key" || return 2
 
     # Check if key exists
     [[ -z "${_CACHE_DATA[$key]+exists}" ]] && return 1
@@ -230,7 +242,7 @@ cache-has() {
 cache-clear() {
     local key="$1"
 
-    common-validate-required "$key" "key" || return 2
+    validate-type-string "$key" || return 2
 
     if [[ -n "${_CACHE_DATA[$key]+exists}" ]]; then
         unset "_CACHE_DATA[$key]"
@@ -253,7 +265,7 @@ cache-clear() {
 cache-clear-namespace() {
     local namespace="$1"
 
-    common-validate-required "$namespace" "namespace" || return 2
+    validate-type-string "$namespace" || return 2
 
     local count=0
     local prefix="${namespace}:"
@@ -506,9 +518,6 @@ Examples:
   export CACHE_AUTO_PERSIST=true
   cache-init                              # Auto-loads persisted cache
   cache-set "key" "value"                 # Auto-saves
-
-For complete documentation:
-  cat $(common-lib-docs-dir)/extensions/_cache.md
 
 EOF
 }

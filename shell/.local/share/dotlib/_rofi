@@ -48,6 +48,12 @@ if ! source "${DOTLIB}/_common" 2>/dev/null; then
     return 1
 fi
 
+# Load _xdg (required)
+if ! source "${DOTLIB}/_xdg" 2>/dev/null; then
+    echo "[ERROR] _rofi requires _xdg - cannot load" >&2
+    return 1
+fi
+
 # ------------------------------
 # Layer 2: Load Infrastructure (Optional)
 # ------------------------------
@@ -73,7 +79,7 @@ source "${DOTLIB}/_lifecycle" 2>/dev/null || true
 # All configurable via environment variables
 
 # ROFI_CONFIG: Path to rofi config file
-declare -g ROFI_CONFIG="${ROFI_CONFIG:-$(common-xdg-config-home)/rofi/config.rasi}"
+declare -g ROFI_CONFIG="${ROFI_CONFIG:-$(xdg-config-dir rofi)/config.rasi}"
 
 # ROFI_THEME: Theme name or path
 declare -g ROFI_THEME="${ROFI_THEME:-}"

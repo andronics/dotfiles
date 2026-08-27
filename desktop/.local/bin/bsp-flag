@@ -1,0 +1,83 @@
+#!/usr/bin/env zsh
+
+name=$(basename $0)
+
+# ------------------------------
+
+source "${DOTLIB}/_log"       || { echo "missing _log" >&2; exit 1; }
+source "${DOTLIB}/_singleton" || { echo "missing _singleton" >&2; exit 1; }
+
+# ------------------------------
+
+singleton-lock "$name" || exit 1
+
+# ------------------------------
+
+_bsp_flag() {
+
+    log-info "subscribing to events"
+
+    _window=$(xprop -root _NET_ACTIVE_WINDOW | awk '{print $5}')
+
+    bspc subscribe node_flag | while read _event _monitor _deskop _node _flag _state; do
+
+        log-debug "node [${_node}] flag ${_flag} set to ${_state}"
+        
+        case "${_flag}" in
+            'floating') _bsp_flag_floating ;;
+            'hidden') _bsp_flag_hidden ;;
+            'locked') _bsp_flag_locked ;;
+            'marked') _bsp_flag_marked ;;
+            'private') _bsp_flag_private ;;
+            'sticky') _bsp_flag_sticky ;;
+        esac
+
+    done
+
+}
+
+_bsp_flag_floating() {
+
+    log-warning "${FUNCNAME}: not implemented"
+
+}
+
+_bsp_flag_hidden() {
+
+    log-warning "${FUNCNAME}: not implemented"
+
+}
+
+_bsp_flag_locked() {
+
+    log-warning "${FUNCNAME}: not implemented"
+
+}
+
+_bsp_flag_marked() {
+
+    [[ ${_state} == "on" ]] && {
+        bspc config -n "${_node}" border_width 3
+        bspc config focused_border_color $(palette blue)
+    } || {
+        bspc config -n "${_node}" border_width 1
+        bspc config focused_border_color $(palette red)
+    }
+
+}
+
+_bsp_flag_private() {
+
+    log-warning "${FUNCNAME}: not implemented"
+
+}
+
+_bsp_flag_sticky() {
+
+    log-warning "${FUNCNAME}: not implemented"
+
+}
+
+# ------------------------------
+
+_bsp_flag "$@"

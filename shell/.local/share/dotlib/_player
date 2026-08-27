@@ -57,6 +57,12 @@ if ! source "${DOTLIB}/_common" 2>/dev/null; then
     return 1
 fi
 
+# Load _validation (required)
+if ! source "${DOTLIB}/_validation" 2>/dev/null; then
+    echo "[ERROR] _player requires _validation - cannot load" >&2
+    return 1
+fi
+
 # Load required extensions
 if ! source "${DOTLIB}/_jq" 2>/dev/null; then
     echo "[ERROR] _player requires _jq - cannot load" >&2
@@ -408,7 +414,7 @@ player-validate-player() {
     local player_name="$1"
 
     _player-init
-    common-validate-required "$player_name" "player name" || return 2
+    validate-type-string "$player_name" || return 2
 
     _player-check-command || return 127
 
@@ -587,7 +593,7 @@ player-exists() {
     local player_name="$1"
 
     _player-init
-    common-validate-required "$player_name" "player name" || return 2
+    validate-type-string "$player_name" || return 2
     _player-check-command || return 127
 
     player-list-all | grep -q "^${player_name}$" && return 0 || return 1
@@ -837,7 +843,7 @@ player-seek() {
     local player="${2:-}"
 
     _player-init
-    common-validate-required "$position" "position" || return 2
+    validate-type-string "$position" || return 2
     _player-check-command || return 127
 
     log-debug "Seeking" "position=$position" "player=$player"
@@ -991,7 +997,7 @@ player-set-volume() {
     local player="${2:-}"
 
     _player-init
-    common-validate-required "$volume" "volume" || return 2
+    validate-type-string "$volume" || return 2
     _player-check-command || return 127
 
     log-debug "Setting volume" "volume=$volume" "player=$player"

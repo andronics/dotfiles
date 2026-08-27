@@ -57,6 +57,12 @@ if ! source "${DOTLIB}/_common" 2>/dev/null; then
     return 1
 fi
 
+# Load _validation (required)
+if ! source "${DOTLIB}/_validation" 2>/dev/null; then
+    echo "[ERROR] _bluetooth requires _validation - cannot load" >&2
+    return 1
+fi
+
 if ! source "${DOTLIB}/_xdg" 2>/dev/null; then
     echo "[ERROR] _bluetooth requires _xdg - cannot load" >&2
     return 1
@@ -114,9 +120,9 @@ fi
 # ------------------------------
 
 # Paths (XDG-compliant)
-declare -g BLUETOOTH_CACHE_DIR="$(common-lib-cache-dir)/bluetooth"
-declare -g BLUETOOTH_STATE_DIR="$(common-lib-state-dir)/bluetooth"
-declare -g BLUETOOTH_CONFIG_DIR="$(common-lib-config-dir)/bluetooth"
+declare -g BLUETOOTH_CACHE_DIR="$(xdg-cache-dir bluetooth)"
+declare -g BLUETOOTH_STATE_DIR="$(xdg-state-dir bluetooth)"
+declare -g BLUETOOTH_CONFIG_DIR="$(xdg-config-dir bluetooth)"
 
 # FIFO paths
 declare -g BLUETOOTH_FIFO_DIR="${BLUETOOTH_STATE_DIR}/fifo"
@@ -294,7 +300,7 @@ _bluetooth-parse-mac() {
 bluetooth-validate-mac() {
     local mac="$1"
 
-    common-validate-required "$mac" "MAC address" || return 2
+    validate-type-string "$mac" || return 2
 
     if [[ "$mac" =~ ^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$ ]]; then
         return 0
@@ -1644,7 +1650,7 @@ bluetooth-fifo-init() {
 bluetooth-fifo-command() {
     local cmd="$1"
 
-    common-validate-required "$cmd" "command" || return 2
+    validate-type-string "$cmd" || return 2
 
     if [[ "$_BLUETOOTH_FIFO_ACTIVE" != "true" ]]; then
         log-error "FIFO not active"
