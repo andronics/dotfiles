@@ -10,39 +10,40 @@
 # wrapper (see the dotlib README's "Module status" note). This module
 # runs real demos through them -- _ui, _format, _string, _validation,
 # _events, _async, _rules, _schema, _actions, _plugins,
-# _bspwm, _rofi, _acpi, _network, _patterns, _args, _http, _server,
-# _docker, _xidlehook, _notify, _test -- using each
+# _bspwm, _rofi, _network, _patterns, _args, _server,
+# _xidlehook, _notify, _test -- using each
 # module's actual public functions. Business logic stays in those
 # modules; this file only supplies narration, sample data, and
 # pacing.
 #
-# _crypto, _wifi, and _vpn were removed (2026-08-27 dotlib review:
-# unused outside this tour, and _wifi/_crypto carried real security
-# bugs not worth keeping around unexercised - see REVIEW.md).
+# _crypto, _wifi, and _vpn were removed 2026-08-27 (unused outside this
+# tour, and _wifi/_crypto carried real security bugs not worth keeping
+# around unexercised). _acpi, _docker, and _http were removed the same
+# way in a follow-up pass - see REVIEW.md for the rationale on both.
 #
 # House rule for every section: never do anything that would surprise
 # someone running `tour run` unattended. Concretely:
 #   - No interactive prompts (tour-rofi skips rofi-select/-confirm/
 #     -input/-menu; try them yourself, see that section's output).
 #   - No real network calls beyond one bounded ping + DNS lookup in
-#     tour-network (tour-http stays fully offline after an earlier
-#     draft that opened a real loopback listener got killed
-#     unpredictably by this sandbox's network policy).
+#     tour-network (an earlier draft of the now-removed tour-http also
+#     opened a real loopback listener, which got killed unpredictably
+#     by this sandbox's network policy - avoid that class of thing).
 #   - No mutation of live system/daemon state: tour-bspwm, tour-rofi,
-#     tour-server, tour-docker, and tour-xidlehook are all read-only
-#     against real subsystems (window manager, rofi config, port
-#     probes, docker, idle timers) -- every mutating function in
-#     those modules (connect, start, kill, forget, prune, trigger,
-#     login, ...) is deliberately never called here.
+#     tour-server, and tour-xidlehook are all read-only against real
+#     subsystems (window manager, rofi config, port probes, idle
+#     timers) -- every mutating function in those modules (connect,
+#     start, kill, forget, prune, trigger, login, ...) is deliberately
+#     never called here.
 #   - Graceful skip, not failure, when a subsystem isn't present
-#     (bspwm/docker/xidlehook all check availability first and
-#     return 0 with a warning rather than erroring).
+#     (bspwm/xidlehook check availability first and return 0 with a
+#     warning rather than erroring).
 #
 # Dependencies:
 #   Required:
 #     - _common, _ui, _format, _string, _validation, _events, _async,
-#       _rules, _schema, _actions, _plugins, _rofi, _acpi,
-#       _network, _patterns, _args, _http, _server, _docker,
+#       _rules, _schema, _actions, _plugins, _rofi,
+#       _network, _patterns, _args, _server,
 #       _xidlehook, _notify, _test
 #   Optional:
 #     - _log
@@ -70,13 +71,10 @@ source "${DOTLIB}/_plugins"    || { echo "[ERROR] _tour requires _plugins" >&2; 
 # so this stays optional and tour-bspwm checks availability itself.
 source "${DOTLIB}/_bspwm" 2>/dev/null || true
 source "${DOTLIB}/_rofi"       || { echo "[ERROR] _tour requires _rofi" >&2; return 1; }
-source "${DOTLIB}/_acpi"       || { echo "[ERROR] _tour requires _acpi" >&2; return 1; }
 source "${DOTLIB}/_network"    || { echo "[ERROR] _tour requires _network" >&2; return 1; }
 source "${DOTLIB}/_patterns"   || { echo "[ERROR] _tour requires _patterns" >&2; return 1; }
 source "${DOTLIB}/_args"       || { echo "[ERROR] _tour requires _args" >&2; return 1; }
-source "${DOTLIB}/_http"       || { echo "[ERROR] _tour requires _http" >&2; return 1; }
 source "${DOTLIB}/_server"     || { echo "[ERROR] _tour requires _server" >&2; return 1; }
-source "${DOTLIB}/_docker"     || { echo "[ERROR] _tour requires _docker" >&2; return 1; }
 source "${DOTLIB}/_xidlehook"  || { echo "[ERROR] _tour requires _xidlehook" >&2; return 1; }
 source "${DOTLIB}/_notify"     || { echo "[ERROR] _tour requires _notify" >&2; return 1; }
 source "${DOTLIB}/_test"       || { echo "[ERROR] _tour requires _test" >&2; return 1; }
@@ -95,13 +93,10 @@ typeset -gA _TOUR_DESCRIPTIONS=(
     [plugins]="Tour _plugins: discovery, validation, and dependency-ordered init"
     [bspwm]="Tour _bspwm: live window manager introspection (read-only, skips if unavailable)"
     [rofi]="Tour _rofi: config, theme discovery, and formatting (no menus popped)"
-    [acpi]="Tour _acpi: live battery/AC/thermal readout"
     [network]="Tour _network: connectivity, interfaces, and routing"
     [patterns]="Tour _patterns: glob matching and bulk operations"
     [args]="Tour _args: declarative CLI arg parsing"
-    [http]="Tour _http: auth headers, URL encoding, query strings (no network calls)"
     [server]="Tour _server: port/type checks and status queries (never starts a server)"
-    [docker]="Tour _docker: live container/image/volume listing (read-only, skips if unavailable)"
     [xidlehook]="Tour _xidlehook: idle-timer status (read-only, skips if unavailable)"
     [notify]="Tour _notify: a real desktop notification"
     [framework]="Tour _dispatcher's own help/commands/completion/dry-run"
@@ -576,17 +571,6 @@ tour-rofi() {
     ui-info "try one yourself: rofi-select 'pick one' <<< \$'a\\\\nb\\\\nc'"
 }
 
-tour-acpi() {
-    ui-header "_acpi — live battery / AC / thermal readout"
-
-    ui-info "adapter and battery status..."
-    acpi-power-status
-
-    echo ""
-    ui-info "derived power profile (acpi-power-profile: performance/balanced/powersave)..."
-    ui-list "profile: $(acpi-power-profile)"
-}
-
 tour-network() {
     ui-header "_network — connectivity, interfaces & routing"
 
@@ -708,42 +692,12 @@ tour-args() {
     args-clear
 }
 
-tour-http() {
-    ui-header "_http — request helpers (no network calls made)"
-
-    ui-info "this tour never opens a real connection: hitting the live"
-    ui-info "internet would make 'tour run' flaky offline or in a"
-    ui-info "sandbox, and standing up even a local listener is the kind"
-    ui-info "of thing sandboxed environments reasonably kill on sight."
-    ui-info "sticking to _http's pure, network-free builders instead."
-
-    echo ""
-    ui-info "auth header builders..."
-    ui-list \
-        "basic-auth: $(http-basic-auth admin secret)" \
-        "bearer-token: $(http-bearer-token abc123)" \
-        "api-key: $(http-api-key mykey)"
-
-    echo ""
-    ui-info "URL encoding..."
-    ui-list \
-        "encode: $(http-url-encode "hello world & stuff")" \
-        "decode: $(http-url-decode "hello%20world%20%26%20stuff")"
-
-    echo ""
-    ui-info "query-string builder (patterns-style key/value pairs)..."
-    ui-success "$(http-query-string "q" "hello world" "page" "1")"
-
-    echo ""
-    ui-info "try a real request yourself: http-get https://example.com"
-}
-
 tour-server() {
     ui-header "_server — port/type checks & status (never starts a server)"
 
     ui-info "this section only probes and queries -- server-start would"
     ui-info "spawn a real listening process, which is exactly the kind"
-    ui-info "of thing this tour avoids after the _http section's detour."
+    ui-info "of thing this tour avoids."
 
     echo ""
     ui-info "which server backends are installed (server-check-type)..."
@@ -764,39 +718,6 @@ tour-server() {
     echo ""
     ui-info "server-list / server-info (no servers running, none started)..."
     server-info
-}
-
-tour-docker() {
-    ui-header "_docker — live container/image status (read-only)"
-
-    if ! docker-check-available 2>/dev/null; then
-        ui-warning "docker daemon not available on this host - skipping"
-        return 0
-    fi
-
-    ui-info "docker-ping / docker-version..."
-    docker-ping >/dev/null 2>&1 && ui-success "daemon responding"
-    ui-list "$(docker-version 2>/dev/null | /usr/bin/jq -r '"Docker \(.Version) (API \(.ApiVersion))"' 2>/dev/null || echo "version: unavailable")"
-
-    echo ""
-    ui-info "containers (docker-container-list)..."
-    local containers
-    containers=$(docker-container-list --all 2>/dev/null | /usr/bin/jq -r '.[] | "\(.Names[0]) (\(.State))"' 2>/dev/null) || true
-    if [[ -n "$containers" ]]; then
-        echo "$containers" | head -5
-    else
-        ui-warning "this daemon's API response has malformed JSON in it (unescaped control characters in a label) - jq can't parse it strictly, which is jq being correct, not a dotlib bug"
-    fi
-
-    echo ""
-    ui-info "images (docker-image-list)..."
-    docker-image-list 2>/dev/null | /usr/bin/jq -r '.[] | .RepoTags[0] // "<none>"' 2>/dev/null | head -5
-
-    echo ""
-    ui-info "volumes (docker-volume-list) & networks (docker-network-list)..."
-    ui-list \
-        "volumes: $(docker-volume-list 2>/dev/null | /usr/bin/jq -r '.Volumes | length' 2>/dev/null) total" \
-        "networks: $(docker-network-list 2>/dev/null | /usr/bin/jq -r 'length' 2>/dev/null) total"
 }
 
 tour-xidlehook() {
@@ -845,7 +766,7 @@ tour-run() {
     local fast=false
     [[ "$1" == "--fast" ]] && fast=true
 
-    local -a sections=(intro ui format string validate events async rules schema actions plugins bspwm rofi acpi network patterns args http server docker xidlehook notify framework)
+    local -a sections=(intro ui format string validate events async rules schema actions plugins bspwm rofi network patterns args server xidlehook notify framework)
     local section
 
     for section in "${sections[@]}"; do
@@ -879,13 +800,10 @@ _tour-selftest-cases() {
     test-it "plugins section runs"  _tour-selftest-plugins
     test-it "bspwm section runs"    _tour-selftest-bspwm
     test-it "rofi section runs"     _tour-selftest-rofi
-    test-it "acpi section runs"     _tour-selftest-acpi
     test-it "network section runs"  _tour-selftest-network
     test-it "patterns section runs" _tour-selftest-patterns
     test-it "args section runs"     _tour-selftest-args
-    test-it "http section runs"     _tour-selftest-http
     test-it "server section runs"   _tour-selftest-server
-    test-it "docker section runs"   _tour-selftest-docker
     test-it "xidlehook section runs" _tour-selftest-xidlehook
 }
 
@@ -902,13 +820,10 @@ _tour-selftest-actions()  { test-assert-exit-code 0 _tour-quiet tour-actions; }
 _tour-selftest-plugins()  { test-assert-exit-code 0 _tour-quiet tour-plugins; }
 _tour-selftest-bspwm()    { test-assert-exit-code 0 _tour-quiet tour-bspwm; }
 _tour-selftest-rofi()     { test-assert-exit-code 0 _tour-quiet tour-rofi; }
-_tour-selftest-acpi()     { test-assert-exit-code 0 _tour-quiet tour-acpi; }
 _tour-selftest-network()  { test-assert-exit-code 0 _tour-quiet tour-network; }
 _tour-selftest-patterns() { test-assert-exit-code 0 _tour-quiet tour-patterns; }
 _tour-selftest-args()     { test-assert-exit-code 0 _tour-quiet tour-args; }
-_tour-selftest-http()     { test-assert-exit-code 0 _tour-quiet tour-http; }
 _tour-selftest-server()   { test-assert-exit-code 0 _tour-quiet tour-server; }
-_tour-selftest-docker()   { test-assert-exit-code 0 _tour-quiet tour-docker; }
 _tour-selftest-xidlehook() { test-assert-exit-code 0 _tour-quiet tour-xidlehook; }
 
 tour-self-test() {
