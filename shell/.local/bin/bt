@@ -2,7 +2,7 @@
 set -e
 
 source "${DOTLIB}/_dispatcher" || { echo "missing _dispatcher" >&2; exit 1; }
-source "${DOTLIB}/_bt"         || { echo "missing _bt" >&2; exit 1; }
+source "${DOTLIB}/_bluetooth_ui" || { echo "missing _bluetooth_ui" >&2; exit 1; }
 
 dispatcher-init "bt" \
     --route=function \

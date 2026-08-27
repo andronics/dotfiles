@@ -1,30 +1,31 @@
 #!/usr/bin/env zsh
 
-# _bt - Bluetooth CLI wrapper: rofi menus, dunstify notifications, polybar
-# status formatting, and name-or-MAC device resolution over the shared
-# _bluetooth module.
+# _bluetooth_ui - Bluetooth CLI wrapper: rofi menus, dunstify notifications,
+# polybar status formatting, and name-or-MAC device resolution over the
+# shared _bluetooth module. Backs the `bt` wrapper (functions stay named
+# bt-* - the dispatcher prefix is tied to the wrapper name, not this file).
 #
 # _bluetooth's public functions are MAC-only; this module resolves a
 # device name to a MAC before delegating to them.
 #
 # Usage:
-#   source "${DOTLIB}/_bt"
+#   source "${DOTLIB}/_bluetooth_ui"
 #
 # Dependencies:
 #   Required:
 #     - _common, _log, _xdg: core utilities
 #     - _bluetooth: bluetooth backend (power/scan/connect/pair/trust/...)
 
-[[ -n "${BT_LOADED:-}" ]] && return 0
-declare -gr BT_LOADED=1
+[[ -n "${BLUETOOTH_UI_LOADED:-}" ]] && return 0
+declare -gr BLUETOOTH_UI_LOADED=1
 
-source "${DOTLIB}/_common"    || { echo "[ERROR] _bt requires _common" >&2; return 1; }
+source "${DOTLIB}/_common"    || { echo "[ERROR] _bluetooth_ui requires _common" >&2; return 1; }
 source "${DOTLIB}/_log"       2>/dev/null || true
-source "${DOTLIB}/_xdg"       || { echo "[ERROR] _bt requires _xdg" >&2; return 1; }
-source "${DOTLIB}/_bluetooth" || { echo "[ERROR] _bt requires _bluetooth" >&2; return 1; }
+source "${DOTLIB}/_xdg"       || { echo "[ERROR] _bluetooth_ui requires _xdg" >&2; return 1; }
+source "${DOTLIB}/_bluetooth" || { echo "[ERROR] _bluetooth_ui requires _bluetooth" >&2; return 1; }
 
-declare -g _BT_DATA_DIR="$(xdg-data-dir "bluetooth")"
-declare -g _BT_THEME_FILE="${_BT_DATA_DIR}/theme.rasi"
+declare -g _BLUETOOTH_UI_DATA_DIR="$(xdg-data-dir "bluetooth")"
+declare -g _BLUETOOTH_UI_THEME_FILE="${_BLUETOOTH_UI_DATA_DIR}/theme.rasi"
 
 typeset -gA _BT_DESCRIPTIONS=(
     [power-on]="Turn bluetooth adapter on"
@@ -55,7 +56,7 @@ typeset -gA _BT_DESCRIPTIONS=(
 # Private Helpers
 # ------------------------------
 
-_bt-notify() {
+_bluetooth_ui-notify() {
     local _title="$1"
     local _message="$2"
     local _urgency="${3:-normal}"
@@ -67,7 +68,7 @@ _bt-notify() {
     fi
 }
 
-_bt-icon() {
+_bluetooth_ui-icon() {
     local _state="$1"
 
     case "$_state" in
@@ -79,7 +80,7 @@ _bt-icon() {
     esac
 }
 
-_bt-require-powered() {
+_bluetooth_ui-require-powered() {
     bluetooth-power-status >/dev/null 2>&1 || {
         log-error "Bluetooth adapter is powered off"
         return 1
@@ -87,22 +88,22 @@ _bt-require-powered() {
 }
 
 # Reformat _bluetooth's "Device MAC Name..." lines into "MAC Name"
-_bt-format-devices() {
+_bluetooth_ui-format-devices() {
     awk '/^Device/ {print $2, substr($0, index($0,$3))}'
 }
 
-_bt-is-paired() {
+_bluetooth_ui-is-paired() {
     local _mac="$1"
     bluetooth-devices-paired | grep -qi "$_mac"
 }
 
 # Resolve a MAC-or-name argument to a MAC address.
-_bt-resolve-device() {
+_bluetooth_ui-resolve-device() {
     local _input="$1"
 
     [[ -z "$_input" ]] && return 0
 
-    if [[ "$_input" =~ ^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$ ]]; then
+    if bluetooth-validate-mac "$_input" 2>/dev/null; then
         bluetooth-format-mac "$_input"
         return 0
     fi
@@ -142,7 +143,7 @@ bt-power-status() {
 # ------------------------------
 
 bt-scan-start() {
-    _bt-require-powered || return 1
+    _bluetooth_ui-require-powered || return 1
     bluetooth-scan-start "$@"
     echo "Scanning started"
 }
@@ -165,15 +166,15 @@ bt-scan-toggle() {
 # ------------------------------
 
 bt-devices() {
-    bluetooth-devices-list | _bt-format-devices
+    bluetooth-devices-list | _bluetooth_ui-format-devices
 }
 
 bt-devices-paired() {
-    bluetooth-devices-paired | _bt-format-devices
+    bluetooth-devices-paired | _bluetooth_ui-format-devices
 }
 
 bt-devices-connected() {
-    bluetooth-devices-list connected | _bt-format-devices
+    bluetooth-devices-list connected | _bluetooth_ui-format-devices
 }
 
 # ------------------------------
@@ -189,24 +190,24 @@ bt-connect() {
         return $?
     fi
 
-    _mac="$(_bt-resolve-device "$_input")" || true
+    _mac="$(_bluetooth_ui-resolve-device "$_input")" || true
     if [[ -z "$_mac" ]]; then
         log-error "Device not found: $_input"
-        _bt-notify "Bluetooth" "Device not found: $_input" "critical"
+        _bluetooth_ui-notify "Bluetooth" "Device not found: $_input" "critical"
         return 1
     fi
 
-    _bt-require-powered || return 1
+    _bluetooth_ui-require-powered || return 1
 
     local _name
     _name="$(bluetooth-device-alias "$_mac" 2>/dev/null)" || true
-    _bt-notify "Bluetooth" "Connecting to ${_name:-$_mac}..."
+    _bluetooth_ui-notify "Bluetooth" "Connecting to ${_name:-$_mac}..."
 
     if bluetooth-connect "$_mac"; then
-        _bt-notify "Bluetooth" "Connected to ${_name:-$_mac}" "normal"
+        _bluetooth_ui-notify "Bluetooth" "Connected to ${_name:-$_mac}" "normal"
         echo "Connected to ${_name:-$_mac}"
     else
-        _bt-notify "Bluetooth" "Failed to connect to ${_name:-$_mac}" "critical"
+        _bluetooth_ui-notify "Bluetooth" "Failed to connect to ${_name:-$_mac}" "critical"
         echo "Failed to connect to ${_name:-$_mac}"
         return 1
     fi
@@ -217,31 +218,31 @@ bt-disconnect() {
     local _mac
 
     if [[ -z "$_input" ]]; then
-        _mac="$(bluetooth-devices-list connected | _bt-format-devices | head -1 | awk '{print $1}')"
+        _mac="$(bluetooth-devices-list connected | _bluetooth_ui-format-devices | head -1 | awk '{print $1}')"
         if [[ -z "$_mac" ]]; then
-            _bt-notify "Bluetooth" "No connected devices"
+            _bluetooth_ui-notify "Bluetooth" "No connected devices"
             echo "No connected devices"
             return 0
         fi
     else
-        _mac="$(_bt-resolve-device "$_input")" || true
+        _mac="$(_bluetooth_ui-resolve-device "$_input")" || true
     fi
 
     if [[ -z "$_mac" ]]; then
         log-error "Device not found: $_input"
-        _bt-notify "Bluetooth" "Device not found: $_input" "critical"
+        _bluetooth_ui-notify "Bluetooth" "Device not found: $_input" "critical"
         return 1
     fi
 
     local _name
     _name="$(bluetooth-device-alias "$_mac" 2>/dev/null)" || true
-    _bt-notify "Bluetooth" "Disconnecting from ${_name:-$_mac}..."
+    _bluetooth_ui-notify "Bluetooth" "Disconnecting from ${_name:-$_mac}..."
 
     if bluetooth-disconnect "$_mac"; then
-        _bt-notify "Bluetooth" "Disconnected from ${_name:-$_mac}" "normal"
+        _bluetooth_ui-notify "Bluetooth" "Disconnected from ${_name:-$_mac}" "normal"
         echo "Disconnected from ${_name:-$_mac}"
     else
-        _bt-notify "Bluetooth" "Failed to disconnect from ${_name:-$_mac}" "critical"
+        _bluetooth_ui-notify "Bluetooth" "Failed to disconnect from ${_name:-$_mac}" "critical"
         echo "Failed to disconnect"
         return 1
     fi
@@ -252,29 +253,29 @@ bt-pair() {
     local _mac
 
     if [[ -z "$_input" ]]; then
-        _bt-menu-pair
+        _bluetooth_ui-menu-pair
         return $?
     fi
 
-    _mac="$(_bt-resolve-device "$_input")" || true
+    _mac="$(_bluetooth_ui-resolve-device "$_input")" || true
     if [[ -z "$_mac" ]]; then
         log-error "Device not found: $_input"
-        _bt-notify "Bluetooth" "Device not found: $_input" "critical"
+        _bluetooth_ui-notify "Bluetooth" "Device not found: $_input" "critical"
         return 1
     fi
 
-    _bt-require-powered || return 1
+    _bluetooth_ui-require-powered || return 1
 
     local _name
     _name="$(bluetooth-device-alias "$_mac" 2>/dev/null)" || true
-    _bt-notify "Bluetooth" "Pairing with ${_name:-$_mac}..." "normal"
+    _bluetooth_ui-notify "Bluetooth" "Pairing with ${_name:-$_mac}..." "normal"
     echo "Pairing with ${_name:-$_mac}..."
 
     if bluetooth-pair "$_mac"; then
-        _bt-notify "Bluetooth" "Paired with ${_name:-$_mac}" "normal"
+        _bluetooth_ui-notify "Bluetooth" "Paired with ${_name:-$_mac}" "normal"
         echo "Paired with ${_name:-$_mac}"
     else
-        _bt-notify "Bluetooth" "Pairing failed: ${_name:-$_mac}" "critical"
+        _bluetooth_ui-notify "Bluetooth" "Pairing failed: ${_name:-$_mac}" "critical"
         echo "Pairing failed"
         return 1
     fi
@@ -289,7 +290,7 @@ bt-unpair() {
         return 1
     fi
 
-    _mac="$(_bt-resolve-device "$_input")" || true
+    _mac="$(_bluetooth_ui-resolve-device "$_input")" || true
     if [[ -z "$_mac" ]]; then
         log-error "Device not found: $_input"
         return 1
@@ -310,7 +311,7 @@ bt-trust() {
         return 1
     fi
 
-    _mac="$(_bt-resolve-device "$_input")" || true
+    _mac="$(_bluetooth_ui-resolve-device "$_input")" || true
     if [[ -z "$_mac" ]]; then
         log-error "Device not found: $_input"
         return 1
@@ -331,7 +332,7 @@ bt-untrust() {
         return 1
     fi
 
-    _mac="$(_bt-resolve-device "$_input")" || true
+    _mac="$(_bluetooth_ui-resolve-device "$_input")" || true
     if [[ -z "$_mac" ]]; then
         log-error "Device not found: $_input"
         return 1
@@ -349,21 +350,21 @@ bt-untrust() {
 
 bt-status-icon() {
     if ! bluetooth-power-status >/dev/null 2>&1; then
-        _bt-icon "off"
+        _bluetooth_ui-icon "off"
         return
     fi
 
     if [[ -n "$(bluetooth-devices-list connected | head -1)" ]]; then
-        _bt-icon "connected"
+        _bluetooth_ui-icon "connected"
         return
     fi
 
     if bluetooth-scan-is-active >/dev/null 2>&1; then
-        _bt-icon "scanning"
+        _bluetooth_ui-icon "scanning"
         return
     fi
 
-    _bt-icon "on"
+    _bluetooth_ui-icon "on"
 }
 
 bt-status-name() {
@@ -373,7 +374,7 @@ bt-status-name() {
     fi
 
     local _connected
-    _connected="$(bluetooth-devices-list connected | _bt-format-devices | head -1)"
+    _connected="$(bluetooth-devices-list connected | _bluetooth_ui-format-devices | head -1)"
 
     if [[ -n "$_connected" ]]; then
         echo "$_connected" | awk '{$1=""; print $0}' | xargs
@@ -394,22 +395,22 @@ bt-status-full() {
 # ------------------------------
 
 bt-menu-connect() {
-    _bt-require-powered || return 1
+    _bluetooth_ui-require-powered || return 1
 
     local _devices _selection _mac _name
 
-    _devices=$(bluetooth-devices-paired | _bt-format-devices | while read -r _mac _name; do
+    _devices=$(bluetooth-devices-paired | _bluetooth_ui-format-devices | while read -r _mac _name; do
         local _status=""
         bluetooth-connect-status "$_mac" >/dev/null 2>&1 && _status=" [connected]"
         echo "${_name}${_status}|${_mac}"
     done)
 
     if [[ -z "$_devices" ]]; then
-        _bt-notify "Bluetooth" "No paired devices" "normal"
+        _bluetooth_ui-notify "Bluetooth" "No paired devices" "normal"
         return 0
     fi
 
-    _selection=$(echo "$_devices" | cut -d'|' -f1 | rofi -dmenu -i -p "󰂯 Connect" ${_BT_THEME_FILE:+-theme "$_BT_THEME_FILE"})
+    _selection=$(echo "$_devices" | cut -d'|' -f1 | rofi -dmenu -i -p "󰂯 Connect" ${_BLUETOOTH_UI_THEME_FILE:+-theme "$_BLUETOOTH_UI_THEME_FILE"})
     [[ -z "$_selection" ]] && return 0
 
     _selection="${_selection% \[connected\]}"
@@ -424,30 +425,30 @@ bt-menu-connect() {
     fi
 }
 
-_bt-menu-pair() {
-    _bt-require-powered || return 1
+_bluetooth_ui-menu-pair() {
+    _bluetooth_ui-require-powered || return 1
 
     local _devices _selection _mac _name
 
-    _bt-notify "Bluetooth" "Scanning for devices (5s)..." "normal"
+    _bluetooth_ui-notify "Bluetooth" "Scanning for devices (5s)..." "normal"
     bluetooth-scan-start 5
     sleep 6
 
-    _devices=$(bluetooth-devices-list | _bt-format-devices | while read -r _mac _name; do
-        _bt-is-paired "$_mac" && continue
+    _devices=$(bluetooth-devices-list | _bluetooth_ui-format-devices | while read -r _mac _name; do
+        _bluetooth_ui-is-paired "$_mac" && continue
         echo "${_name}|${_mac}"
     done)
 
     if [[ -z "$_devices" ]]; then
-        _bt-notify "Bluetooth" "No new devices found" "normal"
+        _bluetooth_ui-notify "Bluetooth" "No new devices found" "normal"
         return 0
     fi
 
     local _count
     _count=$(echo "$_devices" | wc -l)
-    _bt-notify "Bluetooth" "Found ${_count} device(s)" "normal"
+    _bluetooth_ui-notify "Bluetooth" "Found ${_count} device(s)" "normal"
 
-    _selection=$(echo "$_devices" | cut -d'|' -f1 | rofi -dmenu -i -p "󰂯 Pair" ${_BT_THEME_FILE:+-theme "$_BT_THEME_FILE"})
+    _selection=$(echo "$_devices" | cut -d'|' -f1 | rofi -dmenu -i -p "󰂯 Pair" ${_BLUETOOTH_UI_THEME_FILE:+-theme "$_BLUETOOTH_UI_THEME_FILE"})
     [[ -z "$_selection" ]] && return 0
 
     _mac=$(echo "$_devices" | grep "^${_selection}|" | head -1 | cut -d'|' -f2)
@@ -466,13 +467,13 @@ Pair new device
 Power $(bluetooth-power-status >/dev/null 2>&1 && echo 'off' || echo 'on')
 Scan $(bluetooth-scan-is-active >/dev/null 2>&1 && echo 'stop' || echo 'start')"
 
-    _selection=$(echo "$_options" | rofi -dmenu -i -p "󰂯 Bluetooth" ${_BT_THEME_FILE:+-theme "$_BT_THEME_FILE"})
+    _selection=$(echo "$_options" | rofi -dmenu -i -p "󰂯 Bluetooth" ${_BLUETOOTH_UI_THEME_FILE:+-theme "$_BLUETOOTH_UI_THEME_FILE"})
     [[ -z "$_selection" ]] && return 0
 
     case "$_selection" in
         "Connect to device") bt-menu-connect ;;
         "Disconnect")        bt-disconnect ;;
-        "Pair new device")   _bt-menu-pair ;;
+        "Pair new device")   _bluetooth_ui-menu-pair ;;
         "Power on")          bt-power-on ;;
         "Power off")         bt-power-off ;;
         "Scan start")        bt-scan-start ;;
@@ -498,7 +499,7 @@ bt-info() {
     echo "  Discovering:  $(bluetooth-scan-is-active 2>/dev/null)"
     echo ""
     echo "Paired Devices:"
-    bluetooth-devices-paired | _bt-format-devices | while read -r _mac _name; do
+    bluetooth-devices-paired | _bluetooth_ui-format-devices | while read -r _mac _name; do
         local _connected=""
         bluetooth-connect-status "$_mac" >/dev/null 2>&1 && _connected=" (connected)"
         echo "  $_name [$_mac]$_connected"

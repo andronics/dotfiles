@@ -1,0 +1,305 @@
+#!/usr/bin/env zsh
+
+# _bluetooth_device - per-device metadata/introspection for _bluetooth
+#
+# Audio profile detection and device metadata (battery, RSSI, type, alias) -
+# split out of _bluetooth because it's a self-contained "parse bluetoothctl
+# info output" concern with no coupling to the rest of the module, the same
+# way _remote's config/filters/patterns are split out of _remote.
+#
+# Not meant to be sourced standalone: every function here calls
+# _bluetooth-init/_bluetooth-exec/bluetooth-validate-mac/bluetooth-device-info,
+# which are defined by _bluetooth. _bluetooth sources this file itself, so
+# callers only ever need `source "${DOTLIB}/_bluetooth"`.
+#
+# Usage:
+#   source "${DOTLIB}/_bluetooth_device"
+#
+# Dependencies:
+#   Required:
+#     - _common: core utilities
+#   Optional (gracefully degraded):
+#     - _log: structured logging
+
+[[ -n "${BLUETOOTH_DEVICE_LOADED:-}" ]] && return 0
+declare -gr BLUETOOTH_DEVICE_LOADED=1
+
+if ! source "${DOTLIB}/_common" 2>/dev/null; then
+    echo "[ERROR] _bluetooth_device requires _common - cannot load" >&2
+    return 1
+fi
+
+source "${DOTLIB}/_log" 2>/dev/null || true
+
+# ------------------------------
+# Audio Profile Management
+# ------------------------------
+
+# Get current audio profile
+#
+# Function: bluetooth-audio-profile
+# Description: Get active audio profile for device
+# Parameters:
+#   $1 - MAC address (required)
+# Output: Profile name (a2dp, hsp, hfp, off)
+# Returns:
+#   0 - Success
+#   1 - Failed to get profile
+#   2 - Invalid input
+# Example:
+#   bluetooth-audio-profile "00:11:22:33:44:55"
+#
+bluetooth-audio-profile() {
+    local mac="$1"
+
+    bluetooth-validate-mac "$mac" || return 2
+
+    _bluetooth-init
+
+    local output
+    output=$(bluetooth-device-info "$mac")
+
+    # Parse UUID to determine profile
+    if [[ "$output" =~ "0000110b" ]]; then
+        echo "a2dp"
+    elif [[ "$output" =~ "00001108" ]]; then
+        echo "hsp"
+    elif [[ "$output" =~ "0000111e" ]]; then
+        echo "hfp"
+    else
+        echo "off"
+    fi
+
+    return 0
+}
+
+# List available audio profiles
+#
+# Function: bluetooth-audio-profile-list
+# Description: List audio profiles supported by device
+# Parameters:
+#   $1 - MAC address (required)
+# Output: List of supported profiles
+# Returns:
+#   0 - Success
+#   1 - Failed to list profiles
+#   2 - Invalid input
+# Example:
+#   bluetooth-audio-profile-list "00:11:22:33:44:55"
+#
+bluetooth-audio-profile-list() {
+    local mac="$1"
+
+    bluetooth-validate-mac "$mac" || return 2
+
+    _bluetooth-init
+
+    local output
+    output=$(bluetooth-device-info "$mac")
+
+    # Parse UUIDs
+    local profiles=()
+    [[ "$output" =~ "0000110b" ]] && profiles+=("a2dp")
+    [[ "$output" =~ "00001108" ]] && profiles+=("hsp")
+    [[ "$output" =~ "0000111e" ]] && profiles+=("hfp")
+
+    if [[ ${#profiles[@]} -gt 0 ]]; then
+        printf "%s\n" "${profiles[@]}"
+        return 0
+    else
+        return 1
+    fi
+}
+
+# Detect if device is audio device
+#
+# Function: bluetooth-audio-device-type
+# Description: Determine if device is an audio device
+# Parameters:
+#   $1 - MAC address (required)
+# Output: "audio" or "other"
+# Returns:
+#   0 - Is audio device
+#   1 - Not audio device
+#   2 - Invalid input
+# Example:
+#   bluetooth-audio-device-type "00:11:22:33:44:55"
+#
+bluetooth-audio-device-type() {
+    local mac="$1"
+
+    bluetooth-validate-mac "$mac" || return 2
+
+    _bluetooth-init
+
+    local output
+    output=$(bluetooth-device-info "$mac")
+
+    # Check for audio UUIDs
+    if [[ "$output" =~ "0000110b" ]] || [[ "$output" =~ "00001108" ]] || [[ "$output" =~ "0000111e" ]]; then
+        echo "audio"
+        return 0
+    else
+        echo "other"
+        return 1
+    fi
+}
+
+# ------------------------------
+# Device Metadata
+# ------------------------------
+
+# Get device battery level
+#
+# Function: bluetooth-device-battery
+# Description: Get battery level of device if supported
+# Parameters:
+#   $1 - MAC address (required)
+# Output: Battery percentage (0-100) or "unknown"
+# Returns:
+#   0 - Success
+#   1 - Battery info not available
+#   2 - Invalid input
+# Example:
+#   bluetooth-device-battery "00:11:22:33:44:55"
+#
+bluetooth-device-battery() {
+    local mac="$1"
+
+    bluetooth-validate-mac "$mac" || return 2
+
+    _bluetooth-init
+
+    local output
+    output=$(bluetooth-device-info "$mac")
+
+    # Parse battery percentage
+    if [[ "$output" =~ "Battery Percentage: 0x([0-9a-f]+)" ]]; then
+        local hex="${match[1]}"
+        local battery=$((16#$hex))
+        echo "$battery"
+        return 0
+    else
+        echo "unknown"
+        return 1
+    fi
+}
+
+# Get device RSSI (signal strength)
+#
+# Function: bluetooth-device-rssi
+# Description: Get signal strength for device
+# Parameters:
+#   $1 - MAC address (required)
+# Output: RSSI value in dBm or "unknown"
+# Returns:
+#   0 - Success
+#   1 - RSSI not available
+#   2 - Invalid input
+# Example:
+#   bluetooth-device-rssi "00:11:22:33:44:55"
+#
+bluetooth-device-rssi() {
+    local mac="$1"
+
+    bluetooth-validate-mac "$mac" || return 2
+
+    _bluetooth-init
+
+    local output
+    output=$(bluetooth-device-info "$mac")
+
+    # Parse RSSI
+    if [[ "$output" =~ "RSSI: (-?[0-9]+)" ]]; then
+        echo "${match[1]}"
+        return 0
+    else
+        echo "unknown"
+        return 1
+    fi
+}
+
+# Get device type
+#
+# Function: bluetooth-device-type
+# Description: Get device class/type
+# Parameters:
+#   $1 - MAC address (required)
+# Output: Device type string
+# Returns:
+#   0 - Success
+#   1 - Type not available
+#   2 - Invalid input
+# Example:
+#   bluetooth-device-type "00:11:22:33:44:55"
+#
+bluetooth-device-type() {
+    local mac="$1"
+
+    bluetooth-validate-mac "$mac" || return 2
+
+    _bluetooth-init
+
+    local output
+    output=$(bluetooth-device-info "$mac")
+
+    # Parse Icon field as proxy for type
+    if [[ "$output" =~ "Icon: ([a-z-]+)" ]]; then
+        echo "${match[1]}"
+        return 0
+    else
+        echo "unknown"
+        return 1
+    fi
+}
+
+# Get/set device alias
+#
+# Function: bluetooth-device-alias
+# Description: Get or set device friendly name
+# Parameters:
+#   $1 - MAC address (required)
+#   $2 - New alias (optional, omit to get current)
+# Output: Device alias
+# Returns:
+#   0 - Success
+#   1 - Failed
+#   2 - Invalid input
+# Example:
+#   bluetooth-device-alias "00:11:22:33:44:55"
+#   bluetooth-device-alias "00:11:22:33:44:55" "My Headphones"
+#
+bluetooth-device-alias() {
+    local mac="$1"
+    local new_alias="${2:-}"
+
+    bluetooth-validate-mac "$mac" || return 2
+
+    _bluetooth-init
+
+    if [[ -n "$new_alias" ]]; then
+        # Set alias
+        log-info "Setting device alias" "mac=$mac" "alias=$new_alias"
+        _bluetooth-exec "set-alias $mac \"$new_alias\""
+
+        # Invalidate cache
+        [[ "$BLUETOOTH_CACHE_AVAILABLE" == "true" ]] && cache-clear "bluetooth:device:info:$mac"
+
+        return 0
+    else
+        # Get alias
+        local output
+        output=$(bluetooth-device-info "$mac")
+
+        # Bounded to non-newline chars - unlike every other extractor in
+        # this file, this is the only one using an unbounded quantifier
+        # (.+), which greedily swallowed the rest of the multi-line info
+        # blob into the capture group instead of stopping at end of line.
+        if [[ "$output" =~ $'Alias: ([^\n]+)' ]]; then
+            echo "${match[1]}"
+            return 0
+        else
+            return 1
+        fi
+    fi
+}
