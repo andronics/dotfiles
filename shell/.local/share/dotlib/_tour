@@ -9,7 +9,7 @@
 # Most of dotlib's modules are written but never exercised by a real
 # wrapper (see the dotlib README's "Module status" note). This module
 # runs real demos through them -- _ui, _format, _string, _validation,
-# _events, _async, _rules, _schema, _actions, _plugins,
+# _events, _async, _rules,
 # _bspwm, _rofi, _network, _patterns, _args, _server,
 # _xidlehook, _notify, _test -- using each
 # module's actual public functions. Business logic stays in those
@@ -19,7 +19,11 @@
 # _crypto, _wifi, and _vpn were removed 2026-08-27 (unused outside this
 # tour, and _wifi/_crypto carried real security bugs not worth keeping
 # around unexercised). _acpi, _docker, and _http were removed the same
-# way in a follow-up pass - see REVIEW.md for the rationale on both.
+# way in a follow-up pass. _template, _schema, _actions, and _plugins
+# (a self-contained action/v1 schema -> execution -> plugin-loading
+# chain with zero real schemas/handlers/plugins anywhere in the repo)
+# were removed together in a third pass - see REVIEW.md for the
+# rationale on all three passes.
 #
 # House rule for every section: never do anything that would surprise
 # someone running `tour run` unattended. Concretely:
@@ -42,7 +46,7 @@
 # Dependencies:
 #   Required:
 #     - _common, _ui, _format, _string, _validation, _events, _async,
-#       _rules, _schema, _actions, _plugins, _rofi,
+#       _rules, _rofi,
 #       _network, _patterns, _args, _server,
 #       _xidlehook, _notify, _test
 #   Optional:
@@ -63,9 +67,6 @@ source "${DOTLIB}/_validation" || { echo "[ERROR] _tour requires _validation" >&
 source "${DOTLIB}/_events"     || { echo "[ERROR] _tour requires _events" >&2; return 1; }
 source "${DOTLIB}/_async"      || { echo "[ERROR] _tour requires _async" >&2; return 1; }
 source "${DOTLIB}/_rules"      || { echo "[ERROR] _tour requires _rules" >&2; return 1; }
-source "${DOTLIB}/_schema"     || { echo "[ERROR] _tour requires _schema" >&2; return 1; }
-source "${DOTLIB}/_actions"    || { echo "[ERROR] _tour requires _actions" >&2; return 1; }
-source "${DOTLIB}/_plugins"    || { echo "[ERROR] _tour requires _plugins" >&2; return 1; }
 # _bspwm requires the bspc binary and hard-fails to source without it; shell/
 # (and this tour) must still work on hosts with no desktop package installed,
 # so this stays optional and tour-bspwm checks availability itself.
@@ -88,9 +89,6 @@ typeset -gA _TOUR_DESCRIPTIONS=(
     [events]="Tour _events: pub/sub handler registration and emission"
     [async]="Tour _async: parallel execution and retry-until-success"
     [rules]="Tour _rules: condition/action rule evaluation"
-    [schema]="Tour _schema: action/v1 schema validation and querying"
-    [actions]="Tour _actions: dependency-ordered action execution"
-    [plugins]="Tour _plugins: discovery, validation, and dependency-ordered init"
     [bspwm]="Tour _bspwm: live window manager introspection (read-only, skips if unavailable)"
     [rofi]="Tour _rofi: config, theme discovery, and formatting (no menus popped)"
     [network]="Tour _network: connectivity, interfaces, and routing"
@@ -125,24 +123,6 @@ _tour-on-greet() {
 
 _tour-quiet() {
     "$@" >/dev/null 2>&1
-}
-
-# _actions handlers: action-register validates these exist as real functions,
-# then action-execute-schema calls them as `handler "$resource" "$params"`.
-_tour-action-ensure-dir() {
-    local resource="$1"
-    mkdir -p "$resource" && echo "ensured directory: $resource"
-}
-
-_tour-action-write-file() {
-    local resource="$1"
-    echo "written by the dotlib tour" > "$resource" && echo "wrote file: $resource"
-}
-
-_tour-action-fail() {
-    local resource="$1"
-    echo "simulated failure touching $resource" >&2
-    return 1
 }
 
 # ------------------------------
@@ -297,194 +277,6 @@ tour-rules() {
     else
         ui-warning "rule 'business-hours' did not match (outside 09:00-17:00)"
     fi
-}
-
-tour-schema() {
-    ui-header "_schema — action/v1 schema engine"
-
-    local good_schema bad_schema
-    good_schema="$(mktemp --suffix=.yaml "${TMPDIR:-/tmp}/dotlib-tour-schema-good.XXXXXX")"
-    bad_schema="$(mktemp --suffix=.yaml "${TMPDIR:-/tmp}/dotlib-tour-schema-bad.XXXXXX")"
-
-    cat > "$good_schema" <<'YAML'
-schema: action/v1
-metadata:
-  name: dotlib-tour-demo
-  description: A tiny sample action/v1 schema used by the tour
-actions:
-  - id: create-workspace
-    type: fs.directory
-    action: ensure
-    resource: /tmp/dotlib-tour-workspace
-    on_error: fail
-  - id: write-marker
-    type: fs.file
-    action: write
-    resource: /tmp/dotlib-tour-workspace/marker.txt
-    depends_on:
-      - create-workspace
-    on_error: warn
-YAML
-
-    cat > "$bad_schema" <<'YAML'
-schema: action/v1
-actions:
-  - id: BadID With Spaces
-    type: not-a-valid-type-format
-    action: ensure
-    resource: /tmp/whatever
-    on_error: explode
-YAML
-
-    ui-info "validating a well-formed action/v1 schema..."
-    if schema-validate "$good_schema"; then
-        ui-success "schema is valid"
-    fi
-
-    echo ""
-    ui-info "validating a deliberately broken schema..."
-    schema-validate "$bad_schema" && ui-error "expected this to fail" \
-        || ui-warning "invalid, as expected (errors above are schema-validate's real output)"
-
-    echo ""
-    ui-info "loading the valid schema and querying it..."
-    schema-load "$good_schema" >/dev/null
-
-    ui-list \
-        "version: $(schema-get-version)" \
-        "name: $(schema-get-metadata name)" \
-        "actions: $(schema-get-action-count) ($(schema-list-action-ids | tr '\n' ' '))"
-
-    echo ""
-    schema-stats
-
-    schema-clear
-    rm -f "$good_schema" "$bad_schema"
-}
-
-tour-actions() {
-    ui-header "_actions — action registry & execution engine"
-
-    local workspace="${TMPDIR:-/tmp}/dotlib-tour-actions-workspace"
-    local schema_file
-    schema_file="$(mktemp --suffix=.yaml "${TMPDIR:-/tmp}/dotlib-tour-actions.XXXXXX")"
-
-    cat > "$schema_file" <<YAML
-schema: action/v1
-metadata:
-  name: dotlib-tour-actions-demo
-actions:
-  - id: create-workspace
-    type: fs.directory
-    action: ensure
-    resource: ${workspace}
-    on_error: fail
-  - id: write-marker
-    type: fs.file
-    action: write
-    resource: ${workspace}/marker.txt
-    depends_on:
-      - create-workspace
-    on_error: fail
-  - id: flaky-step
-    type: demo.flaky
-    action: run
-    resource: ${workspace}/marker.txt
-    depends_on:
-      - write-marker
-    on_error: warn
-YAML
-
-    action-register "fs.directory" "ensure" _tour-action-ensure-dir >/dev/null
-    action-register "fs.file" "write" _tour-action-write-file >/dev/null
-    action-register "demo.flaky" "run" _tour-action-fail >/dev/null
-
-    ui-info "executing a 3-step schema, dependency-ordered via _lifecycle..."
-    ui-info "(the third step deliberately fails with on_error: warn)"
-    action-execute-schema "$schema_file"
-    ui-success "schema execution finished (on_error: warn kept it from stopping)"
-
-    echo ""
-    ui-info "execution order (from action-get-history):"
-    local -a history
-    history=("${(@f)$(action-get-history)}")
-    ui-numbered-list "${history[@]}"
-
-    echo ""
-    ui-table-header "ACTION" "STATE" "" ""
-    ui-table-separator 60
-    printf "%-25s %s\n" "create-workspace" "$(action-get-state create-workspace)"
-    printf "%-25s %s\n" "write-marker" "$(action-get-state write-marker)"
-    printf "%-25s %s\n" "flaky-step" "$(action-get-state flaky-step)"
-
-    echo ""
-    action-stats
-
-    action-clear-state
-    rm -rf "$workspace" "$schema_file"
-}
-
-tour-plugins() {
-    ui-header "_plugins — discovery, validation & dependency-ordered init"
-
-    local plugins_dir
-    plugins_dir="$(mktemp -d "${TMPDIR:-/tmp}/dotlib-tour-plugins.XXXXXX")"
-    mkdir -p "$plugins_dir/greeter" "$plugins_dir/farewell"
-
-    cat > "$plugins_dir/greeter/plugin.yaml" <<'YAML'
-name: greeter
-version: 1.0.0
-description: Demo plugin used by the dotlib tour
-YAML
-    cat > "$plugins_dir/greeter/plugin.zsh" <<'ZSH'
-greeter_init() {
-    echo "greeter plugin initialized"
-}
-ZSH
-
-    cat > "$plugins_dir/farewell/plugin.yaml" <<'YAML'
-name: farewell
-version: 1.0.0
-description: Demo plugin used by the dotlib tour
-dependencies:
-  - greeter
-YAML
-    cat > "$plugins_dir/farewell/plugin.zsh" <<'ZSH'
-farewell_init() {
-    echo "farewell plugin initialized"
-}
-ZSH
-
-    ui-info "discovering plugins in a scratch directory..."
-    plugin-discover "$plugins_dir" >/dev/null
-
-    local -a found
-    found=("${(@f)$(plugin-list)}")
-    ui-list "${found[@]}"
-
-    echo ""
-    ui-info "validating each plugin's metadata..."
-    local p
-    for p in "${found[@]}"; do
-        if plugin-validate "$p" >/dev/null 2>&1; then
-            ui-success "valid: $p"
-        else
-            ui-error "invalid: $p"
-        fi
-    done
-
-    echo ""
-    ui-info "initializing all plugins (dependency-ordered: farewell depends on greeter)..."
-    plugin-init-all
-
-    echo ""
-    ui-table-header "PLUGIN" "STATE" "" ""
-    ui-table-separator 60
-    for p in "${found[@]}"; do
-        printf "%-25s %s\n" "$p" "$(plugin-get-state "$p")"
-    done
-
-    rm -rf "$plugins_dir"
 }
 
 tour-bspwm() {
@@ -766,7 +558,7 @@ tour-run() {
     local fast=false
     [[ "$1" == "--fast" ]] && fast=true
 
-    local -a sections=(intro ui format string validate events async rules schema actions plugins bspwm rofi network patterns args server xidlehook notify framework)
+    local -a sections=(intro ui format string validate events async rules bspwm rofi network patterns args server xidlehook notify framework)
     local section
 
     for section in "${sections[@]}"; do
@@ -795,9 +587,6 @@ _tour-selftest-cases() {
     test-it "events section runs"   _tour-selftest-events
     test-it "async section runs"    _tour-selftest-async
     test-it "rules section runs"    _tour-selftest-rules
-    test-it "schema section runs"   _tour-selftest-schema
-    test-it "actions section runs"  _tour-selftest-actions
-    test-it "plugins section runs"  _tour-selftest-plugins
     test-it "bspwm section runs"    _tour-selftest-bspwm
     test-it "rofi section runs"     _tour-selftest-rofi
     test-it "network section runs"  _tour-selftest-network
@@ -815,9 +604,6 @@ _tour-selftest-validate() { test-assert-exit-code 0 _tour-quiet tour-validate; }
 _tour-selftest-events()   { test-assert-exit-code 0 _tour-quiet tour-events; }
 _tour-selftest-async()    { test-assert-exit-code 0 _tour-quiet tour-async; }
 _tour-selftest-rules()    { test-assert-exit-code 0 _tour-quiet tour-rules; }
-_tour-selftest-schema()   { test-assert-exit-code 0 _tour-quiet tour-schema; }
-_tour-selftest-actions()  { test-assert-exit-code 0 _tour-quiet tour-actions; }
-_tour-selftest-plugins()  { test-assert-exit-code 0 _tour-quiet tour-plugins; }
 _tour-selftest-bspwm()    { test-assert-exit-code 0 _tour-quiet tour-bspwm; }
 _tour-selftest-rofi()     { test-assert-exit-code 0 _tour-quiet tour-rofi; }
 _tour-selftest-network()  { test-assert-exit-code 0 _tour-quiet tour-network; }
