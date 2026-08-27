@@ -1,0 +1,11 @@
+#!/usr/bin/env zsh
+set -e
+
+source "${DOTLIB}/_dispatcher"  || { echo "missing _dispatcher" >&2; exit 1; }
+source "${DOTLIB}/_lockscreen"  || { echo "missing _lockscreen" >&2; exit 1; }
+
+dispatcher-init "lockscreen" \
+    --route=function \
+    --description="Idle-lock and screen-lock control (betterlockscreen + xidlehook)"
+
+dispatcher-execute "$@"
