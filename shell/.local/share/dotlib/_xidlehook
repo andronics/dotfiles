@@ -124,8 +124,11 @@ xidlehook-check() {
 # Check if daemon is running
 # Usage: xidlehook-is-running
 xidlehook-is-running() {
-    if typeset -f process-is-running >/dev/null 2>&1; then
-        process-is-running "$XIDLEHOOK_DAEMON_NAME"
+    # _process's process-is-running takes a PID (kill -0), not a name - use
+    # its name-based lookup instead, or this silently reports "not running"
+    # for a live daemon whenever _process happens to be loaded alongside.
+    if typeset -f process-find-by-name >/dev/null 2>&1; then
+        [[ -n "$(process-find-by-name "$XIDLEHOOK_DAEMON_NAME")" ]]
     else
         pgrep -x "$XIDLEHOOK_DAEMON_NAME" >/dev/null 2>&1
     fi
@@ -348,16 +351,27 @@ xidlehook-trigger() {
     return 0
 }
 
+# Reset the idle clock via xidlehook's native reset-idle subcommand -
+# pretends the user just moved the mouse. Distinct from enable/disable, which
+# only pause/resume timer evaluation without touching the underlying X idle
+# counter: re-enabling after a long pause fires immediately if idle time
+# already exceeds the timer duration, so disable+enable is not a substitute
+# for this when the goal is an actual fresh countdown.
+# Usage: xidlehook-reset-idle
+xidlehook-reset-idle() {
+    xidlehook-validate-socket || return 1
+
+    log-debug "[xidlehook] Resetting idle timer"
+    xidlehook-client --socket "$XIDLEHOOK_SOCKET" reset-idle &>/dev/null
+
+    log-info "[xidlehook] Idle timer reset"
+    return 0
+}
+
 # Reset idle timer (as if user activity occurred)
 # Usage: xidlehook-reset
 xidlehook-reset() {
-    xidlehook-validate-socket || return 1
-
-    log-debug "[xidlehook] Resetting timer"
-    xidlehook-disable && xidlehook-enable
-
-    log-info "[xidlehook] Timer reset"
-    return 0
+    xidlehook-reset-idle
 }
 
 # ------------------------------
@@ -575,7 +589,8 @@ TIMER CONTROL:
     xidlehook-enable                      Enable/resume timer
     xidlehook-disable                     Disable/pause timer
     xidlehook-trigger                     Trigger timer immediately
-    xidlehook-reset                       Reset idle timer
+    xidlehook-reset                       Reset idle timer (alias for reset-idle)
+    xidlehook-reset-idle                  Reset idle timer (native reset-idle)
 
 STATUS & MONITORING:
     xidlehook-status                      Show comprehensive status
