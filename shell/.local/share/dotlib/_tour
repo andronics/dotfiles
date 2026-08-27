@@ -9,8 +9,8 @@
 # Most of dotlib's modules are written but never exercised by a real
 # wrapper (see the dotlib README's "Module status" note). This module
 # runs real demos through them -- _ui, _format, _string, _validation,
-# _events, _async, _rules,
-# _bspwm, _rofi, _network, _patterns, _args, _server,
+# _events,
+# _bspwm, _rofi, _network, _patterns,
 # _xidlehook, _notify, _test -- using each
 # module's actual public functions. Business logic stays in those
 # modules; this file only supplies narration, sample data, and
@@ -22,8 +22,9 @@
 # way in a follow-up pass. _template, _schema, _actions, and _plugins
 # (a self-contained action/v1 schema -> execution -> plugin-loading
 # chain with zero real schemas/handlers/plugins anywhere in the repo)
-# were removed together in a third pass - see REVIEW.md for the
-# rationale on all three passes.
+# were removed together in a third pass. _args, _async, _rules, and
+# _server were removed in a fourth pass, same reasoning: tour-only,
+# no real wrapper. See REVIEW.md for the rationale on all four passes.
 #
 # House rule for every section: never do anything that would surprise
 # someone running `tour run` unattended. Concretely:
@@ -33,10 +34,9 @@
 #     tour-network (an earlier draft of the now-removed tour-http also
 #     opened a real loopback listener, which got killed unpredictably
 #     by this sandbox's network policy - avoid that class of thing).
-#   - No mutation of live system/daemon state: tour-bspwm, tour-rofi,
-#     tour-server, and tour-xidlehook are all read-only against real
-#     subsystems (window manager, rofi config, port probes, idle
-#     timers) -- every mutating function in those modules (connect,
+#   - No mutation of live system/daemon state: tour-bspwm and tour-rofi
+#     are read-only against real subsystems (window manager, rofi
+#     config) -- every mutating function in those modules (connect,
 #     start, kill, forget, prune, trigger, login, ...) is deliberately
 #     never called here.
 #   - Graceful skip, not failure, when a subsystem isn't present
@@ -45,9 +45,8 @@
 #
 # Dependencies:
 #   Required:
-#     - _common, _ui, _format, _string, _validation, _events, _async,
-#       _rules, _rofi,
-#       _network, _patterns, _args, _server,
+#     - _common, _ui, _format, _string, _validation, _events, _rofi,
+#       _network, _patterns,
 #       _xidlehook, _notify, _test
 #   Optional:
 #     - _log
@@ -65,8 +64,6 @@ source "${DOTLIB}/_format"     || { echo "[ERROR] _tour requires _format" >&2; r
 source "${DOTLIB}/_string"     || { echo "[ERROR] _tour requires _string" >&2; return 1; }
 source "${DOTLIB}/_validation" || { echo "[ERROR] _tour requires _validation" >&2; return 1; }
 source "${DOTLIB}/_events"     || { echo "[ERROR] _tour requires _events" >&2; return 1; }
-source "${DOTLIB}/_async"      || { echo "[ERROR] _tour requires _async" >&2; return 1; }
-source "${DOTLIB}/_rules"      || { echo "[ERROR] _tour requires _rules" >&2; return 1; }
 # _bspwm requires the bspc binary and hard-fails to source without it; shell/
 # (and this tour) must still work on hosts with no desktop package installed,
 # so this stays optional and tour-bspwm checks availability itself.
@@ -74,8 +71,6 @@ source "${DOTLIB}/_bspwm" 2>/dev/null || true
 source "${DOTLIB}/_rofi"       || { echo "[ERROR] _tour requires _rofi" >&2; return 1; }
 source "${DOTLIB}/_network"    || { echo "[ERROR] _tour requires _network" >&2; return 1; }
 source "${DOTLIB}/_patterns"   || { echo "[ERROR] _tour requires _patterns" >&2; return 1; }
-source "${DOTLIB}/_args"       || { echo "[ERROR] _tour requires _args" >&2; return 1; }
-source "${DOTLIB}/_server"     || { echo "[ERROR] _tour requires _server" >&2; return 1; }
 source "${DOTLIB}/_xidlehook"  || { echo "[ERROR] _tour requires _xidlehook" >&2; return 1; }
 source "${DOTLIB}/_notify"     || { echo "[ERROR] _tour requires _notify" >&2; return 1; }
 source "${DOTLIB}/_test"       || { echo "[ERROR] _tour requires _test" >&2; return 1; }
@@ -87,14 +82,10 @@ typeset -gA _TOUR_DESCRIPTIONS=(
     [string]="Tour _string: case conversion and predicates"
     [validate]="Tour _validation: type checks against sample data"
     [events]="Tour _events: pub/sub handler registration and emission"
-    [async]="Tour _async: parallel execution and retry-until-success"
-    [rules]="Tour _rules: condition/action rule evaluation"
     [bspwm]="Tour _bspwm: live window manager introspection (read-only, skips if unavailable)"
     [rofi]="Tour _rofi: config, theme discovery, and formatting (no menus popped)"
     [network]="Tour _network: connectivity, interfaces, and routing"
     [patterns]="Tour _patterns: glob matching and bulk operations"
-    [args]="Tour _args: declarative CLI arg parsing"
-    [server]="Tour _server: port/type checks and status queries (never starts a server)"
     [xidlehook]="Tour _xidlehook: idle-timer status (read-only, skips if unavailable)"
     [notify]="Tour _notify: a real desktop notification"
     [framework]="Tour _dispatcher's own help/commands/completion/dry-run"
@@ -104,18 +95,6 @@ typeset -gA _TOUR_DESCRIPTIONS=(
 # ------------------------------
 # Private helpers
 # ------------------------------
-
-# Fixed path so async-retry's subshelled attempts can share a counter
-# (a shell variable wouldn't survive the command-substitution subshell).
-declare -g _TOUR_FLAKY_COUNTER="${TMPDIR:-/tmp}/dotlib-tour-flaky-$$"
-
-_tour-flaky() {
-    local n=0
-    [[ -f "$_TOUR_FLAKY_COUNTER" ]] && n=$(<"$_TOUR_FLAKY_COUNTER")
-    n=$((n + 1))
-    echo "$n" > "$_TOUR_FLAKY_COUNTER"
-    [[ $n -ge 2 ]]
-}
 
 _tour-on-greet() {
     ui-info "handler fired: $*"
@@ -146,7 +125,6 @@ tour-ui() {
     ui-table-header "MODULE" "STATUS" "SIZE" "CLAIMED"
     ui-table-separator 80
     ui-table-row "_ui" "demoed" "~18K" "no"
-    ui-table-row "_async" "demoed" "~40K" "no"
     ui-table-row "_bluetooth" "in use" "~51K" "yes"
 
     echo ""
@@ -237,46 +215,6 @@ tour-events() {
     echo ""
     ui-info "recent event history:"
     events-history --limit 3
-}
-
-tour-async() {
-    ui-header "_async — parallel execution & retry"
-
-    ui-info "running 3 tasks in parallel..."
-    async-parallel \
-        "echo 'task A done'; sleep 0.3" \
-        "echo 'task B done'; sleep 0.5" \
-        "echo 'task C done'; sleep 0.2"
-
-    echo ""
-    ui-info "retrying a flaky task until it succeeds..."
-    rm -f "$_TOUR_FLAKY_COUNTER"
-    if async-retry --times 3 --interval 1 _tour-flaky; then
-        ui-success "flaky task succeeded (took $(<"$_TOUR_FLAKY_COUNTER") attempt(s))"
-    else
-        ui-error "flaky task never succeeded"
-    fi
-    rm -f "$_TOUR_FLAKY_COUNTER"
-}
-
-tour-rules() {
-    ui-header "_rules — condition/action engine"
-
-    rules-define "zsh-available" rules-cond-command-exists rules-action-echo 10 "zsh is installed"
-    rules-define "business-hours" rules-cond-time-between rules-action-echo 20 "current hour is 9-17"
-
-    echo ""
-    if rules-eval "zsh-available" "zsh"; then
-        ui-success "rule 'zsh-available' matched and ran"
-    else
-        ui-warning "rule 'zsh-available' did not match"
-    fi
-
-    if rules-eval "business-hours" 9 17; then
-        ui-success "rule 'business-hours' matched and ran"
-    else
-        ui-warning "rule 'business-hours' did not match (outside 09:00-17:00)"
-    fi
 }
 
 tour-bspwm() {
@@ -453,65 +391,6 @@ tour-patterns() {
     patterns-foreach "audio-*" "${items[@]}" -- echo "matched:"
 }
 
-tour-args() {
-    ui-header "_args — declarative CLI argument parsing"
-
-    args-clear
-    args-set-program-name "backup"
-    args-set-description "A demo CLI defined and parsed by _args"
-    args-define-flag "verbose" "v" "Enable verbose output"
-    args-define-option "output" "o" "string" "Output directory" "/tmp/backup"
-    args-define-required "source" "s" "path" "Source directory to back up"
-    args-define-positional "extra" "Extra freeform args" false
-
-    ui-info "parsing: --verbose --source /home/user --output /mnt/backups extra1 extra2"
-    args-parse --verbose --source /home/user --output /mnt/backups extra1 extra2
-
-    echo ""
-    ui-list \
-        "verbose: $(args-is-set verbose && echo true || echo false)" \
-        "source:  $(args-get source)" \
-        "output:  $(args-get output)" \
-        "extra:   $(args-get-all-positional)"
-
-    echo ""
-    ui-info "args-show-help (auto-generated from the definitions above)..."
-    args-show-help
-
-    echo ""
-    args-stats
-
-    args-clear
-}
-
-tour-server() {
-    ui-header "_server — port/type checks & status (never starts a server)"
-
-    ui-info "this section only probes and queries -- server-start would"
-    ui-info "spawn a real listening process, which is exactly the kind"
-    ui-info "of thing this tour avoids."
-
-    echo ""
-    ui-info "which server backends are installed (server-check-type)..."
-    local -a backends=(python php node)
-    local b
-    for b in "${backends[@]}"; do
-        if server-check-type "$b" 2>/dev/null; then
-            ui-success "$b: available"
-        else
-            ui-warning "$b: not available"
-        fi
-    done
-
-    echo ""
-    ui-info "server-find-available-port (probes with nc -z, never binds)..."
-    ui-list "first free port from 30000: $(server-find-available-port 30000)"
-
-    echo ""
-    ui-info "server-list / server-info (no servers running, none started)..."
-    server-info
-}
-
 tour-xidlehook() {
     ui-header "_xidlehook — idle-timer status (read-only)"
 
@@ -558,7 +437,7 @@ tour-run() {
     local fast=false
     [[ "$1" == "--fast" ]] && fast=true
 
-    local -a sections=(intro ui format string validate events async rules bspwm rofi network patterns args server xidlehook notify framework)
+    local -a sections=(intro ui format string validate events bspwm rofi network patterns xidlehook notify framework)
     local section
 
     for section in "${sections[@]}"; do
@@ -585,14 +464,10 @@ _tour-selftest-cases() {
     test-it "string section runs"   _tour-selftest-string
     test-it "validate section runs" _tour-selftest-validate
     test-it "events section runs"   _tour-selftest-events
-    test-it "async section runs"    _tour-selftest-async
-    test-it "rules section runs"    _tour-selftest-rules
     test-it "bspwm section runs"    _tour-selftest-bspwm
     test-it "rofi section runs"     _tour-selftest-rofi
     test-it "network section runs"  _tour-selftest-network
     test-it "patterns section runs" _tour-selftest-patterns
-    test-it "args section runs"     _tour-selftest-args
-    test-it "server section runs"   _tour-selftest-server
     test-it "xidlehook section runs" _tour-selftest-xidlehook
 }
 
@@ -602,14 +477,10 @@ _tour-selftest-format()   { test-assert-exit-code 0 _tour-quiet tour-format; }
 _tour-selftest-string()   { test-assert-exit-code 0 _tour-quiet tour-string; }
 _tour-selftest-validate() { test-assert-exit-code 0 _tour-quiet tour-validate; }
 _tour-selftest-events()   { test-assert-exit-code 0 _tour-quiet tour-events; }
-_tour-selftest-async()    { test-assert-exit-code 0 _tour-quiet tour-async; }
-_tour-selftest-rules()    { test-assert-exit-code 0 _tour-quiet tour-rules; }
 _tour-selftest-bspwm()    { test-assert-exit-code 0 _tour-quiet tour-bspwm; }
 _tour-selftest-rofi()     { test-assert-exit-code 0 _tour-quiet tour-rofi; }
 _tour-selftest-network()  { test-assert-exit-code 0 _tour-quiet tour-network; }
 _tour-selftest-patterns() { test-assert-exit-code 0 _tour-quiet tour-patterns; }
-_tour-selftest-args()     { test-assert-exit-code 0 _tour-quiet tour-args; }
-_tour-selftest-server()   { test-assert-exit-code 0 _tour-quiet tour-server; }
 _tour-selftest-xidlehook() { test-assert-exit-code 0 _tour-quiet tour-xidlehook; }
 
 tour-self-test() {
