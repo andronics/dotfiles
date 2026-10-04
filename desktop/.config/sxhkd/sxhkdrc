@@ -4,7 +4,7 @@ super + BackSpace + {_, alt}
 
 # desktop - shroud + mute
 super + Escape + {_, alt}
-  { bsp-shroud cover && audio mute, bsp-shroud reveal && audio unmute }
+  { bsp hide && audio mute, bsp unhide && audio unmute }
 
 # terminal - default
 super + Return + {_, alt, shift}
