@@ -3,8 +3,12 @@
 # _lockscreen - betterlockscreen + xidlehook idle-lock control
 #
 # Wraps betterlockscreen (actual locking), _xidlehook (idle-timeout daemon
-# that triggers the lock), and _systemd (the lockscreen.service user unit
-# that keeps the idle daemon running from login).
+# that triggers the lock), and _systemd (the lockscreen-suspend user unit
+# that locks before suspend/hibernate).
+#
+# The idle daemon is started per X session by desktop's
+# .zlogin.d/50-lockscreen, not by a systemd unit: with lingering the user
+# manager is up at boot, long before there is an X display to watch.
 #
 # Usage:
 #   source "${DOTLIB}/_lockscreen"
@@ -13,7 +17,7 @@
 #   Required:
 #     - _common, _log, _xdg: core utilities
 #     - _xidlehook: idle-timeout daemon control
-#     - _systemd: lockscreen.service management
+#     - _systemd: lockscreen-suspend.service management
 #   External:
 #     - betterlockscreen (system package, wraps i3lock-color)
 
@@ -26,14 +30,13 @@ source "${DOTLIB}/_xdg"       || { echo "[ERROR] _lockscreen requires _xdg" >&2;
 source "${DOTLIB}/_xidlehook" || { echo "[ERROR] _lockscreen requires _xidlehook" >&2; return 1; }
 source "${DOTLIB}/_systemd"   || { echo "[ERROR] _lockscreen requires _systemd" >&2; return 1; }
 
-declare -g _LOCKSCREEN_UNIT="lockscreen"
 declare -g _LOCKSCREEN_SUSPEND_UNIT="lockscreen-suspend"
 declare -g _LOCKSCREEN_SCOPE="--user"
 declare -g _LOCKSCREEN_WALLPAPER="$(xdg-data-file "backgrounds" "0001.png")"
 
 # Seconds to wait before the first idle-time check after (re)starting the
 # daemon. xidlehook reads real X idle time, not time-since-daemon-start, so
-# without this a service (re)start after the machine was already idle past
+# without this a daemon (re)start after the machine was already idle past
 # the timer duration locks the screen instantly instead of giving a fresh
 # countdown.
 declare -g _LOCKSCREEN_GRACE_PERIOD="${LOCKSCREEN_GRACE_PERIOD:-10}"
@@ -41,7 +44,7 @@ declare -g _LOCKSCREEN_GRACE_PERIOD="${LOCKSCREEN_GRACE_PERIOD:-10}"
 typeset -gA _LOCKSCREEN_DESCRIPTIONS=(
     [activate]="Lock the screen now"
     [wallpaper-update]="Regenerate betterlockscreen's cached lock wallpaper"
-    [hook-init]="Start the idle daemon in the foreground (used by the systemd unit)"
+    [hook-init]="Start the idle daemon in the foreground (used by .zlogin.d/50-lockscreen)"
     [hook-stop]="Stop the idle daemon"
     [hook-enable]="Resume the idle timer"
     [hook-disable]="Pause the idle timer"
@@ -49,12 +52,9 @@ typeset -gA _LOCKSCREEN_DESCRIPTIONS=(
     [hook-query]="Query the idle daemon's timer state"
     [hook-status]="Show comprehensive idle daemon status"
     [status]="Show armed/paused/not-running state (for status bars)"
-    [service-install]="Enable and start the lockscreen service (idle + pre-suspend lock)"
-    [service-start]="Start the lockscreen.service user unit"
-    [service-stop]="Stop the lockscreen.service user unit"
-    [service-restart]="Restart the lockscreen.service user unit"
-    [service-status]="Show lockscreen service status (idle + pre-suspend units)"
-    [service-uninstall]="Stop and disable the lockscreen service (idle + pre-suspend lock)"
+    [service-install]="Enable the pre-suspend lock unit"
+    [service-status]="Show the pre-suspend lock unit's status"
+    [service-uninstall]="Disable the pre-suspend lock unit"
 )
 
 # ------------------------------
@@ -91,9 +91,9 @@ lockscreen-wallpaper-update() {
 # Idle Daemon (xidlehook)
 # ------------------------------
 
-# Runs as the systemd unit's foreground process: starts xidlehook (which
-# backgrounds itself) then waits on it, so the unit's main PID tracks the
-# daemon's actual lifetime instead of exiting the instant this returns.
+# Starts xidlehook (which backgrounds itself) then waits on it, so this
+# process tracks the daemon's actual lifetime instead of exiting the
+# instant the start returns.
 lockscreen-hook-init() {
     xidlehook-init "lockscreen activate" || return 1
 
@@ -143,42 +143,23 @@ lockscreen-status() {
 }
 
 # ------------------------------
-# Service (systemd)
+# Pre-suspend lock (systemd)
 # ------------------------------
 
 lockscreen-service-install() {
-    log-info "Installing lockscreen service"
+    log-info "Installing pre-suspend lock unit"
     systemd-daemon-reload "${_LOCKSCREEN_SCOPE}"
-    systemd-enable-start "${_LOCKSCREEN_UNIT}" "${_LOCKSCREEN_SCOPE}"
     # Oneshot, WantedBy=sleep.target - nothing to start now, just enable so it
     # fires on the next suspend/hibernate.
     systemd-enable "${_LOCKSCREEN_SUSPEND_UNIT}" "${_LOCKSCREEN_SCOPE}"
 }
 
-lockscreen-service-start() {
-    log-info "Starting lockscreen service"
-    systemd-start "${_LOCKSCREEN_UNIT}" "${_LOCKSCREEN_SCOPE}"
-}
-
-lockscreen-service-stop() {
-    log-info "Stopping lockscreen service"
-    systemd-stop "${_LOCKSCREEN_UNIT}" "${_LOCKSCREEN_SCOPE}"
-}
-
-lockscreen-service-restart() {
-    log-info "Restarting lockscreen service"
-    systemd-restart "${_LOCKSCREEN_UNIT}" "${_LOCKSCREEN_SCOPE}"
-}
-
 lockscreen-service-status() {
-    systemd-get-status "${_LOCKSCREEN_UNIT}" "${_LOCKSCREEN_SCOPE}"
-    echo ""
     systemd-get-status "${_LOCKSCREEN_SUSPEND_UNIT}" "${_LOCKSCREEN_SCOPE}"
 }
 
 lockscreen-service-uninstall() {
-    log-info "Uninstalling lockscreen service"
-    systemd-disable-stop "${_LOCKSCREEN_UNIT}" "${_LOCKSCREEN_SCOPE}"
+    log-info "Uninstalling pre-suspend lock unit"
     systemd-disable "${_LOCKSCREEN_SUSPEND_UNIT}" "${_LOCKSCREEN_SCOPE}"
     systemd-daemon-reload "${_LOCKSCREEN_SCOPE}"
 }

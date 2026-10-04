@@ -1,0 +1,5 @@
+[[ -n "${DISPLAY}" || "${WAYLAND_DISPLAY}" ]] && {
+    # hook-init stays in the foreground for the idle daemon's lifetime, so
+    # it is detached in a subshell rather than run as a job of this shell.
+    ( pgrep -x "xidlehook" > /dev/null || lockscreen hook-init &>/dev/null & )
+}
