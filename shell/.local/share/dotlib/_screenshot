@@ -1,0 +1,159 @@
+#!/usr/bin/env zsh
+
+# _screenshot - maim/xclip screenshot capture with rofi picker + notifications
+# Part of the dotfiles library v2.0
+#
+# Usage:
+#   source "${DOTLIB}/_screenshot"
+#
+# Dependencies:
+#   Required: _common, maim, xclip
+#   Optional: _log, _rofi (menu/geometry/wait prompts), _notify (feedback),
+#             xdotool (window capture only)
+
+[[ -n "${SCREENSHOT_LOADED:-}" ]] && return 0
+declare -gr SCREENSHOT_LOADED=1
+
+source "${DOTLIB}/_common"     || { echo "[ERROR] _screenshot requires _common" >&2; return 1; }
+source "${DOTLIB}/_validation" || { echo "[ERROR] _screenshot requires _validation" >&2; return 1; }
+source "${DOTLIB}/_log"    2>/dev/null || true
+source "${DOTLIB}/_rofi"   2>/dev/null || true
+source "${DOTLIB}/_notify" 2>/dev/null || true
+
+declare -g SCREENSHOT_OUTPUT_DIR="${SCREENSHOT_OUTPUT_DIR:-${HOME}/.screenshots}"
+declare -ga SCREENSHOT_WAIT_CHOICES=(5 10 15 20 25 30)
+
+typeset -gA _SCREENSHOT_DESCRIPTIONS=(
+    [fullscreen]="Capture the whole screen immediately"
+    [fullscreen_wait]="Prompt for a delay, then capture the whole screen"
+    [selection]="Drag-select a region and capture it"
+    [selection_wait]="Prompt for a delay, then drag-select and capture"
+    [geometry]="Capture an explicit WxH+X+Y region"
+    [window]="Capture only the active window"
+    [menu]="Interactive rofi picker over all capture modes"
+)
+
+# ------------------------------
+# Private helpers
+# ------------------------------
+
+_screenshot-path() {
+    printf "%s/screenshot-%s.png" "${SCREENSHOT_OUTPUT_DIR}" "$(common-timestamp-format '%Y%m%d-%H%M%S')"
+}
+
+# _screenshot-capture <maim-arg...>: shared shoot/copy/notify body used by
+# every capture subcommand.
+_screenshot-capture() {
+    common-require-commands maim xclip || {
+        notify-error "Screenshot failed" "maim or xclip not installed" &>/dev/null
+        return 6
+    }
+    common-ensure-dir "${SCREENSHOT_OUTPUT_DIR}"
+
+    local shot_path
+    shot_path="$(_screenshot-path)"
+
+    if ! maim "$@" "${shot_path}"; then
+        log-error "maim failed"
+        notify-error "Screenshot failed" "maim exited with an error" &>/dev/null
+        return 1
+    fi
+    if [[ ! -s "${shot_path}" ]]; then
+        log-error "maim produced no output (cancelled selection?)"
+        notify-warning "Screenshot cancelled" "No region selected" &>/dev/null
+        return 1
+    fi
+
+    print -n -- "${shot_path}" | xclip -selection clipboard
+    log-info "shot taken - ${shot_path}"
+    notify-success "Screenshot saved" "${shot_path}" &>/dev/null
+    print -- "${shot_path}"
+}
+
+# _screenshot-wait-seconds: rofi-driven delay picker.
+_screenshot-wait-seconds() {
+    rofi-check || { log-error "rofi not available"; return 1; }
+    printf '%s\n' "${SCREENSHOT_WAIT_CHOICES[@]}" | rofi-select "Wait Time (secs)"
+}
+
+# _screenshot-countdown <seconds>: blocks, updating a single live
+# notification once a second instead of a silent sleep.
+_screenshot-countdown() {
+    local seconds="$1"
+    validate-type-integer "$seconds" || return 2
+    local id=""
+    while (( seconds > 0 )); do
+        id=$(notify "Screenshot" "Capturing in ${seconds}s..." \
+                --urgency low --timeout 1200 ${id:+--replace "$id"} 2>/dev/null)
+        sleep 1
+        (( seconds-- ))
+    done
+}
+
+# ------------------------------
+# Public subcommands
+# ------------------------------
+
+screenshot-fullscreen() {
+    _screenshot-capture
+}
+
+screenshot-fullscreen_wait() {
+    local secs
+    secs="$(_screenshot-wait-seconds)" || { log-warning "wait cancelled"; return 1; }
+    [[ -z "$secs" ]] && return 1
+    _screenshot-countdown "$secs"
+    _screenshot-capture
+}
+
+screenshot-selection() {
+    _screenshot-capture -s
+}
+
+screenshot-selection_wait() {
+    local secs
+    secs="$(_screenshot-wait-seconds)" || { log-warning "wait cancelled"; return 1; }
+    [[ -z "$secs" ]] && return 1
+    _screenshot-countdown "$secs"
+    _screenshot-capture -s
+}
+
+# screenshot-geometry: explicit WxH+X+Y region via maim -g, distinct from the
+# interactive drag-select of `selection`.
+screenshot-geometry() {
+    rofi-check || { log-error "rofi not available"; return 1; }
+    local geom
+    geom="$(rofi-input "Geometry (WxH+X+Y)" "e.g. 1920x1080+0+0")" || return 1
+    [[ -z "$geom" ]] && { log-warning "no geometry entered"; return 1; }
+    if [[ ! "$geom" =~ ^[0-9]+x[0-9]+\+[0-9]+\+[0-9]+$ ]]; then
+        log-error "invalid geometry: ${geom} (expected WxH+X+Y)"
+        notify-error "Screenshot failed" "Invalid geometry: ${geom}" &>/dev/null
+        return 2
+    fi
+    _screenshot-capture -g "$geom"
+}
+
+# screenshot-window: active-window-only capture via xdotool + maim -i.
+screenshot-window() {
+    common-require-command xdotool "Install xdotool for window capture" || {
+        notify-error "Screenshot failed" "xdotool not installed" &>/dev/null
+        return 6
+    }
+    local win_id
+    win_id="$(xdotool getactivewindow 2>/dev/null)" || {
+        log-error "xdotool could not resolve the active window"
+        notify-error "Screenshot failed" "No active window" &>/dev/null
+        return 1
+    }
+    _screenshot-capture -i "$win_id"
+}
+
+# screenshot-menu: rofi picker backing no-arg invocation.
+screenshot-menu() {
+    rofi-check || { log-error "rofi not available"; return 1; }
+    local choice
+    choice="$(printf '%s\n' fullscreen fullscreen_wait selection selection_wait geometry window \
+        | rofi-select "Screenshot")" || { log-warning "menu cancelled"; return 1; }
+    [[ -z "$choice" ]] && return 1
+    "screenshot-${choice}"
+}
