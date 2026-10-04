@@ -4,11 +4,11 @@ general.import = ["/home/andronics/.config/alacritty/themes/catppuccin-mocha.tom
 size = 14.0
 
 [font.bold]
-family = "Source Code Pro"
+family = "Source Code Pro for Powerline"
 style = "Bold"
 
 [font.bold_italic]
-family = "Source Code Pro"
+family = "Source Code Pro for Powerline"
 style = "Bold Italic"
 
 [font.glyph_offset]
@@ -16,11 +16,11 @@ x = 0
 y = 0
 
 [font.italic]
-family = "Source Code Pro"
+family = "Source Code Pro for Powerline"
 style = "Italic"
 
 [font.normal]
-family = "Source Code Pro"
+family = "Source Code Pro for Powerline"
 style = "Regular"
 
 [font.offset]
@@ -47,3 +47,8 @@ y = 4
 [window.position]
 x = 0
 y = 0
+
+[[keyboard.bindings]]
+key = "Return"
+mods = "Shift"
+chars = "\u001B\r"
