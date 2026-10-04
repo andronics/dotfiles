@@ -9,7 +9,7 @@ GNU Stow + two composable profiles:
 | Package | Always install? | Contents |
 |---|---|---|
 | `shell/` | yes (servers too) | zsh dispatcher, tmux, gh, git, gpg/ssh keys (private submodules), starship, fzf, dotlib, neofetch |
-| `desktop/` | desktops only | bspwm, sxhkd, polybar, picom, dunst, rofi, alacritty, X-session boot |
+| `desktop/` | desktops only | bsp, sxhkd, polybar, picom, dunst, rofi, alacritty, X-session boot |
 
 `./dotfiles install <pkg...>` is a thin Stow wrapper. Subcommands: `install` (`i`), `uninstall` (`u`), `reinstall` (`r`). Per-package hooks: `.preinstall` / `.postinstall` (sourced — they share the wrapper's `err`/`info`/`ok`/`warn` helpers and the `dotfiles_source_root` / `_pkg` vars).
 
