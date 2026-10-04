@@ -7,7 +7,7 @@ Stow-managed dotfiles organized into three composable profiles.
 | Package | What it is | When to install |
 |---------|-----------|-----------------|
 | `shell/` | zsh + integrations (autosuggestions, syntax-highlighting, fzf-tab, fzf, dircolors, starship, zoxide, deno, pnpm, docker, gpg-agent, etc.), tmux + tmuxinator, gnupg keys, ssh keys, git config, gh config, neofetch | Always — including servers |
-| `desktop/` | bspwm + sxhkd + bsp helpers, polybar, picom, dunst, rofi, alacritty, gtk 2/3/4, X11 (.xinitrc, .Xresources), backgrounds, themes, palette, X-session boot scripts in `.zlogin.d/` | Linux desktops only |
+| `desktop/` | bsp + sxhkd + bsp helpers, polybar, picom, dunst, rofi, alacritty, gtk 2/3/4, X11 (.xinitrc, .Xresources), backgrounds, themes, palette, X-session boot scripts in `.zlogin.d/` | Linux desktops only |
 
 ## Bootstrap
 
