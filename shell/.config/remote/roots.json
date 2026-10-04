@@ -1,4 +1,4 @@
 {
-    "local": "/.pool/local",
-    "remote": "/.pool/remote"
+    "local": "/pool/local",
+    "remote": "/pool/remote"
 }
