@@ -168,12 +168,19 @@ systemd-exists() {
 # ------------------------------
 
 # Start service
-# Usage: systemd-start "myservice" [--user|--system]
+# Usage: systemd-start [--no-block] "myservice" [--user|--system]
+# --no-block returns as soon as the job is queued instead of waiting for it
+# to complete - required for Type=oneshot units whose ExecStart is expected
+# to run long (e.g. remote-sync@.service), otherwise systemctl start blocks
+# the caller for the unit's entire runtime.
 # Exit codes:
 #   0 - Success
 #   1 - Service not found
 #   2 - Failed to start
 systemd-start() {
+    local _no_block=false
+    [[ "$1" == "--no-block" ]] && { _no_block=true; shift; }
+
     local unit="$1"
     local scope="${2:-$SYSTEMD_DEFAULT_SCOPE}"
 
@@ -184,14 +191,18 @@ systemd-start() {
 
     log-debug "systemd-start: starting $unit ($scope)"
 
+    local -a _flags=()
+    [[ "${_no_block}" == "true" ]] && _flags+=(--no-block)
+
     # Dry-run mode
     if [[ "${SYSTEMD_DRY_RUN}" == "true" ]]; then
-        log-info "[DRY-RUN] Would start: systemctl $scope start $unit"
+        local _flags_str="${(j: :)_flags}"
+        log-info "[DRY-RUN] Would start: systemctl $scope start ${_flags_str:+$_flags_str }$unit"
         return 0
     fi
 
     # Start service
-    if systemctl $scope start "$unit" 2>/dev/null; then
+    if systemctl $scope start "${_flags[@]}" "$unit" 2>/dev/null; then
         log-debug "systemd-start: $unit started successfully"
         systemd--emit-event "service.started" "$unit" "$scope"
         return 0
@@ -389,12 +400,15 @@ systemd-disable() {
 }
 
 # Enable and start service
-# Usage: systemd-enable-start "myservice" [--user|--system]
+# Usage: systemd-enable-start [--no-block] "myservice" [--user|--system]
 systemd-enable-start() {
+    local -a _start_flags=()
+    [[ "$1" == "--no-block" ]] && { _start_flags=(--no-block); shift; }
+
     local unit="$1"
     local scope="${2:-$SYSTEMD_DEFAULT_SCOPE}"
 
-    systemd-enable "$unit" "$scope" && systemd-start "$unit" "$scope"
+    systemd-enable "$unit" "$scope" && systemd-start "${_start_flags[@]}" "$unit" "$scope"
 }
 
 # Stop and disable service
