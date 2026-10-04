@@ -47,7 +47,7 @@
     "media-courses": {
         "credentials": "stevie@andronics.io",
         "drive_id": "0AOIRi6eDa52tUk9PVA",
-        "mountpoint": "media/other"
+        "mountpoint": "media/courses"
     },
     "media-documentaries": {
         "credentials": "stevie@andronics.io",
