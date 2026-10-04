@@ -47,15 +47,12 @@
     "media-movies": {
         "credentials": "stevie@andronics.io",
         "drive_id": "0ALyonjJNrlRoUk9PVA",
-        "filters": ["artwork","metadata","subtitles","videos"],
-        "sfilters": ["artwork","metadata","subtitles","videos"],
         "cache_max_size": "150G",
         "mountpoint": "media/movies"
     },
     "media-music": {
         "credentials": "stevie@andronics.io",
         "drive_id": "0AISKLrkHRzwVUk9PVA",
-        "filters": ["artwork","audio","metadata"],
         "mountpoint": "media/music"
     },
     "media-other": {
@@ -76,13 +73,11 @@
     "media-standup": {
         "credentials": "stevie@andronics.io",
         "drive_id": "0AADBSzPZztTmUk9PVA",
-        "filters": ["artwork","metadata","subtitles","videos"],
         "mountpoint": "media/standup"
     },
     "media-tv": {
         "credentials": "stevie@andronics.io",
         "drive_id": "0AEBmM5-iPnADUk9PVA",
-        "filters": ["artwork","metadata","videos"],
         "cache_max_size": "150G",
         "mountpoint": "media/tv"
     },

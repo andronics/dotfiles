@@ -1,9 +1,9 @@
 #!/usr/bin/env zsh
 
-# _remote_config - units/credentials/roots/filters config model for _remote
+# _remote_config - units/credentials/roots config model for _remote
 # Part of the dotfiles library v2.0
 #
-# Loads the four JSON config files under $XDG_CONFIG_HOME/remote/ once at
+# Loads the three JSON config files under $XDG_CONFIG_HOME/remote/ once at
 # source time and exposes typed getters over them. credentials.json holds
 # live OAuth client secrets + refresh tokens - see .gitignore's
 # **/credentials.json entry, it must never be tracked.
@@ -25,16 +25,13 @@ source "${DOTLIB}/_xdg"    || { echo "[ERROR] _remote_config requires _xdg" >&2;
 
 declare -g _REMOTE_CONFIG_DIR="$(xdg-config-dir "remote")"
 declare -g _REMOTE_CONFIG_CREDENTIALS="$(cat "${_REMOTE_CONFIG_DIR}/credentials.json")"
-declare -g _REMOTE_CONFIG_FILTERS="$(cat "${_REMOTE_CONFIG_DIR}/filters.json")"
 declare -g _REMOTE_CONFIG_ROOTS="$(cat "${_REMOTE_CONFIG_DIR}/roots.json")"
 declare -g _REMOTE_CONFIG_UNITS="$(cat "${_REMOTE_CONFIG_DIR}/units.json")"
 
-# Usage: _remote-config-query <credentials|filters|roots|units> "<jq filter>"
-# Generic escape hatch for the dynamic-index queries filter evaluation needs.
+# Usage: _remote-config-query <credentials|roots|units> "<jq filter>"
 _remote-config-query() {
     case "$1" in
         credentials) echo "${_REMOTE_CONFIG_CREDENTIALS}" | jq-query "$2" ;;
-        filters)     echo "${_REMOTE_CONFIG_FILTERS}"     | jq-query "$2" ;;
         roots)       echo "${_REMOTE_CONFIG_ROOTS}"       | jq-query "$2" ;;
         units)       echo "${_REMOTE_CONFIG_UNITS}"       | jq-query "$2" ;;
         *)
@@ -106,14 +103,6 @@ _remote-config-root() {
 
 _remote-config-credentials-for() {
     _remote-config-query "credentials" ".\"$1\""
-}
-
-_remote-config-filter-rules() {
-    _remote-config-query "filters" ".\"$1\""
-}
-
-_remote-config-filter-patterns() {
-    _remote-config-query "filters" ". | keys[]"
 }
 
 # Usage: _remote-config-render-rclone-conf <unit>

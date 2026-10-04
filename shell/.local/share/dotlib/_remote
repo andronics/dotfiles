@@ -6,14 +6,14 @@
 # Usage:
 #   source "${DOTLIB}/_remote"
 #
-# CLI flag convention: --dry-run and --preview are LOCAL per-subcommand
-# flags, placed right after the subcommand word (e.g. `remote mount
-# --dry-run <unit>`), not the dispatcher's global --dry-run. _dispatcher's
-# function-mode dry-run is all-or-nothing: DISPATCHER_DRY_RUN=true makes
-# dispatcher-execute-command skip calling the subcommand function entirely
-# and just log "[DRY RUN] Would call: ...". That would lose the informative
-# per-command dry-run output this module produces (e.g. sync's preview file
-# listing), so subcommands read their own --dry-run instead of relying on
+# CLI flag convention: --dry-run is a LOCAL per-subcommand flag, placed
+# right after the subcommand word (e.g. `remote mount --dry-run <unit>`),
+# not the dispatcher's global --dry-run. _dispatcher's function-mode dry-run
+# is all-or-nothing: DISPATCHER_DRY_RUN=true makes dispatcher-execute-command
+# skip calling the subcommand function entirely and just log "[DRY RUN]
+# Would call: ...". That would lose the informative per-command dry-run
+# output this module produces (e.g. sync's rclone --dry-run file listing),
+# so subcommands read their own --dry-run instead of relying on
 # dispatcher-is-dry-run.
 #
 # remote-mount is deliberately NOT delegated to _rclone's rclone-mount: that
@@ -31,7 +31,7 @@
 #     - _common, _log, _jq, _xdg: core utilities
 #     - _rclone, _systemd: delegated mount/unmount/sync/service-control
 #     - _singleton: per-unit sync lock (prevents overlapping remote-sync runs)
-#     - _remote_config, _remote_patterns, _remote_filters: domain modules
+#     - _remote_config, _remote_patterns: domain modules
 
 [[ -n "${REMOTE_LOADED:-}" ]] && return 0
 declare -gr REMOTE_LOADED=1
@@ -45,14 +45,13 @@ source "${DOTLIB}/_systemd"       || { echo "[ERROR] _remote requires _systemd" 
 source "${DOTLIB}/_singleton"     || { echo "[ERROR] _remote requires _singleton" >&2; return 1; }
 source "${DOTLIB}/_remote_config"   || { echo "[ERROR] _remote requires _remote_config" >&2; return 1; }
 source "${DOTLIB}/_remote_patterns" || { echo "[ERROR] _remote requires _remote_patterns" >&2; return 1; }
-source "${DOTLIB}/_remote_filters"  || { echo "[ERROR] _remote requires _remote_filters" >&2; return 1; }
 
 typeset -gA _REMOTE_DESCRIPTIONS=(
     [mount]="Mount a unit"
     [unmount]="Unmount a unit"
     [mount-all]="Mount all units matching a pattern (via systemd)"
     [unmount-all]="Unmount all units matching a pattern (via systemd)"
-    [sync]="Sync filtered local files to a unit's remote"
+    [sync]="Move a unit's local files to its remote"
     [list]="List units with status and cache size"
     [verify]="Verify unit configuration and mount status"
     [health]="Check enabled units are actually mounted and responsive, restart if not"
@@ -210,8 +209,6 @@ remote-unmount-all() {
 # ------------------------------
 
 remote-sync() {
-    local _preview=false
-    [[ "$1" == "--preview" ]] && { _preview=true; shift; }
     local _dry_run=false
     [[ "$1" == "--dry-run" ]] && { _dry_run=true; shift; }
 
@@ -230,75 +227,27 @@ remote-sync() {
     _root_remote=$(_remote-config-root "remote")
     _local_mount_point="${_root_local}/${_mountpoint}"
 
+    # Most units never have local content staged, so a missing local dir is
+    # the normal "nothing to sync" case, not a failure.
+    if [[ ! -d "${_local_mount_point}" ]]; then
+        log-info "Nothing to sync for ${_unit_name}: ${_local_mount_point} does not exist"
+        singleton-unlock "${_lock_name}"
+        return 0
+    fi
+
     # Supersedes a plain `-f "${_cfg}"` check: a rendered config only proves
     # the unit was mounted at some point, not that the mount is live now.
     rclone-is-mounted "${_root_remote}/${_mountpoint}" || { log-error "Unit not currently mounted: ${_unit_name}"; singleton-unlock "${_lock_name}"; return 1; }
 
-    [[ ! -d "${_local_mount_point}" ]] && { log-error "Local mountpoint does not exist: ${_local_mount_point}"; singleton-unlock "${_lock_name}"; return 1; }
+    local -a _move_opts=(--progress --delete-empty-src-dirs)
+    [[ "${_dry_run}" == "true" ]] && _move_opts+=(--dry-run)
 
-    local _filter_patterns
-    _filter_patterns=$(_remote-config-filter-patterns)
-    local -a _matched_files=()
-    local _total_size=0 _file_count=0
-
-    log-info "Scanning files in ${_local_mount_point}..."
-
-    local _filepath
-    while read -r _filepath; do
-        [[ ! -f "${_filepath}" ]] && continue
-        local _filename=$(basename "${_filepath}")
-
-        local _pattern=""
-        while read -r _pattern; do
-            [[ -z "${_pattern}" ]] && continue
-            if [[ "${_filename}" =~ ${_pattern} ]]; then
-                if _remote-filters-check-file "${_pattern}" "${_filepath}"; then
-                    _matched_files+=("${_filepath}")
-                    local _size=$(stat -c%s "${_filepath}" 2>/dev/null || echo "0")
-                    _total_size=$((_total_size + _size))
-                    ((_file_count++)) || true
-                    log-debug "Matched: ${_filename} (pattern: ${_pattern})"
-                    break
-                fi
-            fi
-        done <<< "${_filter_patterns}"
-    done < <(find "${_local_mount_point}" -type f)
-
-    log-info "Found ${_file_count} file(s) matching filters ($(numfmt --to=iec ${_total_size} 2>/dev/null || echo "${_total_size} bytes"))"
-
-    if [[ "${_preview}" == "true" || "${_dry_run}" == "true" ]]; then
-        log-info "Preview mode - files that would be synced:"
-        local _f
-        for _f in "${_matched_files[@]}"; do
-            echo "  ${_f}"
-        done
-        singleton-unlock "${_lock_name}"
-        return 0
-    fi
-
-    if [[ ${_file_count} -eq 0 ]]; then
-        log-info "No files to sync"
-        singleton-unlock "${_lock_name}"
-        return 0
-    fi
-
-    local _filter_file
-    _filter_file=$(mktemp /tmp/remote-sync.XXXXXX)
-    local _relative_path
-    for _filepath in "${_matched_files[@]}"; do
-        _relative_path="${_filepath#${_local_mount_point}/}"
-        echo "+ /${_relative_path}" >> "${_filter_file}"
-    done
-    echo "- **" >> "${_filter_file}"
-
-    log-info "Syncing ${_file_count} file(s) to ${_unit_name}..."
-
+    local _rc=0
     rclone-set-config "${_cfg}"
-    rclone-set-filter-file "${_filter_file}"
-    rclone-move "${_local_mount_point}" "${_unit_name}:" --progress --delete-empty-src-dirs
+    rclone-move "${_local_mount_point}" "${_unit_name}:" "${_move_opts[@]}" || _rc=$?
 
-    rm -f "${_filter_file}"
     singleton-unlock "${_lock_name}"
+    [[ ${_rc} -ne 0 ]] && return ${_rc}
     log-info "Sync complete"
 }
 

@@ -41,9 +41,8 @@ The one deliberate exception is documented below (mount).
 - **Wrapper** (`remote`): routes commands, nothing else.
 - **`_remote`**: the 15 public subcommand functions; owns the one place that
   intentionally does NOT delegate (mount).
-- **`_remote_config`**: units/credentials/roots/filters JSON config model.
+- **`_remote_config`**: units/credentials/roots JSON config model.
 - **`_remote_patterns`**: unit name pattern matching (glob/comma/exact).
-- **`_remote_filters`**: mediainfo-based filter evaluation engine for sync.
 - **`_rclone` / `_systemd`**: shared dotlib domain modules, not specific to
   `remote`, doing the actual mount/unmount/move/service-control work.
 
@@ -57,9 +56,8 @@ shell/
 │   ├── share/
 │   │   ├── dotlib/
 │   │   │   ├── _remote                # public remote-<sub> functions, delegates to _rclone/_systemd
-│   │   │   ├── _remote_config         # units/credentials/roots/filters JSON model
+│   │   │   ├── _remote_config         # units/credentials/roots JSON model
 │   │   │   ├── _remote_patterns       # unit name pattern matching
-│   │   │   ├── _remote_filters        # mediainfo filter evaluation
 │   │   │   ├── _rclone                # generic rclone domain module (not remote-specific)
 │   │   │   └── _systemd               # generic systemd domain module (not remote-specific)
 │   │   ├── remote/
@@ -69,7 +67,6 @@ shell/
 │   │       └── remote-sync@.service   # Type=oneshot template unit
 └── .config/remote/
     ├── credentials.json                # OAuth credentials - tracked, git-crypt encrypted at rest
-    ├── filters.json                    # sync filter rules
     ├── roots.json                      # local/remote mount roots
     └── units.json                      # unit definitions
 ```
@@ -83,11 +80,10 @@ Sources `_dispatcher` and `_remote`, calls `dispatcher-init "remote"
 
 ### `_remote_config`
 
-Loads the four JSON files once at source time from `xdg-config-dir "remote"`
+Loads the three JSON files once at source time from `xdg-config-dir "remote"`
 and exposes typed getters (`remote-config-unit-mountpoint`,
 `remote-config-unit-drive-id`, `remote-config-credentials-for`, ...) plus a
-generic `remote-config-query <domain> <jq filter>` escape hatch for the
-dynamic-index queries filter evaluation needs. Also owns
+generic `remote-config-query <domain> <jq filter>` escape hatch. Also owns
 `remote-config-render-rclone-conf <unit>`, which renders an rclone.conf
 `[unit]` stanza from `units.json` + `credentials.json`. This stays
 custom rather than calling `_rclone`'s `rclone-create-remote`, because that
@@ -99,7 +95,7 @@ underscore. That's not the "private helper" convention from the wrapper
 contract in the usual single-file sense — it's there so the dispatcher's
 function-table scan for the `remote-*` prefix, used to build `remote`'s
 subcommand list, doesn't pick up library functions as if they were CLI
-verbs. Same reasoning applies to `_remote_patterns` and `_remote_filters`.)
+verbs. Same reasoning applies to `_remote_patterns`.)
 
 ### `_remote_patterns`
 
@@ -114,22 +110,10 @@ held in a variable by default, it compares literally. The original script
 didn't do this, so `remote list` (default pattern `*`) and any glob pattern
 passed to any `*-all` command silently matched nothing. Fixed here.
 
-### `_remote_filters`
-
-`remote-filters-evaluate` (the `eq`/`ne`/`lt`/`le`/`gt`/`ge`/`in` comparator)
-and `remote-filters-check-file` (looks up a pattern's rules from
-`filters.json`, extracts `mimetype` via `file` or audio/video properties via
-`mediainfo`, evaluates every rule). This is the only schema supported today —
-an older, differently-shaped `filters.json` and its validator existed before
-this rewrite and are gone (they were unreachable from the dispatcher
-already). The file was briefly named `filters2.json` during the transition
-to disambiguate from that removed legacy schema; renamed back to
-`filters.json` once there was nothing left to disambiguate from.
-
 ### `_remote`
 
-The 16 subcommand functions, grouped below. `--dry-run` and `--preview` are
-**local, per-subcommand flags** read from the subcommand's own arguments
+The 16 subcommand functions, grouped below. `--dry-run` is a
+**local, per-subcommand flag** read from the subcommand's own arguments
 (`remote mount --dry-run <unit>`), not dispatcher's global `--dry-run`. See
 "Dry-run Mode" for why.
 
@@ -141,7 +125,7 @@ The 16 subcommand functions, grouped below. `--dry-run` and `--preview` are
 | `unmount <unit>` | `rclone-unmount` | fusermount→umount fallback |
 | `mount-all [pattern]` | `systemd-start "remote-mount@<unit>"` | Not synchronous in-process — see below |
 | `unmount-all [pattern]` | `systemd-stop "remote-mount@<unit>"` | |
-| `sync [--preview] <unit>` | `rclone-set-config`, `rclone-set-filter-file`, `rclone-move` | Scan/filter/preview logic stays in `_remote` |
+| `sync [--dry-run] <unit>` | `rclone-set-config`, `rclone-move` | Moves everything under the unit's local dir; a missing local dir is "nothing to sync" (exit 0) |
 | `list [pattern]` | `systemd-get-state` | Table of unit/mountpoint/status/cache size |
 | `verify [pattern]` | `rclone-is-mounted` | Config sanity + mount-state check (read-only) |
 | `health [pattern]` | `rclone-is-mounted`, `systemd-restart` | Liveness sweep for enabled units; restarts what's unhealthy — see below |
@@ -199,7 +183,7 @@ practice.
 
 ## Configuration Files
 
-### units.json / roots.json / filters.json
+### units.json / roots.json
 
 Unchanged from before — see the JSON examples inline in each file. No schema
 changes.
@@ -227,19 +211,18 @@ function-mode routing, `dispatcher-execute-command` treats
 `DISPATCHER_DRY_RUN=true` as all-or-nothing: it skips calling the subcommand
 function entirely and just logs `[DRY RUN] Would call: <fn> <args>`. That
 would lose the informative per-command output this module already produces —
-most notably `sync`'s file-by-file preview listing.
+most notably `sync`'s `rclone --dry-run` file listing.
 
 Instead, `--dry-run` is a **local flag** read by the subcommand itself,
 placed right after the subcommand word:
 
 ```bash
 remote mount --dry-run <unit>
-remote sync --dry-run <unit>       # equivalent to --preview for sync
+remote sync --dry-run <unit>       # passes --dry-run through to rclone move
 remote cleanup --dry-run
 ```
 
-This mirrors `sync`'s pre-existing `--preview` flag, which uses the same
-placement convention. (This is a change from the old syntax,
+(This is a change from the old syntax,
 `remote --dry-run <command>`, which is no longer meaningful — that form now
 triggers dispatcher's coarse global skip instead of the graceful per-command
 dry-run behavior.)
@@ -295,7 +278,7 @@ systemctl --user status remote-mount@audio
 Add a `remote-<name>` function to `_remote`, optionally with a
 `_REMOTE_DESCRIPTIONS[<name>]="..."` entry for `remote help`. No new files
 needed unless the logic is substantial enough to warrant its own sibling
-module (follow the `_remote_config`/`_remote_patterns`/`_remote_filters`
+module (follow the `_remote_config`/`_remote_patterns`
 pattern: leading-underscore function names so the dispatcher's `remote-*`
 discovery scan doesn't expose them as top-level verbs).
 
