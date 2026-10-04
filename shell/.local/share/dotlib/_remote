@@ -529,6 +529,11 @@ remote-warm() {
     local _unit_name="$1"
     local _sock="$(xdg-runtime-dir "remote")/${_unit_name}/rc.sock"
 
+    if [[ "$(_remote-config-unit-warm "${_unit_name}")" != "true" ]]; then
+        log-info "Dir cache warm-up disabled for ${_unit_name} (units.json: warm=false)"
+        return 0
+    fi
+
     [[ -S "${_sock}" ]] || { log-error "No control socket for ${_unit_name} (not mounted?)"; return 1; }
 
     rclone rc --unix-socket "${_sock}" vfs/refresh recursive=true _async=true >/dev/null ||

@@ -96,6 +96,15 @@ _remote-config-unit-cache-max-size() {
     echo "${_v}"
 }
 
+# Whether remote-warm should preload this unit's dir cache. On by default;
+# set "warm": false on a unit whose full tree is too big to hold in memory.
+_remote-config-unit-warm() {
+    local _v
+    _v=$(_remote-config-query "units" ".\"$1\".warm")
+    [[ "${_v}" == "null" ]] && _v="true"
+    echo "${_v}"
+}
+
 # Usage: _remote-config-root local|remote
 _remote-config-root() {
     _remote-config-query "roots" ".$1"

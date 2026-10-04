@@ -129,7 +129,7 @@ The 17 subcommand functions, grouped below. `--dry-run` is a
 | `list [pattern]` | `systemd-get-state` | Table of unit/mountpoint/status/cache size |
 | `verify [pattern]` | `rclone-is-mounted` | Config sanity + mount-state check (read-only) |
 | `health [pattern]` | `rclone-is-mounted`, `systemd-restart` | Liveness sweep for enabled units; restarts what's unhealthy — see below |
-| `warm <unit>` | `rclone rc vfs/refresh` over the unit's rc unix socket | Async recursive dir-cache preload; run as `ExecStartPost` of the mount unit |
+| `warm <unit>` | `rclone rc vfs/refresh` over the unit's rc unix socket | Async recursive dir-cache preload; run as `ExecStartPost` of the mount unit. Skipped when the unit sets `"warm": false` in `units.json` (default true) |
 | `cleanup [--force]` | `rclone-is-mounted` | Stale runtime config / empty cache cleanup |
 | `enable <unit>` | `systemd-enable-start` | |
 | `disable <unit>` | `systemd-disable-stop` | |
