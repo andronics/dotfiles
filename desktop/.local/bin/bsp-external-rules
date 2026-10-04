@@ -12,7 +12,7 @@ source "${DOTLIB}/_log" || { echo "missing _log" >&2; exit 1; }
 # output, run a side effect, or `exit` for a hard stop). Criteria and
 # actions are free to differ arbitrarily between rules; nothing here forces
 # a common shape. Args: $1=window $2=class $3=instance $4=tags $5=role.
-# Order in _BSPWM_EXTERNAL_RULES matters - it's evaluated top to bottom.
+# Order in _BSP_EXTERNAL_RULES matters - it's evaluated top to bottom.
 
 # TODO: identify which Chrome extension this is and why its pop-up floats
 # instead of being closed by _bsp_rule_browser_popup_close below.
@@ -49,7 +49,7 @@ _bsp_rule_terminal_drop() {
 	[[ -n "$state" ]] || echo "state=floating rectangle=5120x1152+0+0 sticky=on follow=on"
 }
 
-typeset -ga _BSPWM_EXTERNAL_RULES=(
+typeset -ga _BSP_EXTERNAL_RULES=(
 	_bsp_rule_browser_popup_exempt
 	_bsp_rule_browser_popup_close
 	_bsp_rule_terminal_draw
@@ -74,7 +74,7 @@ _bsp_external_rules() {
 	# set -e - without the guard, the loop would die on the very first
 	# non-matching rule instead of trying the rest.
 	local _rule
-	for _rule in "${_BSPWM_EXTERNAL_RULES[@]}"; do
+	for _rule in "${_BSP_EXTERNAL_RULES[@]}"; do
 		"$_rule" "$_window" "$_class" "$_instance" "$_tags" "$_role" || true
 	done
 
