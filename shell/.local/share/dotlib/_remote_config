@@ -92,6 +92,13 @@ _remote-config-unit-gid() {
     echo "${_v}"
 }
 
+_remote-config-unit-cache-max-size() {
+    local _v
+    _v=$(_remote-config-query "units" ".\"$1\".cache_max_size")
+    [[ "${_v}" == "null" ]] && _v="10G"
+    echo "${_v}"
+}
+
 # Usage: _remote-config-root local|remote
 _remote-config-root() {
     _remote-config-query "roots" ".$1"

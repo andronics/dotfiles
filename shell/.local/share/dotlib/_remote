@@ -79,11 +79,12 @@ remote-mount() {
 
     _remote-config-unit-exists "${_unit_name}" || { log-error "Specified unit does not exist."; return 1; }
 
-    local _mountpoint _root_remote _uid _gid _cache_dir _runtime_dir _mount_path
+    local _mountpoint _root_remote _uid _gid _cache_max_size _cache_dir _runtime_dir _mount_path
     _mountpoint=$(_remote-config-unit-mountpoint "${_unit_name}")
     _root_remote=$(_remote-config-root "remote")
     _uid=$(_remote-config-unit-uid "${_unit_name}")
     _gid=$(_remote-config-unit-gid "${_unit_name}")
+    _cache_max_size=$(_remote-config-unit-cache-max-size "${_unit_name}")
     _mount_path="${_root_remote}/${_mountpoint}"
     _cache_dir="$(xdg-cache-dir "remote")/${_unit_name}"
     _runtime_dir="$(xdg-runtime-dir "remote")/${_unit_name}"
@@ -99,12 +100,20 @@ remote-mount() {
 
     rclone-check-available || return 1
 
-    log-debug "mounting ${_unit_name} @ ${_mount_path} (uid=${_uid}, gid=${_gid})"
+    log-debug "mounting ${_unit_name} @ ${_mount_path} (uid=${_uid}, gid=${_gid}, cache=${_cache_max_size})"
 
+    # Read-ahead is deliberately small (default --buffer-size, no
+    # --vfs-read-ahead): library scanners open every video just to probe
+    # its header, and each open downloads the whole read-ahead window into
+    # the VFS cache. At 256M+256M that churned ~600G through a 64G cache in
+    # under three days.
+    #
+    # --vfs-cache-max-size is per mount, so the caps don't bound total disk
+    # use; --vfs-cache-min-free-space is the guard for the shared cache disk.
     rclone mount "${_unit_name}:" "${_mount_path}" \
         --allow-non-empty \
         --allow-other \
-        --buffer-size "256M" \
+        --buffer-size "16M" \
         --cache-dir "${_cache_dir}" \
         --config "${_runtime_dir}/rclone.conf" \
         --default-permissions \
@@ -117,9 +126,10 @@ remote-mount() {
         --uid "${_uid}" \
         --umask "002" \
         --vfs-cache-mode "full" \
-        --vfs-cache-max-age "48h" \
-        --vfs-cache-max-size "64G" \
-        --vfs-read-ahead "256M"
+        --vfs-cache-max-age "336h" \
+        --vfs-cache-max-size "${_cache_max_size}" \
+        --vfs-cache-poll-interval "5m" \
+        --vfs-cache-min-free-space "100G"
 }
 
 remote-unmount() {

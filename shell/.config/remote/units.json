@@ -49,6 +49,7 @@
         "drive_id": "0ALyonjJNrlRoUk9PVA",
         "filters": ["artwork","metadata","subtitles","videos"],
         "sfilters": ["artwork","metadata","subtitles","videos"],
+        "cache_max_size": "150G",
         "mountpoint": "media/movies"
     },
     "media-music": {
@@ -82,6 +83,7 @@
         "credentials": "stevie@andronics.io",
         "drive_id": "0AEBmM5-iPnADUk9PVA",
         "filters": ["artwork","metadata","videos"],
+        "cache_max_size": "150G",
         "mountpoint": "media/tv"
     },
     "org-808-foundation": {
