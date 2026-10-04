@@ -121,7 +121,6 @@ remote-mount() {
         --log-level "INFO" \
         --log-file "${_runtime_dir}/rclone.log" \
         --poll-interval "15s" \
-        --timeout "1h" \
         --uid "${_uid}" \
         --umask "002" \
         --vfs-cache-mode "full" \
