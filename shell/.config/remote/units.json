@@ -14,6 +14,11 @@
         "drive_id": "0ADWPhFvl1WJAUk9PVA",
         "mountpoint": "arc/orgs"
     },
+    "arc-svcs": {
+        "credentials": "stevie@andronics.io",
+        "drive_id": "0AM72Xz8cgrZIUk9PVA",
+        "mountpoint": "arc/svcs"
+    },
     "arc-vaults": {
         "credentials": "stevie@andronics.io",
         "drive_id": "0ACb2yOcTuiJRUk9PVA",
@@ -39,6 +44,16 @@
         "drive_id": "0AKt8-k3Md30NUk9PVA",
         "mountpoint": "media/audiobooks"
     },
+    "media-courses": {
+        "credentials": "stevie@andronics.io",
+        "drive_id": "0AOIRi6eDa52tUk9PVA",
+        "mountpoint": "media/other"
+    },
+    "media-documentaries": {
+        "credentials": "stevie@andronics.io",
+        "drive_id": "0AEFirVgB3etjUk9PVA",
+        "mountpoint": "media/documentaries"
+    },
     "media-ebooks": {
         "credentials": "stevie@andronics.io",
         "drive_id": "0APewWtC6aSPXUk9PVA",
@@ -55,20 +70,15 @@
         "drive_id": "0AISKLrkHRzwVUk9PVA",
         "mountpoint": "media/music"
     },
-    "media-other": {
-        "credentials": "stevie@andronics.io",
-        "drive_id": "0AOIRi6eDa52tUk9PVA",
-        "mountpoint": "media/other"
-    },
-    "media-p": {
-        "credentials": "stevie@andronics.io",
-        "drive_id": "0ANcVmFjcatTKUk9PVA",
-        "mountpoint": "media/p"
-    },
     "media-photos": {
         "credentials": "stevie@andronics.io",
         "drive_id": "0ALEC-6d4Pl4IUk9PVA",
         "mountpoint": "media/photos"
+    },
+    "media-roms": {
+        "credentials": "stevie@andronics.io",
+        "drive_id": "0AKEOFfIIMb6nUk9PVA",
+        "mountpoint": "media/roms"
     },
     "media-standup": {
         "credentials": "stevie@andronics.io",
@@ -81,60 +91,20 @@
         "cache_max_size": "150G",
         "mountpoint": "media/tv"
     },
-    "org-808-foundation": {
-        "credentials": "stevie@andronics.io",
-        "drive_id": "0AMOIbb7nDcOAUk9PVA",
-        "mountpoint": "org/808-foundation"
-    },
     "org-andronics": {
         "credentials": "stevie@andronics.io",
-        "drive_id": "0ADDbjfD-sCrpUk9PVA",
+        "drive_id": "0AG9lal-RGS-WUk9PVA",
         "mountpoint": "org/andronics"
     },
-    "org-community-boutique": {
+    "org-charities": {
         "credentials": "stevie@andronics.io",
-        "drive_id": "0AEvqK_Rp_qYZUk9PVA",
-        "mountpoint": "org/community-boutique"
+        "drive_id": "0AN_lczYRXTRLUk9PVA",
+        "mountpoint": "org/charities"
     },
     "org-foxie-systems": {
         "credentials": "stevie@andronics.io",
         "drive_id": "0AGlcHl_7Owg6Uk9PVA",
         "mountpoint": "org/foxie-systems"
-    },
-    "org-maiden-city-eldercare": {
-        "credentials": "stevie@andronics.io",
-        "drive_id": "APsptGdmkqPOUk9PVA",
-        "mountpoint": "org/maiden-city-eldercare"
-    },
-    "org-mitchie-moos": {
-        "credentials": "stevie@andronics.io",
-        "drive_id": "0AEvqK_Rp_qYZUk9PVA",
-        "mountpoint": "org/mitchie-moos"
-    },
-    "org-paws-at-foyle": {
-        "credentials": "stevie@andronics.io",
-        "drive_id": "0AMfb0iI_UIckUk9PVA",
-        "mountpoint": "org/paws-at-foyle"
-    },
-    "org-playschule": {
-        "credentials": "stevie@andronics.io",
-        "drive_id": "0AK5Atx40p3z1Uk9PVA",
-        "mountpoint": "org/playschule"
-    },
-    "org-springtown-arena": {
-        "credentials": "stevie@andronics.io",
-        "drive_id": "0AI6T5UX0-F9QUk9PVA",
-        "mountpoint": "org/springtown-arena"
-    },
-    "org-studio-35": {
-        "credentials": "stevie@andronics.io",
-        "drive_id": "0AFZ7BcpvuipbUk9PVA",
-        "mountpoint": "org/studio-35"
-    },
-    "org-wee-community": {
-        "credentials": "stevie@andronics.io",
-        "drive_id": "0ACKhS_LNx7VkUk9PVA",
-        "mountpoint": "org/wee-community"
     },
     "res-fonts": {
         "credentials": "stevie@andronics.io",
