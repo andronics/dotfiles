@@ -7,7 +7,11 @@ Wants=network-online.target
 After=network-online.target
 
 [Service]
-Type=simple
+# rclone signals READY once the FUSE mount is live, so "started" means
+# mounted - which is what remote-sync@'s Requisite=/After= and the warm-up
+# below rely on. NotifyAccess=all: rclone is a child of the remote wrapper.
+Type=notify
+NotifyAccess=all
 Environment=PATH="%h/.local/bin:%h/.local/bin/lib:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 Environment=XDG_CACHE_HOME="%h/.cache"
 Environment=XDG_CONFIG_HOME="%h/.config"
@@ -19,6 +23,9 @@ ExecStartPre=%h/.local/bin/remote verify "%i"
 
 # Mount the unit
 ExecStart=%h/.local/bin/remote mount "%i"
+
+# Preload the dir cache (non-fatal: the mount is usable without it)
+ExecStartPost=-%h/.local/bin/remote warm "%i"
 
 # Unmount the unit
 ExecStop=%h/.local/bin/remote unmount "%i"

@@ -18,8 +18,9 @@
 #
 # remote-mount is deliberately NOT delegated to _rclone's rclone-mount: that
 # function always runs `rclone mount --daemon` (backgrounds itself), but
-# remote-mount@.service is Type=simple and requires ExecStart to stay in the
-# foreground for systemd's process tracking / Restart=on-failure to work.
+# remote-mount@.service is Type=notify and requires ExecStart to stay in the
+# foreground for systemd's process tracking / Restart=on-failure to work
+# (rclone itself sends READY once the mount is live).
 #
 # remote-mount-all / remote-unmount-all trigger the systemd template unit
 # rather than calling remote-mount/remote-unmount in-process: remote-mount's
@@ -55,6 +56,7 @@ typeset -gA _REMOTE_DESCRIPTIONS=(
     [list]="List units with status and cache size"
     [verify]="Verify unit configuration and mount status"
     [health]="Check enabled units are actually mounted and responsive, restart if not"
+    [warm]="Preload a mounted unit's whole directory tree into rclone's dir cache"
     [cleanup]="Remove stale runtime configs and empty caches"
     [enable]="Enable and start a unit's systemd service"
     [disable]="Stop and disable a unit's systemd service"
@@ -91,6 +93,8 @@ remote-mount() {
     mkdir -p "${_mount_path}" "${_cache_dir}" "${_runtime_dir}"
 
     _remote-config-render-rclone-conf "${_unit_name}" > "${_runtime_dir}/rclone.conf"
+    # A socket left by a crashed run would make rclone's rc listener fail to bind.
+    rm -f "${_runtime_dir}/rc.sock"
 
     if [[ "${_dry_run}" == "true" ]]; then
         log-info "[DRY RUN] Would mount ${_unit_name} @ ${_mount_path}"
@@ -107,6 +111,13 @@ remote-mount() {
     # the VFS cache. At 256M+256M that churned ~600G through a 64G cache in
     # under three days.
     #
+    # The dir cache is in-memory only and --poll-interval keeps it correct, so
+    # --dir-cache-time is long on purpose: expiry would just make directories
+    # cold again (one Drive API call each) after remote-warm has loaded them.
+    # --rc on a unix socket is what remote-warm talks to. --rc-no-auth is
+    # required for vfs/refresh; access control is the socket living under
+    # the 0700 XDG_RUNTIME_DIR, with no TCP listener at all.
+    #
     # --vfs-cache-max-size is per mount, so the caps don't bound total disk
     # use; --vfs-cache-min-free-space is the guard for the shared cache disk.
     rclone mount "${_unit_name}:" "${_mount_path}" \
@@ -116,11 +127,14 @@ remote-mount() {
         --cache-dir "${_cache_dir}" \
         --config "${_runtime_dir}/rclone.conf" \
         --default-permissions \
-        --dir-cache-time "96h" \
+        --dir-cache-time "1000h" \
         --gid "${_gid}" \
         --log-level "INFO" \
         --log-file "${_runtime_dir}/rclone.log" \
         --poll-interval "15s" \
+        --rc \
+        --rc-addr "unix://${_runtime_dir}/rc.sock" \
+        --rc-no-auth \
         --uid "${_uid}" \
         --umask "002" \
         --vfs-cache-mode "full" \
@@ -488,6 +502,23 @@ remote-health() {
     done <<< "${_units}"
 
     log-info "Health check complete: ${_checked} checked, ${_restarted} restarted"
+}
+
+# Run as remote-mount@.service's ExecStartPost. rclone's dir cache lives in
+# memory, so every (re)start leaves it empty and the first walk of the tree
+# (e.g. an Emby library scan) pays a Drive API round trip per directory.
+# A recursive vfs/refresh fetches the whole drive in bulk pages instead.
+# _async: returns once the job is queued; the listing runs inside the mount.
+remote-warm() {
+    [[ $# -eq 0 ]] && { log-error "No unit specified for warming."; return 1; }
+    local _unit_name="$1"
+    local _sock="$(xdg-runtime-dir "remote")/${_unit_name}/rc.sock"
+
+    [[ -S "${_sock}" ]] || { log-error "No control socket for ${_unit_name} (not mounted?)"; return 1; }
+
+    rclone rc --unix-socket "${_sock}" vfs/refresh recursive=true _async=true >/dev/null ||
+        { log-error "Failed to start dir cache refresh for ${_unit_name}"; return 1; }
+    log-info "Dir cache refresh started for ${_unit_name}"
 }
 
 remote-cleanup() {

@@ -39,7 +39,7 @@ The one deliberate exception is documented below (mount).
 ### Separation of concerns
 
 - **Wrapper** (`remote`): routes commands, nothing else.
-- **`_remote`**: the 15 public subcommand functions; owns the one place that
+- **`_remote`**: the 17 public subcommand functions; owns the one place that
   intentionally does NOT delegate (mount).
 - **`_remote_config`**: units/credentials/roots JSON config model.
 - **`_remote_patterns`**: unit name pattern matching (glob/comma/exact).
@@ -63,7 +63,7 @@ shell/
 │   │   ├── remote/
 │   │   │   └── docs/ARCHITECTURE.md   # this file
 │   │   └── systemd/user/
-│   │       ├── remote-mount@.service  # Type=simple template unit
+│   │       ├── remote-mount@.service  # Type=notify template unit
 │   │       └── remote-sync@.service   # Type=oneshot template unit
 └── .config/remote/
     ├── credentials.json                # OAuth credentials - tracked, git-crypt encrypted at rest
@@ -112,7 +112,7 @@ passed to any `*-all` command silently matched nothing. Fixed here.
 
 ### `_remote`
 
-The 16 subcommand functions, grouped below. `--dry-run` is a
+The 17 subcommand functions, grouped below. `--dry-run` is a
 **local, per-subcommand flag** read from the subcommand's own arguments
 (`remote mount --dry-run <unit>`), not dispatcher's global `--dry-run`. See
 "Dry-run Mode" for why.
@@ -129,6 +129,7 @@ The 16 subcommand functions, grouped below. `--dry-run` is a
 | `list [pattern]` | `systemd-get-state` | Table of unit/mountpoint/status/cache size |
 | `verify [pattern]` | `rclone-is-mounted` | Config sanity + mount-state check (read-only) |
 | `health [pattern]` | `rclone-is-mounted`, `systemd-restart` | Liveness sweep for enabled units; restarts what's unhealthy — see below |
+| `warm <unit>` | `rclone rc vfs/refresh` over the unit's rc unix socket | Async recursive dir-cache preload; run as `ExecStartPost` of the mount unit |
 | `cleanup [--force]` | `rclone-is-mounted` | Stale runtime config / empty cache cleanup |
 | `enable <unit>` | `systemd-enable-start` | |
 | `disable <unit>` | `systemd-disable-stop` | |
@@ -140,7 +141,7 @@ The 16 subcommand functions, grouped below. `--dry-run` is a
 
 `_rclone`'s `rclone-mount` always runs `rclone mount ... --daemon`, which
 forks into the background and returns immediately. `remote-mount@.service`
-is `Type=simple`, which requires `ExecStart` to stay in the foreground as the
+is `Type=notify`, which requires `ExecStart` to stay in the foreground as the
 tracked process — that's what makes `Restart=on-failure` and a clean
 `ExecStop` work. Delegating would make the service exit immediately after
 starting the real mount, defeating systemd's supervision. `remote-mount`
@@ -240,10 +241,12 @@ remote verify *-backup           # glob
 
 ## Systemd Integration
 
-`remote-mount@.service` is the `Type=simple` template unit
+`remote-mount@.service` is the `Type=notify` template unit
 (`ExecStartPre=remote verify %i`, `ExecStart=remote mount %i`,
-`ExecStop=remote unmount %i`), started via `WantedBy=default.target` and kept
-alive by `Restart=on-failure`; it has no timer. `remote-sync@.service` is
+`ExecStartPost=-remote warm %i`, `ExecStop=remote unmount %i`), started via
+`WantedBy=default.target` and kept alive by `Restart=on-failure`; it has no
+timer. rclone signals READY once the FUSE mount is live, so "started" means
+mounted. `remote-sync@.service` is
 `Type=oneshot` (`ExecStart=remote sync %i`), driven entirely by
 `remote-sync@.timer` (every 4h) since nothing else would ever run it, and now
 also gated by `Requisite=`/`After=remote-mount@%i.service` so it fails fast
