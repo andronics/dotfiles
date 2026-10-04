@@ -490,13 +490,14 @@ remote-health() {
     _units=$(_remote-patterns-match-units "${_pattern}")
     [[ -z "${_units}" ]] && { log-error "No units match pattern: ${_pattern}"; return 1; }
 
-    local _unit
+    # Declared outside the loop: re-running a bare `local x` on an already
+    # set variable makes zsh print it, which spammed the journal every run.
+    local _unit _mountpoint _root_remote _mount_path
     while read -r _unit; do
         [[ -z "${_unit}" ]] && continue
         systemd-is-enabled "remote-mount@${_unit}" || continue
         ((_checked++)) || true
 
-        local _mountpoint _root_remote _mount_path
         _mountpoint=$(_remote-config-unit-mountpoint "${_unit}")
         _root_remote=$(_remote-config-root "remote")
         _mount_path="${_root_remote}/${_mountpoint}"
