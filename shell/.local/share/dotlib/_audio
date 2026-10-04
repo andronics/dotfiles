@@ -296,19 +296,50 @@ audio-check-server() {
     return 1
 }
 
-# Restart PulseAudio server
+# Restart audio server
 #
 # Function: audio-server-restart
-# Description: Kill and restart PulseAudio server
+# Description: Restart PipeWire (pipewire, pipewire-pulse, wireplumber),
+#              or kill and restart PulseAudio on hosts still running it
 # Returns:
 #   0 - Success
 #   1 - Failed to restart
-#   127 - pulseaudio command not found
+#   127 - neither PipeWire user units nor pulseaudio command found
 # Example:
 #   audio-server-restart
 #
 audio-server-restart() {
     _audio-init
+
+    if systemctl --user cat pipewire-pulse.service >/dev/null 2>&1; then
+        log-info "Restarting PipeWire"
+
+        local previous_sink=$(pactl get-default-sink 2>/dev/null)
+
+        if ! systemctl --user restart pipewire.service pipewire-pulse.service wireplumber.service 2>/dev/null; then
+            log-error "Failed to restart PipeWire"
+            _audio-emit "$AUDIO_EVENT_ERROR" "operation=server-restart"
+            return 1
+        fi
+
+        # systemctl returns before wireplumber has re-created the sinks; the
+        # default sink is the last thing it restores, so wait for that
+        local attempt
+        for attempt in {1..50}; do
+            [[ -n "$previous_sink" && "$(pactl get-default-sink 2>/dev/null)" == "$previous_sink" ]] && break
+            sleep 0.1
+        done
+
+        if [[ -z "$(pactl list short sinks 2>/dev/null)" ]]; then
+            log-error "PipeWire restarted but no sinks appeared"
+            _audio-emit "$AUDIO_EVENT_ERROR" "operation=server-restart"
+            return 1
+        fi
+
+        log-success "PipeWire restarted"
+        _audio-emit "$AUDIO_EVENT_SERVER_RESTARTED"
+        return 0
+    fi
 
     _audio-check-command "pulseaudio" || return 127
 
