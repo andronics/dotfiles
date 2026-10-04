@@ -192,8 +192,9 @@ changes.
 ### credentials.json
 
 OAuth credentials for Google Drive API, keyed by account name, holding live
-`client_id`/`client_secret`/`token`. Gitignored (`**/credentials.json` in the
-repo root `.gitignore`) — never commit this file. Keep both the file
+`client_id`/`client_secret`/`token`. Tracked, but only behind git-crypt
+(`.gitattributes` pattern plus an exception to the `**/credentials.json`
+rule in `.gitignore`) - never commit it in the clear. Keep both the file
 (`600`) and its containing directory (`700`) locked to the owning user; there
 is no reason for either to be group/world readable.
 

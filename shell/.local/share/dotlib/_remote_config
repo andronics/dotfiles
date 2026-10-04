@@ -5,8 +5,9 @@
 #
 # Loads the three JSON config files under $XDG_CONFIG_HOME/remote/ once at
 # source time and exposes typed getters over them. credentials.json holds
-# live OAuth client secrets + refresh tokens - see .gitignore's
-# **/credentials.json entry, it must never be tracked.
+# live OAuth client secrets + refresh tokens - it is tracked only because
+# .gitattributes puts it behind git-crypt (see the .gitignore exception);
+# it must never be committed in the clear.
 #
 # Usage:
 #   source "${DOTLIB}/_remote_config"
