@@ -58,8 +58,8 @@ typeset -gA _REMOTE_DESCRIPTIONS=(
     [health]="Check enabled units are actually mounted and responsive, restart if not"
     [warm]="Preload a mounted unit's whole directory tree into rclone's dir cache"
     [cleanup]="Remove stale runtime configs and empty caches"
-    [enable]="Enable and start a unit's systemd service"
-    [disable]="Stop and disable a unit's systemd service"
+    [enable]="Enable and start a unit's mount and sync systemd units"
+    [disable]="Stop and disable a unit's mount and sync systemd units"
     [restart]="Restart a unit's systemd service"
     [enable-all]="Enable all units matching a pattern"
     [disable-all]="Disable all units matching a pattern"
@@ -274,10 +274,21 @@ remote-enable() {
     local _unit="$1"
 
     if [[ "${_dry_run}" == "true" ]]; then
-        log-info "[DRY RUN] Would enable: ${_unit}"
+        log-info "[DRY RUN] Would enable: ${_unit} (mount, sync service, sync timer)"
         return 0
     fi
-    systemd-enable-start "remote-mount@${_unit}"
+    # Mount first: remote-sync@.service Requisite=remote-mount@%i.service, so
+    # enabling sync before the mount is active would just fail fast.
+    #
+    # sync's start is --no-block: it's Type=oneshot and its ExecStart runs a
+    # full remote-sync (file scan + rclone move), which can take minutes to
+    # hours. A blocking `systemctl start` would stall this command - and
+    # every remote-enable-all fanning out over it - for the sync's entire
+    # runtime instead of just kicking it off. Check progress via
+    # `systemctl --user status remote-sync@<unit>.service` or the journal.
+    systemd-enable-start "remote-mount@${_unit}" &&
+        systemd-enable-start --no-block "remote-sync@${_unit}.service" &&
+        systemd-enable-start "remote-sync@${_unit}.timer"
 }
 
 remote-disable() {
@@ -286,9 +297,13 @@ remote-disable() {
     local _unit="$1"
 
     if [[ "${_dry_run}" == "true" ]]; then
-        log-info "[DRY RUN] Would disable: ${_unit}"
+        log-info "[DRY RUN] Would disable: ${_unit} (mount, sync service, sync timer)"
         return 0
     fi
+    # Reverse of enable's order: tear down sync before pulling the mount out
+    # from under it.
+    systemd-disable-stop "remote-sync@${_unit}.timer"
+    systemd-disable-stop "remote-sync@${_unit}.service"
     systemd-disable-stop "remote-mount@${_unit}"
 }
 
