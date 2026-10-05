@@ -134,7 +134,7 @@ declare -g BSP_CACHE_TTL="${BSP_CACHE_TTL:-5}"  # 5 seconds for dynamic data
 declare -g BSP_CACHE_STATIC_TTL="${BSP_CACHE_STATIC_TTL:-300}"  # 5 minutes for static data
 
 # BSP specific configuration
-declare -g BSP_SOCKET="${BSP_SOCKET:-/tmp/bsp_0_0-socket}"
+declare -g BSP_SOCKET="${BSP_SOCKET:-/tmp/bspwm_0_0-socket}"
 declare -g BSP_DEFAULT_MONITOR="${BSP_DEFAULT_MONITOR:-}"
 declare -g BSP_DEFAULT_DESKTOP="${BSP_DEFAULT_DESKTOP:-}"
 
