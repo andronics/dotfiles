@@ -67,6 +67,17 @@ typeset -gA _REMOTE_DESCRIPTIONS=(
     [status]="Show systemd status for all remote-mount units"
 )
 
+# Usage: _remote-require-unit <unit> || return 1
+# Guards the single-unit subcommands: without it a typo reaches systemd as
+# a template instance (remote-mount@<typo>), which `enable` happily enables
+# and Restart=on-failure then retries every 5s forever.
+_remote-require-unit() {
+    [[ -z "$1" ]] && { log-error "No unit specified."; return 1; }
+    _remote-config-unit-exists "$1" && return 0
+    log-error "Unknown unit: $1 (not in units.json - see \`remote list\`)"
+    return 1
+}
+
 # ------------------------------
 # Mount / unmount
 # ------------------------------
@@ -225,7 +236,7 @@ remote-sync() {
     local _dry_run=false
     [[ "$1" == "--dry-run" ]] && { _dry_run=true; shift; }
 
-    [[ $# -eq 0 ]] && { log-error "No unit specified for syncing."; return 1; }
+    _remote-require-unit "$1" || return 1
     local _unit_name="$1"
 
     local _lock_name="remote-sync-${_unit_name}"
@@ -272,6 +283,7 @@ remote-enable() {
     local _dry_run=false
     [[ "$1" == "--dry-run" ]] && { _dry_run=true; shift; }
     local _unit="$1"
+    _remote-require-unit "${_unit}" || return 1
 
     if [[ "${_dry_run}" == "true" ]]; then
         log-info "[DRY RUN] Would enable: ${_unit} (mount, sync service, sync timer)"
@@ -295,6 +307,9 @@ remote-disable() {
     local _dry_run=false
     [[ "$1" == "--dry-run" ]] && { _dry_run=true; shift; }
     local _unit="$1"
+    # Deliberately not _remote-require-unit: disabling must still work for a
+    # unit that has since been removed from units.json.
+    [[ -z "${_unit}" ]] && { log-error "No unit specified."; return 1; }
 
     if [[ "${_dry_run}" == "true" ]]; then
         log-info "[DRY RUN] Would disable: ${_unit} (mount, sync service, sync timer)"
@@ -311,6 +326,7 @@ remote-restart() {
     local _dry_run=false
     [[ "$1" == "--dry-run" ]] && { _dry_run=true; shift; }
     local _unit="$1"
+    _remote-require-unit "${_unit}" || return 1
 
     if [[ "${_dry_run}" == "true" ]]; then
         log-info "[DRY RUN] Would restart: ${_unit}"
@@ -526,7 +542,7 @@ remote-health() {
 # A recursive vfs/refresh fetches the whole drive in bulk pages instead.
 # _async: returns once the job is queued; the listing runs inside the mount.
 remote-warm() {
-    [[ $# -eq 0 ]] && { log-error "No unit specified for warming."; return 1; }
+    _remote-require-unit "$1" || return 1
     local _unit_name="$1"
     local _sock="$(xdg-runtime-dir "remote")/${_unit_name}/rc.sock"
 
