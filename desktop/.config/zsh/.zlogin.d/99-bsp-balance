@@ -1,0 +1,19 @@
+# Opt-in: the balance daemon re-balances the tree on every node event, so it
+# only starts when BSP_BALANCE_AUTOSTART is set (e.g. in a .zshenv.d file).
+[[ -n "${BSP_BALANCE_AUTOSTART}" && ( -n "${DISPLAY}" || -n "${WAYLAND_DISPLAY}" ) ]] && {
+    (
+        # Wait up to 10s for bspwm's socket; bail rather than poll forever.
+        _attempts=40
+        while (( _attempts-- > 0 )); do
+            bspc query -M >/dev/null 2>&1 && break
+            sleep 0.25
+        done
+
+        bspc query -M >/dev/null 2>&1 || exit 1
+        # Anchored: an unanchored -f match also hits any shell or editor
+        # whose command line merely mentions the daemon.
+        pgrep -f "^zsh [^ ]*/bsp balance-daemon" >/dev/null && exit 0
+
+        bsp balance-daemon &>/dev/null &
+    ) &
+}
