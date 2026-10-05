@@ -1,5 +1,17 @@
 [[ -n "${DISPLAY}" || "${WAYLAND_DISPLAY}" ]] && {
     # hook-init stays in the foreground for the idle daemon's lifetime, so
     # it is detached in a subshell rather than run as a job of this shell.
-    ( pgrep -x "xidlehook" > /dev/null || lockscreen hook-init &>/dev/null & )
+    (
+        # xidlehook outlives the X server it was started for (lingering keeps
+        # user processes across logout) but is useless against a new one, so
+        # "is one running" is not enough. A root-window property marks that
+        # this X server already has its daemon; a fresh server has no such
+        # property, and any xidlehook found then is a leftover to replace.
+        if ! xprop -root _LOCKSCREEN_SESSION 2>/dev/null | grep -q '= "1"'; then
+            pkill -x "xidlehook"
+            xprop -root -f _LOCKSCREEN_SESSION 8s -set _LOCKSCREEN_SESSION 1
+        fi
+
+        pgrep -x "xidlehook" > /dev/null || lockscreen hook-init &>/dev/null &
+    )
 }
