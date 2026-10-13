@@ -32,7 +32,7 @@
 #     - _common, _log, _jq, _xdg: core utilities
 #     - _rclone, _systemd: delegated mount/unmount/sync/service-control
 #     - _singleton: per-unit sync lock (prevents overlapping remote-sync runs)
-#     - _remote_config, _remote_patterns: domain modules
+#     - _remote_config, _remote_patterns, _remote_pool: domain modules
 
 [[ -n "${REMOTE_LOADED:-}" ]] && return 0
 declare -gr REMOTE_LOADED=1
@@ -46,6 +46,7 @@ source "${DOTLIB}/_systemd"       || { echo "[ERROR] _remote requires _systemd" 
 source "${DOTLIB}/_singleton"     || { echo "[ERROR] _remote requires _singleton" >&2; return 1; }
 source "${DOTLIB}/_remote_config"   || { echo "[ERROR] _remote requires _remote_config" >&2; return 1; }
 source "${DOTLIB}/_remote_patterns" || { echo "[ERROR] _remote requires _remote_patterns" >&2; return 1; }
+source "${DOTLIB}/_remote_pool"     || { echo "[ERROR] _remote requires _remote_pool" >&2; return 1; }
 
 typeset -gA _REMOTE_DESCRIPTIONS=(
     [mount]="Mount a unit"
@@ -65,6 +66,8 @@ typeset -gA _REMOTE_DESCRIPTIONS=(
     [disable-all]="Disable all units matching a pattern"
     [restart-all]="Restart all units matching a pattern"
     [status]="Show systemd status for all remote-mount units"
+    [rotate]="Advance a credential pool to its next key and move live mounts onto it"
+    [pool]="Show credential pool state (current key, exhausted keys, key-file health)"
 )
 
 # Usage: _remote-require-unit <unit> || return 1
@@ -103,7 +106,7 @@ remote-mount() {
 
     mkdir -p "${_mount_path}" "${_cache_dir}" "${_runtime_dir}"
 
-    _remote-config-render-rclone-conf "${_unit_name}" > "${_runtime_dir}/rclone.conf"
+    _remote-pool-render-rclone-conf "${_unit_name}" "$(_remote-config-unit-pool "${_unit_name}")" > "${_runtime_dir}/rclone.conf" || return 1
     # A socket left by a crashed run would make rclone's rc listener fail to bind.
     rm -f "${_runtime_dir}/rc.sock"
 
@@ -243,7 +246,8 @@ remote-sync() {
     singleton-try-lock "${_lock_name}" || { log-error "Sync already in progress for ${_unit_name}"; return 1; }
 
     local _runtime_dir="$(xdg-runtime-dir "remote")/${_unit_name}"
-    local _cfg="${_runtime_dir}/rclone.conf"
+    local _cfg="${_runtime_dir}/sync.conf"
+    local _sync_log="${_runtime_dir}/sync.log"
 
     local _mountpoint _root_local _root_remote _local_mount_point
     _mountpoint=$(_remote-config-unit-mountpoint "${_unit_name}")
@@ -263,12 +267,36 @@ remote-sync() {
     # the unit was mounted at some point, not that the mount is live now.
     rclone-is-mounted "${_root_remote}/${_mountpoint}" || { log-error "Unit not currently mounted: ${_unit_name}"; singleton-unlock "${_lock_name}"; return 1; }
 
-    local -a _move_opts=(--progress --delete-empty-src-dirs)
+    # --drive-stop-on-upload-limit turns Drive's daily upload cap into a
+    # fatal error (exit 7) instead of hours of silent retries. The log file
+    # is what tells a cap-hit apart from any other fatal error.
+    local -a _move_opts=(--progress --delete-empty-src-dirs --drive-stop-on-upload-limit --log-file "${_sync_log}")
     [[ "${_dry_run}" == "true" ]] && _move_opts+=(--dry-run)
 
-    local _rc=0
+    # On a multi-key pool a cap-hit rotates the pool and reruns the move
+    # with the next key; files already moved are gone from the source, so
+    # the rerun continues where the last one stopped. Bounded by pool size.
+    local _pool _multi=false _attempts=1
+    _pool=$(_remote-config-unit-pool "${_unit_name}")
+    if _remote-pool-rotates "${_pool}"; then
+        _multi=true
+        _attempts=$(_remote-config-pool-keys "${_pool}" | grep -c .)
+    fi
+
+    local _rc=0 _key _started
     rclone-set-config "${_cfg}"
-    rclone-move "${_local_mount_point}" "${_unit_name}:" "${_move_opts[@]}" || _rc=$?
+    while (( _attempts-- > 0 )); do
+        _rc=0
+        _remote-pool-render-rclone-conf "${_unit_name}" "${_pool}" > "${_cfg}" || { _rc=1; break; }
+        [[ "${_multi}" == "true" ]] && _key=$(_remote-pool-current "${_pool}")
+        _started=$(date +%s)
+        rclone-move "${_local_mount_point}" "${_unit_name}:" "${_move_opts[@]}" || _rc=$?
+
+        [[ "${_multi}" == "true" && ${_rc} -eq 7 ]] || break
+        _remote-pool-log-hit "${_sync_log}" "$(( _started - 1 ))" || break
+        log-warning "Upload cap hit on ${_key} while syncing ${_unit_name}"
+        remote-rotate --if-current "${_key}" "${_pool}" || break
+    done
 
     singleton-unlock "${_lock_name}"
     [[ ${_rc} -ne 0 ]] && return ${_rc}
@@ -410,6 +438,89 @@ remote-status() {
 }
 
 # ------------------------------
+# Service-account pools
+# ------------------------------
+
+# Usage: remote-rotate [--if-current <key>] <pool>
+# Advances the pool, then moves every live mount on it to the new key.
+# Service account to service account switches in place through rclone's rc
+# `backend set` - no remount, the VFS cache and dir cache survive, and an
+# upload in flight on the old key fails once and is retried by the VFS
+# writeback under the new one. rclone can only swap a service-account file
+# on a backend already built around one, so any move involving an OAuth
+# key restarts the mount instead.
+remote-rotate() {
+    local _expected=""
+    [[ "$1" == "--if-current" ]] && { _expected="$2"; shift 2; }
+    local _pool="$1"
+    _remote-pool-require "${_pool}" || return 1
+
+    local _key _file _type
+    _key=$(_remote-pool-advance "${_pool}" "${_expected}") || return 1
+    _file=$(_remote-pool-key-file "${_pool}" "${_key}") || return 1
+    _type=$(_remote-pool-key-type "${_key}")
+
+    local _unit _dir _switched=0 _failed=0
+    while read -r _unit; do
+        [[ -z "${_unit}" ]] && continue
+        _dir="$(xdg-runtime-dir "remote")/${_unit}"
+        [[ -S "${_dir}/rc.sock" ]] || continue
+        # The rendered conf says what the running mount was built around.
+        if [[ "${_type}" != "service_account" ]] || ! grep -q '^service_account_file = ' "${_dir}/rclone.conf" 2>/dev/null; then
+            log-info "Restarting mount ${_unit} onto ${_key}"
+            systemd-restart "remote-mount@${_unit}" && ((_switched++)) || ((_failed++)) || true
+            continue
+        fi
+        if rclone rc --unix-socket "${_dir}/rc.sock" backend/command command=set "fs=${_unit}:" \
+                -o "service_account_file=${_file}" >/dev/null 2>&1; then
+            log-info "Switched mount ${_unit} to ${_key}"
+            # Keep the rendered conf truthful for the next rotation's check.
+            _remote-pool-render-rclone-conf "${_unit}" "${_pool}" > "${_dir}/rclone.conf.tmp" &&
+                mv -f "${_dir}/rclone.conf.tmp" "${_dir}/rclone.conf"
+            ((_switched++)) || true
+        else
+            log-error "Failed to switch mount ${_unit} to ${_key} (restart it to pick up the new key)"
+            ((_failed++)) || true
+        fi
+    done <<< "$(_remote-pool-mount-units "${_pool}")"
+
+    log-info "Pool ${_pool} now on ${_key}: ${_switched} mount(s) switched, ${_failed} failed"
+    [[ ${_failed} -eq 0 ]]
+}
+
+remote-pool() {
+    local _pools
+    _pools="${1:-$(_remote-config-pool-names)}"
+    [[ -z "${_pools}" ]] && { log-error "No pools in pools.json"; return 1; }
+
+    local _pool _state _current _now _key _ex _frees _file _mark _ktype _decl
+    _now=$(date +%s)
+    while read -r _pool; do
+        [[ -z "${_pool}" ]] && continue
+        _remote-pool-require "${_pool}" || continue
+        _state=$(_remote-pool-state "${_pool}")
+        _current=$(jq -r '.current // ""' <<< "${_state}")
+        _decl=$(_remote-config-pool-type "${_pool}")
+        echo "${_pool} (${_decl:-any type}, window: ${REMOTE_POOL_QUOTA_WINDOW}s)"
+        printf "  %-3s %-66s %-16s %-8s %s\n" "" "KEY" "TYPE" "FILE" "STATE"
+        while read -r _key; do
+            [[ -z "${_key}" ]] && continue
+            _mark=""; [[ "${_key}" == "${_current}" ]] && _mark="*"
+            _file="bad"; _remote-pool-key-file "${_pool}" "${_key}" >/dev/null 2>&1 && _file="ok"
+            _ktype=$(_remote-pool-key-type "${_key}" 2>/dev/null) || _ktype="?"
+            _ex=$(jq -r --arg k "${_key}" '.exhausted[$k] // 0' <<< "${_state}")
+            if (( _ex + REMOTE_POOL_QUOTA_WINDOW > _now )); then
+                _frees=$(date -d "@$(( _ex + REMOTE_POOL_QUOTA_WINDOW ))" '+%F %T')
+                printf "  %-3s %-66s %-16s %-8s exhausted, frees %s\n" "${_mark}" "${_key}" "${_ktype}" "${_file}" "${_frees}"
+            else
+                printf "  %-3s %-66s %-16s %-8s available\n" "${_mark}" "${_key}" "${_ktype}" "${_file}"
+            fi
+        done <<< "$(_remote-config-pool-keys "${_pool}")"
+        echo ""
+    done <<< "${_pools}"
+}
+
+# ------------------------------
 # List / verify / cleanup
 # ------------------------------
 
@@ -449,17 +560,26 @@ remote-verify() {
     log-info "Verifying units matching: ${_pattern}"
     echo ""
 
-    local _unit
+    # Loop-scoped names declared once: a repeated bare `local x` on a set
+    # variable makes zsh print it (see remote-health).
+    local _unit _k
     while read -r _unit; do
         [[ -z "${_unit}" ]] && continue
         local _errors=""
 
         _remote-config-unit-exists "${_unit}" || _errors="${_errors}\n  - Unit not found in units.json"
 
-        local _creds=$(_remote-config-unit-credentials "${_unit}")
-        if [[ "${_creds}" != "null" ]]; then
-            local _creds_cfg=$(_remote-config-credentials-for "${_creds}")
-            [[ "${_creds_cfg}" == "null" ]] && _errors="${_errors}\n  - Credentials '${_creds}' not found"
+        local _pool=$(_remote-config-unit-pool "${_unit}")
+        if [[ "${_pool}" == "null" ]]; then
+            _errors="${_errors}\n  - Pool not configured"
+        elif ! _remote-pool-require "${_pool}" 2>/dev/null; then
+            _errors="${_errors}\n  - Pool '${_pool}' not found or has no keys"
+        else
+            while read -r _k; do
+                [[ -z "${_k}" ]] && continue
+                _remote-pool-key-file "${_pool}" "${_k}" >/dev/null 2>&1 ||
+                    _errors="${_errors}\n  - Pool '${_pool}': unusable key file for ${_k}"
+            done <<< "$(_remote-config-pool-keys "${_pool}")"
         fi
 
         local _mountpoint=$(_remote-config-unit-mountpoint "${_unit}")
@@ -502,13 +622,13 @@ remote-verify() {
 # bounded stat is also required to catch it.
 remote-health() {
     local _pattern="${1:-*}"
-    local _units _checked=0 _restarted=0
+    local _units _checked=0 _restarted=0 _rotated=0
     _units=$(_remote-patterns-match-units "${_pattern}")
     [[ -z "${_units}" ]] && { log-error "No units match pattern: ${_pattern}"; return 1; }
 
     # Declared outside the loop: re-running a bare `local x` on an already
     # set variable makes zsh print it, which spammed the journal every run.
-    local _unit _mountpoint _root_remote _mount_path
+    local _unit _mountpoint _root_remote _mount_path _pool
     while read -r _unit; do
         [[ -z "${_unit}" ]] && continue
         systemd-is-enabled "remote-mount@${_unit}" || continue
@@ -528,12 +648,22 @@ remote-health() {
             log-warning "Unhealthy mount detected: ${_unit} - restarting"
             systemd-restart "remote-mount@${_unit}"
             ((_restarted++)) || true
-        else
-            log-debug "Healthy: ${_unit}"
+            continue
+        fi
+        log-debug "Healthy: ${_unit}"
+
+        # A mount on a multi-key pool that hit the upload cap through its
+        # VFS writeback keeps retrying forever; the cap error in its log
+        # since the last rotation is the signal to move the pool on.
+        _pool=$(_remote-config-unit-pool "${_unit}")
+        _remote-pool-rotates "${_pool}" || continue
+        if _remote-pool-log-hit "$(xdg-runtime-dir "remote")/${_unit}/rclone.log" "$(_remote-pool-rotated-at "${_pool}")"; then
+            log-warning "Upload cap hit on mount ${_unit} - rotating pool ${_pool}"
+            remote-rotate --if-current "$(_remote-pool-current "${_pool}")" "${_pool}" && ((_rotated++)) || true
         fi
     done <<< "${_units}"
 
-    log-info "Health check complete: ${_checked} checked, ${_restarted} restarted"
+    log-info "Health check complete: ${_checked} checked, ${_restarted} restarted, ${_rotated} pool rotation(s)"
 }
 
 # Run as remote-mount@.service's ExecStartPost. rclone's dir cache lives in

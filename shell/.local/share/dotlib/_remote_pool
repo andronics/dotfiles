@@ -1,0 +1,271 @@
+#!/usr/bin/env zsh
+
+# _remote_pool - credential key selection, rendering and rotation for _remote
+# Part of the dotfiles library v2.0
+#
+# Every pools.json entry is a pool: an ordered list of keys, each a
+# JSON file under $XDG_CONFIG_HOME/remote/keys/ that is either an rclone
+# OAuth blob or a Google service-account key (a pool may hold both). One
+# key is "current"; a single-key pool never rotates. Google Drive caps uploads at ~750G per identity per rolling
+# 24h, so a multi-key pool (service accounts that are all members of the
+# same shared drives) uploads through the current key until Drive answers
+# "User rate limit exceeded.", then advances to the next one.
+#
+# Key files are tracked behind git-crypt (keep them 0600 in a 0700 dir).
+# Nothing at runtime needs gpg or pass, so pool-backed mounts start
+# unattended at login. The pass entries under app/remote/ are a backup copy
+# of the service-account keys, not what the code reads.
+#
+# Rotation state is per pool, not per unit: the quota is per account across
+# every drive it touches, so once one consumer exhausts it, all of them move.
+#
+# Usage:
+#   source "${DOTLIB}/_remote_pool"
+#
+# Dependencies:
+#   Required:
+#     - _common, _log, _jq, _xdg: core utilities
+#     - _singleton: serialises the read-modify-write on the pool cursor
+#     - _remote_config: pool definitions in pools.json
+
+[[ -n "${REMOTE_POOL_LOADED:-}" ]] && return 0
+declare -gr REMOTE_POOL_LOADED=1
+
+source "${DOTLIB}/_common"        || { echo "[ERROR] _remote_pool requires _common" >&2; return 1; }
+source "${DOTLIB}/_log"           2>/dev/null || true
+source "${DOTLIB}/_jq"            || { echo "[ERROR] _remote_pool requires _jq" >&2; return 1; }
+source "${DOTLIB}/_xdg"           || { echo "[ERROR] _remote_pool requires _xdg" >&2; return 1; }
+source "${DOTLIB}/_singleton"     || { echo "[ERROR] _remote_pool requires _singleton" >&2; return 1; }
+source "${DOTLIB}/_remote_config" || { echo "[ERROR] _remote_pool requires _remote_config" >&2; return 1; }
+
+# Seconds before an exhausted key is considered usable again.
+declare -g REMOTE_POOL_QUOTA_WINDOW="${REMOTE_POOL_QUOTA_WINDOW:-86400}"
+
+# The exact message rclone's drive backend treats as the daily upload cap
+# (and makes fatal under --drive-stop-on-upload-limit). Case matters: the
+# per-request throttle is "User Rate Limit Exceeded" and is retried, not
+# rotated.
+declare -gr _REMOTE_POOL_QUOTA_MSG="User rate limit exceeded."
+
+# ------------------------------
+# Paths
+# ------------------------------
+
+_remote-pool-state-file() {
+    echo "$(xdg-state-dir "remote")/pool/$1.json"
+}
+
+_remote-pool-key-path() {
+    echo "$(xdg-config-dir "remote")/keys/$1.json"
+}
+
+# Usage: _remote-pool-require <pool> || return 1
+_remote-pool-require() {
+    [[ -z "$1" ]] && { log-error "No pool specified."; return 1; }
+    [[ "$(_remote-config-pool "$1")" == "null" ]] &&
+        { log-error "Unknown pool: $1 (not in pools.json)"; return 1; }
+    [[ -z "$(_remote-config-pool-keys "$1")" ]] &&
+        { log-error "Pool $1 has no keys"; return 1; }
+    return 0
+}
+
+# A pool rotates only if there is somewhere to rotate to.
+_remote-pool-rotates() {
+    (( $(_remote-config-pool-keys "$1" | grep -c .) > 1 ))
+}
+
+# ------------------------------
+# State
+# ------------------------------
+
+# {"current": "<key>", "exhausted": {"<key>": <epoch>}, "rotated_at": <epoch>}
+_remote-pool-state() {
+    local _f
+    _f=$(_remote-pool-state-file "$1")
+    [[ -f "${_f}" ]] && cat "${_f}" || echo '{}'
+}
+
+_remote-pool-write-state() {
+    local _f
+    _f=$(_remote-pool-state-file "$1")
+    mkdir -p "${_f:h}"
+    printf '%s\n' "$2" > "${_f}.tmp" && mv -f "${_f}.tmp" "${_f}"
+}
+
+_remote-pool-rotated-at() {
+    _remote-pool-state "$1" | jq-query '.rotated_at // 0'
+}
+
+# Keys not exhausted within the quota window, in pools.json order.
+_remote-pool-available() {
+    local _pool="$1" _now
+    _now=$(date +%s)
+    jq -n -r \
+        --argjson keys "$(_remote-config-query "pools" ".\"${_pool}\".keys")" \
+        --argjson state "$(_remote-pool-state "${_pool}")" \
+        --argjson now "${_now}" --argjson window "${REMOTE_POOL_QUOTA_WINDOW}" \
+        '$keys[] | select((($state.exhausted // {})[.] // 0) + $window <= $now)'
+}
+
+# Usage: _remote-pool-current <pool>
+# The key uploads should use right now. Settles on the first available key
+# when the state is empty or the recorded current has aged into exhaustion.
+_remote-pool-current() {
+    local _pool="$1" _current _available
+    _current=$(_remote-pool-state "${_pool}" | jq-query '.current // empty')
+    _available=$(_remote-pool-available "${_pool}")
+
+    if [[ -z "${_available}" ]]; then
+        log-error "Pool ${_pool}: every key is exhausted (window ${REMOTE_POOL_QUOTA_WINDOW}s)"
+        return 1
+    fi
+    if [[ -n "${_current}" ]] && grep -qxF "${_current}" <<< "${_available}"; then
+        echo "${_current}"
+        return 0
+    fi
+    _current="${_available%%$'\n'*}"
+    _remote-pool-write-state "${_pool}" \
+        "$(_remote-pool-state "${_pool}" | jq --arg k "${_current}" '.current = $k')"
+    echo "${_current}"
+}
+
+# Usage: _remote-pool-advance <pool> [<expected-current>]
+# Marks the current key exhausted and moves to the next available one,
+# printing it. With <expected-current>, it is a no-op (printing the actual
+# current) when someone already rotated past that key - so N syncs that
+# all hit the cap on the same account rotate once, not N times.
+_remote-pool-advance() {
+    local _pool="$1" _expected="${2:-}"
+    local _lock="remote-pool-${_pool}" _tries=0
+
+    until singleton-try-lock "${_lock}" 2>/dev/null; do
+        (( ++_tries >= 10 )) && { log-error "Pool ${_pool}: rotation lock busy"; return 1; }
+        sleep 1
+    done
+
+    local _rc=0 _current _next _now
+    _current=$(_remote-pool-state "${_pool}" | jq-query '.current // empty')
+    if [[ -n "${_expected}" && -n "${_current}" && "${_current}" != "${_expected}" ]]; then
+        log-info "Pool ${_pool}: already rotated past ${_expected} (now ${_current})"
+        echo "${_current}"
+        singleton-unlock "${_lock}" >/dev/null
+        return 0
+    fi
+
+    _now=$(date +%s)
+    _remote-pool-write-state "${_pool}" \
+        "$(_remote-pool-state "${_pool}" | jq --arg k "${_current:-${_expected}}" --argjson now "${_now}" \
+            'if $k == "" then . else .exhausted[$k] = $now end')"
+
+    # Next available key after the current one, wrapping, so the pool is
+    # consumed in order rather than always restarting from the top.
+    _next=$(jq -n -r \
+        --argjson keys "$(_remote-config-query "pools" ".\"${_pool}\".keys")" \
+        --argjson avail "$(_remote-pool-available "${_pool}" | jq -R . | jq -s .)" \
+        --arg cur "${_current}" '
+        ($keys | index($cur) // -1) as $i
+        | [ $keys[$i+1:][], $keys[:$i+1][] ]
+        | map(select(. as $k | $avail | index($k)))
+        | first // empty')
+
+    if [[ -z "${_next}" ]]; then
+        local _frees
+        _frees=$(_remote-pool-state "${_pool}" | jq -r --argjson w "${REMOTE_POOL_QUOTA_WINDOW}" \
+            '[.exhausted[]] | min + $w' | xargs -I{} date -d @{} '+%F %T')
+        log-error "Pool ${_pool}: every key is exhausted; earliest frees at ${_frees}"
+        _rc=1
+    else
+        _remote-pool-write-state "${_pool}" \
+            "$(_remote-pool-state "${_pool}" | jq --arg k "${_next}" --argjson now "${_now}" \
+                '.current = $k | .rotated_at = $now')"
+        log-warning "Pool ${_pool}: rotated ${_current:-<none>} -> ${_next}"
+        echo "${_next}"
+    fi
+
+    singleton-unlock "${_lock}" >/dev/null
+    return ${_rc}
+}
+
+# ------------------------------
+# Key material
+# ------------------------------
+
+# Usage: _remote-pool-key-type <key>
+# What the key file is: "service_account", "oauth", or nothing (and
+# return 1) when it is neither - which is also what a file left encrypted
+# by a missing git-crypt unlock looks like.
+_remote-pool-key-type() {
+    local _path _t
+    _path=$(_remote-pool-key-path "$1")
+    [[ -f "${_path}" ]] || return 1
+    _t=$(jq -r --arg k "$1" '
+        if (.type == "service_account" and .client_email == $k) then "service_account"
+        elif ((.client_id | strings) and (.client_secret | strings) and (.token.refresh_token | strings)) then "oauth"
+        else empty end' "${_path}" 2>/dev/null) || return 1
+    [[ -n "${_t}" ]] || return 1
+    echo "${_t}"
+}
+
+# Usage: _remote-pool-key-file <pool> <key>
+# Prints the key's path after checking it is a usable key, of the pool's
+# declared type when it declares one.
+_remote-pool-key-file() {
+    local _pool="$1" _key="$2" _path _type _want
+    _path=$(_remote-pool-key-path "${_key}")
+    [[ -f "${_path}" ]] || { log-error "Pool ${_pool}: key file missing: ${_path}"; return 1; }
+    _type=$(_remote-pool-key-type "${_key}") ||
+        { log-error "Pool ${_pool}: ${_path} is not a usable key for ${_key} (git-crypt not unlocked?)"; return 1; }
+    _want=$(_remote-config-pool-type "${_pool}")
+    [[ -z "${_want}" || "${_want}" == "${_type}" ]] ||
+        { log-error "Pool ${_pool}: ${_key} is a ${_type} key but the pool is declared ${_want}"; return 1; }
+    echo "${_path}"
+}
+
+# Usage: _remote-pool-render-rclone-conf <unit> <pool>
+# rclone.conf [unit] stanza authenticated by the pool's current key. Kept
+# custom (not _rclone's rclone-create-remote, which drives the interactive
+# `rclone config` TUI - unsuitable for unattended multi-account mounts).
+_remote-pool-render-rclone-conf() {
+    local _unit="$1" _pool="$2" _key _file
+    _key=$(_remote-pool-current "${_pool}") || return 1
+    _file=$(_remote-pool-key-file "${_pool}" "${_key}") || return 1
+
+    echo "[${_unit}]"
+    echo "type = drive"
+    case "$(_remote-pool-key-type "${_key}")" in
+        service_account)
+            echo "scope = drive"
+            echo "service_account_file = ${_file}"
+            ;;
+        oauth)
+            # token must be one line: rclone parses the value as JSON.
+            jq -r '"client_id = \(.client_id)",
+                   "client_secret = \(.client_secret)",
+                   "scope = \(.scope // "drive")",
+                   "token = \(.token | tojson)"' "${_file}"
+            ;;
+    esac
+    echo "root_folder_id = $(_remote-config-unit-root-folder-id "${_unit}")"
+    echo "team_drive = $(_remote-config-unit-drive-id "${_unit}")"
+}
+
+# ------------------------------
+# Detection
+# ------------------------------
+
+# Usage: _remote-pool-log-hit <rclone.log> <since-epoch>
+# True when the log has an upload-cap error newer than <since-epoch>.
+# rclone stamps lines as "2006/01/02 15:04:05", which date(1) parses as-is.
+_remote-pool-log-hit() {
+    local _log="$1" _since="${2:-0}" _line _ts
+    [[ -f "${_log}" ]] || return 1
+    _line=$(grep -F "${_REMOTE_POOL_QUOTA_MSG}" "${_log}" | tail -n 1)
+    [[ -z "${_line}" ]] && return 1
+    _ts=$(date -d "${_line[1,19]}" +%s 2>/dev/null) || return 1
+    (( _ts > _since ))
+}
+
+# Units whose mount runs on this pool - the ones a rotation must switch live.
+_remote-pool-mount-units() {
+    _remote-config-query "units" "to_entries[] | select(.value.pool == \"$1\") | .key"
+}

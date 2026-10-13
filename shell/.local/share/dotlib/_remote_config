@@ -1,13 +1,22 @@
 #!/usr/bin/env zsh
 
-# _remote_config - units/credentials/roots config model for _remote
+# _remote_config - units/pools/roots config model for _remote
 # Part of the dotfiles library v2.0
 #
 # Loads the three JSON config files under $XDG_CONFIG_HOME/remote/ once at
-# source time and exposes typed getters over them. credentials.json holds
-# live OAuth client secrets + refresh tokens - it is tracked only because
-# .gitattributes puts it behind git-crypt (see the .gitignore exception);
-# it must never be committed in the clear.
+# source time and exposes typed getters over them.
+#
+# A pools.json entry names an ordered list of keys; a unit picks one by
+# name in its "pool" field:
+#   "<name>": {"keys": ["<key>", ...], "type": "oauth" | "service_account"}
+# Each key is the JSON file keys/<key>.json next to this config - an rclone
+# OAuth blob (client_id / client_secret / scope / token) or a Google
+# service-account key; the file itself says which. "type" is optional: set
+# it and every key must be of that type, omit it and a pool may mix both.
+# Those files hold the live secrets and are tracked only because
+# .gitattributes puts them behind git-crypt; never commit them in the
+# clear. pools.json itself holds none. Key selection, rotation and
+# rendering live in _remote_pool.
 #
 # Usage:
 #   source "${DOTLIB}/_remote_config"
@@ -25,14 +34,14 @@ source "${DOTLIB}/_jq"     || { echo "[ERROR] _remote_config requires _jq" >&2; 
 source "${DOTLIB}/_xdg"    || { echo "[ERROR] _remote_config requires _xdg" >&2; return 1; }
 
 declare -g _REMOTE_CONFIG_DIR="$(xdg-config-dir "remote")"
-declare -g _REMOTE_CONFIG_CREDENTIALS="$(cat "${_REMOTE_CONFIG_DIR}/credentials.json")"
+declare -g _REMOTE_CONFIG_POOLS="$(cat "${_REMOTE_CONFIG_DIR}/pools.json")"
 declare -g _REMOTE_CONFIG_ROOTS="$(cat "${_REMOTE_CONFIG_DIR}/roots.json")"
 declare -g _REMOTE_CONFIG_UNITS="$(cat "${_REMOTE_CONFIG_DIR}/units.json")"
 
-# Usage: _remote-config-query <credentials|roots|units> "<jq filter>"
+# Usage: _remote-config-query <pools|roots|units> "<jq filter>"
 _remote-config-query() {
     case "$1" in
-        credentials) echo "${_REMOTE_CONFIG_CREDENTIALS}" | jq-query "$2" ;;
+        pools)       echo "${_REMOTE_CONFIG_POOLS}" | jq-query "$2" ;;
         roots)       echo "${_REMOTE_CONFIG_ROOTS}"       | jq-query "$2" ;;
         units)       echo "${_REMOTE_CONFIG_UNITS}"       | jq-query "$2" ;;
         *)
@@ -58,8 +67,8 @@ _remote-config-unit-mountpoint() {
     _remote-config-query "units" ".\"$1\".mountpoint"
 }
 
-_remote-config-unit-credentials() {
-    _remote-config-query "units" ".\"$1\".credentials"
+_remote-config-unit-pool() {
+    _remote-config-query "units" ".\"$1\".pool"
 }
 
 _remote-config-unit-drive-id() {
@@ -111,37 +120,22 @@ _remote-config-root() {
     _remote-config-query "roots" ".$1"
 }
 
-_remote-config-credentials-for() {
-    _remote-config-query "credentials" ".\"$1\""
+_remote-config-pool() {
+    _remote-config-query "pools" ".\"$1\""
 }
 
-# Usage: _remote-config-render-rclone-conf <unit>
-# Renders an rclone.conf [unit] stanza from units.json + credentials.json.
-# Kept custom (not delegated to _rclone's rclone-create-remote, which shells
-# out to the interactive `rclone config` TUI - unsuitable for unattended,
-# multi-account mounts).
-_remote-config-render-rclone-conf() {
-    local _unit_name="$1"
-    local _unit_credentials _unit_drive_id _unit_root_folder_id
-    local _client_id _client_secret _scope _token
+_remote-config-pool-names() {
+    _remote-config-query "pools" "keys[]"
+}
 
-    _unit_credentials=$(_remote-config-unit-credentials "${_unit_name}")
-    _unit_drive_id=$(_remote-config-unit-drive-id "${_unit_name}")
-    _unit_root_folder_id=$(_remote-config-unit-root-folder-id "${_unit_name}")
+# The entry's declared key type, or empty when it accepts any.
+_remote-config-pool-type() {
+    local _v
+    _v=$(_remote-config-query "pools" ".\"$1\".type")
+    [[ "${_v}" == "null" ]] && _v=""
+    echo "${_v}"
+}
 
-    _client_id=$(_remote-config-query "credentials" ".\"${_unit_credentials}\".client_id")
-    _client_secret=$(_remote-config-query "credentials" ".\"${_unit_credentials}\".client_secret")
-    _scope=$(_remote-config-query "credentials" ".\"${_unit_credentials}\".scope")
-    _token=$(_remote-config-query "credentials" ".\"${_unit_credentials}\".token" | tr -d '\n|[:space:]')
-
-    cat <<EOF
-[${_unit_name}]
-type = drive
-client_id = ${_client_id}
-client_secret = ${_client_secret}
-root_folder_id = ${_unit_root_folder_id}
-scope = ${_scope}
-team_drive = ${_unit_drive_id}
-token = ${_token}
-EOF
+_remote-config-pool-keys() {
+    _remote-config-query "pools" ".\"$1\".keys // [] | .[]"
 }

@@ -41,7 +41,7 @@ The one deliberate exception is documented below (mount).
 - **Wrapper** (`remote`): routes commands, nothing else.
 - **`_remote`**: the 17 public subcommand functions; owns the one place that
   intentionally does NOT delegate (mount).
-- **`_remote_config`**: units/credentials/roots JSON config model.
+- **`_remote_config`**: units/pools/roots JSON config model.
 - **`_remote_patterns`**: unit name pattern matching (glob/comma/exact).
 - **`_rclone` / `_systemd`**: shared dotlib domain modules, not specific to
   `remote`, doing the actual mount/unmount/move/service-control work.
@@ -56,8 +56,9 @@ shell/
 │   ├── share/
 │   │   ├── dotlib/
 │   │   │   ├── _remote                # public remote-<sub> functions, delegates to _rclone/_systemd
-│   │   │   ├── _remote_config         # units/credentials/roots JSON model
+│   │   │   ├── _remote_config         # units/pools/roots JSON model
 │   │   │   ├── _remote_patterns       # unit name pattern matching
+│   │   │   ├── _remote_pool           # credential key selection, rendering, rotation
 │   │   │   ├── _rclone                # generic rclone domain module (not remote-specific)
 │   │   │   └── _systemd               # generic systemd domain module (not remote-specific)
 │   │   ├── remote/
@@ -66,7 +67,8 @@ shell/
 │   │       ├── remote-mount@.service  # Type=notify template unit
 │   │       └── remote-sync@.service   # Type=oneshot template unit
 └── .config/remote/
-    ├── credentials.json                # OAuth credentials - tracked, git-crypt encrypted at rest
+    ├── pools.json                      # named key pools: {keys[], type?} - no secrets
+    ├── keys/<key>.json                 # OAuth blobs / service-account keys - git-crypt encrypted at rest
     ├── roots.json                      # local/remote mount roots
     └── units.json                      # unit definitions
 ```
@@ -82,13 +84,14 @@ Sources `_dispatcher` and `_remote`, calls `dispatcher-init "remote"
 
 Loads the three JSON files once at source time from `xdg-config-dir "remote"`
 and exposes typed getters (`remote-config-unit-mountpoint`,
-`remote-config-unit-drive-id`, `remote-config-credentials-for`, ...) plus a
-generic `remote-config-query <domain> <jq filter>` escape hatch. Also owns
-`remote-config-render-rclone-conf <unit>`, which renders an rclone.conf
-`[unit]` stanza from `units.json` + `credentials.json`. This stays
-custom rather than calling `_rclone`'s `rclone-create-remote`, because that
-function shells out to the interactive `rclone config` TUI — unsuitable for
-unattended, multi-account mounts driven by systemd at login.
+`remote-config-unit-drive-id`, `remote-config-pool-keys`, ...) plus a
+generic `remote-config-query <domain> <jq filter>` escape hatch. Rendering
+the rclone.conf `[unit]` stanza lives in `_remote_pool`
+(`_remote-pool-render-rclone-conf <unit> <pool>`) because it depends
+on which key is current. It stays custom rather than calling `_rclone`'s
+`rclone-create-remote`, because that function shells out to the interactive
+`rclone config` TUI — unsuitable for unattended, multi-account mounts driven
+by systemd at login.
 
 (All functions in this module are named `_remote-config-*`, with a leading
 underscore. That's not the "private helper" convention from the wrapper
@@ -136,6 +139,8 @@ The 17 subcommand functions, grouped below. `--dry-run` is a
 | `restart <unit>` | `systemd-restart` | |
 | `enable-all` / `disable-all` / `restart-all [pattern]` | loop over the singular functions above | Safe: none of these hold a foreground process |
 | `status` | direct `systemctl --user list-units "remote-mount@*"` | No `_systemd` equivalent for a glob-filtered listing |
+| `rotate [--if-current <key>] <pool>` | `_remote-pool-advance`, `rclone rc backend/command set` | Next pool key; live mounts on the pool switch without a remount |
+| `pool [pool]` | | Current / exhausted state and key-file health per key |
 
 ### Why `mount` doesn't delegate to `_rclone`
 
@@ -189,14 +194,57 @@ practice.
 Unchanged from before — see the JSON examples inline in each file. No schema
 changes.
 
-### credentials.json
+### pools.json and keys/
 
-OAuth credentials for Google Drive API, keyed by account name, holding live
-`client_id`/`client_secret`/`token`. Tracked, but only behind git-crypt
-(`.gitattributes` pattern plus an exception to the `**/credentials.json`
-rule in `.gitignore`) - never commit it in the clear. Keep both the file
-(`600`) and its containing directory (`700`) locked to the owning user; there
-is no reason for either to be group/world readable.
+`pools.json` names key pools: `"<name>": {"keys": ["<key>", ...],
+"type": "oauth" | "service_account"}`. It holds no secrets. Each key is
+`keys/<key>.json`, either an rclone-style OAuth blob
+(`client_id`/`client_secret`/`scope`/`token`) or a Google service-account
+key file named by its `client_email`; the file itself says which, so a
+pool may mix both. `type` is an optional guard: when set, every key must be
+of that type. The key files are tracked only behind git-crypt
+(`.gitattributes` pattern; the ten service-account keys also sit in `pass`
+under `app/remote/` as a backup) - never commit them in the clear. Keep
+the files `600` and `keys/` `700`.
+
+A unit's `pool` field names one. The current key of the pool renders into
+the unit's rclone.conf at mount and sync time; a single-key pool (each
+OAuth identity today) simply always uses that key. `pools.json` is tracked
+in the clear; only `keys/*.json` is behind git-crypt.
+
+### Key rotation (upload quota)
+
+Drive caps uploads at ~750G per identity per rolling 24h. A pool with more
+than one key (`remote-mount-mgr`: ten service accounts, all members of the
+same shared drives) uploads through its current key until Drive answers
+`User rate limit exceeded.`, then advances. `_remote_pool` owns the cursor
+(`$XDG_STATE_HOME/remote/pool/<pool>.json`: current key, exhausted-at
+timestamps, last rotation). Single-key pools never rotate: a cap-hit on
+one is just a failed sync.
+
+`remote sync` renders its own `sync.conf` from the current key, runs
+`rclone move --drive-stop-on-upload-limit`, and on exit 7 with the cap
+message in `sync.log` it calls `remote rotate --if-current <key>` and
+reruns, at most once per key. `--if-current` makes concurrent syncs on the
+same exhausted key rotate once, not N times. `remote rotate` also moves
+every live mount on the pool: service account to service account switches
+in place through rclone's rc `backend set` over the unit's unix socket (no
+remount, VFS and dir caches survive, an upload in flight on the old key
+fails once and the VFS writeback retries it under the new one), and the
+rendered runtime conf is rewritten to match. rclone can only swap a
+service-account file on a backend already built around one, so any
+transition involving an OAuth key restarts the mount instead; the rendered
+conf is how `rotate` knows what the running mount was built around.
+`remote health` scans each rotating
+mount's `rclone.log` for the cap error since the last rotation and rotates,
+since VFS writeback retries a 403 forever. `remote verify` (the mount's
+`ExecStartPre`) checks every key file parses as a usable key (of the
+pool's declared type, if any), which is what a missing git-crypt unlock
+looks like.
+
+Not every unit can use service accounts: one writing into a personal My
+Drive folder (`doc-live`, `root_folder_id`) hits the account's own quota,
+so that unit stays on its OAuth pool. Shared-drive units can all move over.
 
 ### sandbox.json
 
