@@ -140,7 +140,7 @@ The 17 subcommand functions, grouped below. `--dry-run` is a
 | `enable <unit>` | `systemd-enable-start` | |
 | `disable <unit>` | `systemd-disable-stop` | |
 | `restart <unit>` | `systemd-restart` | |
-| `enable-all` / `disable-all` / `restart-all [pattern]` | loop over the singular functions above | Safe: none of these hold a foreground process |
+| `enable-all` / `disable-all` / `restart-all [pattern]` | loop over the singular functions above | Safe: none of these hold a foreground process. `restart-all` skips units that aren't active, since a systemd restart of a stopped unit would start it |
 | `status` | direct `systemctl --user list-units "remote-mount@*"` | No `_systemd` equivalent for a glob-filtered listing |
 | `rotate [--if-current <key>] <pool>` | `_remote-pool-advance`, `rclone-rc-unix backend/command set` | Next pool key; every live mount on the pool (and any sync job inside it) switches without a remount |
 | `pool [pool]` | | Current / exhausted state and key-file health per key |

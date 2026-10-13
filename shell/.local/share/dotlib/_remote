@@ -64,7 +64,7 @@ typeset -gA _REMOTE_DESCRIPTIONS=(
     [restart]="Restart a unit's systemd service"
     [enable-all]="Enable all units matching a pattern"
     [disable-all]="Disable all units matching a pattern"
-    [restart-all]="Restart all units matching a pattern"
+    [restart-all]="Restart the running units matching a pattern"
     [status]="Show systemd status for all remote-mount units"
     [rotate]="Advance a credential pool to its next key and move live mounts onto it"
     [pool]="Show credential pool state (current key, exhausted keys, key-file health)"
@@ -473,10 +473,14 @@ remote-restart-all() {
     _units=$(_remote-patterns-match-units "${_pattern}")
     [[ -z "${_units}" ]] && { log-error "No units match pattern: ${_pattern}"; return 1; }
 
-    log-info "Restarting units matching: ${_pattern}"
-    local _unit
+    # A systemd restart of a stopped unit starts it, so without this
+    # filter a sweep would bring up every unit in units.json. `remote
+    # restart <unit>` stays unfiltered: naming one unit is explicit.
+    log-info "Restarting active units matching: ${_pattern}"
+    local _unit _skipped=0
     while read -r _unit; do
         [[ -z "${_unit}" ]] && continue
+        systemd-is-active "remote-mount@${_unit}" || { ((_skipped++)) || true; continue; }
         log-info "Restarting: ${_unit}"
         if [[ "${_dry_run}" == "true" ]]; then
             remote-restart --dry-run "${_unit}"
@@ -485,7 +489,7 @@ remote-restart-all() {
         fi
         ((_count++)) || true
     done <<< "${_units}"
-    log-info "Restarted ${_count} unit(s)"
+    log-info "Restarted ${_count} unit(s), skipped ${_skipped} not running"
 }
 
 remote-status() {
