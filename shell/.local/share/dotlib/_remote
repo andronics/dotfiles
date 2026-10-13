@@ -302,6 +302,10 @@ remote-sync() {
     _REMOTE_SYNC_SOCK="${_sock}" _REMOTE_SYNC_JOB="" _REMOTE_SYNC_ABORTED=false
     trap '_remote-sync-abort' TERM INT
 
+    # Stats groups outlive their jobs, so without this a run would report
+    # (and remote-stats would show) the previous run's counters and errors.
+    rclone-rc-unix "${_sock}" core/stats-reset "group=${_group}" >/dev/null 2>&1 || true
+
     local _rc=0 _key _reply _jobid _status _err
     while (( _attempts-- > 0 )); do
         [[ "${_REMOTE_SYNC_ABORTED}" == "true" ]] && { _rc=143; break; }
