@@ -1,18 +1,5 @@
 {
-    "andronics@gmail.com": {
-        "type": "oauth",
-        "keys": [
-            "andronics@gmail.com"
-        ]
-    },
-    "stevie@andronics.io": {
-        "type": "oauth",
-        "keys": [
-            "stevie@andronics.io"
-        ]
-    },
     "remote-mount-mgr": {
-        "type": "service_account",
         "keys": [
             "remote-mount-mgr-01@andronics-io-451500.iam.gserviceaccount.com",
             "remote-mount-mgr-02@andronics-io-451500.iam.gserviceaccount.com",

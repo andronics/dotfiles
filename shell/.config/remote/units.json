@@ -29,11 +29,6 @@
         "mountpoint": "arc/volumes",
         "pool": "remote-mount-mgr"
     },
-    "doc-live": {
-        "mountpoint": "doc/live",
-        "root_folder_id": "1wD4ySd5U1bYQsCdGPE9CcXIxP9sCOyD3",
-        "pool": "andronics@gmail.com"
-    },
     "media-adult": {
         "drive_id": "0AGxPmBlhop0sUk9PVA",
         "mountpoint": "media/adult",
