@@ -104,6 +104,7 @@ remote-mount() {
     _cache_dir="$(xdg-cache-dir "remote")/${_unit_name}"
     _runtime_dir="$(xdg-runtime-dir "remote")/${_unit_name}"
 
+    rclone-clear-stale-mount "${_mount_path}" || return 1
     mkdir -p "${_mount_path}" "${_cache_dir}" "${_runtime_dir}"
 
     _remote-pool-render-rclone-conf "${_unit_name}" "$(_remote-config-unit-pool "${_unit_name}")" > "${_runtime_dir}/rclone.conf" || return 1

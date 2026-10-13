@@ -1458,6 +1458,33 @@ rclone-mount() {
 # Example:
 #   rclone-unmount "/mnt/remote"
 #
+# A FUSE mount whose rclone died (SIGKILL, OOM, a failed unmount under
+# systemd) stays in the mount table but every access fails with ENOTCONN.
+# `mountpoint -q` reports it as not mounted, so the usual checks miss it,
+# while mkdir/mount on the path fail. Detach it so a fresh mount can go in.
+#
+# Function: rclone-clear-stale-mount
+# Parameters:
+#   $1 - Mount point path (required)
+# Returns:
+#   0 - Nothing stale, or stale endpoint detached
+#   1 - Stale endpoint present and could not be detached
+#
+rclone-clear-stale-mount() {
+    local mountpoint="$1"
+    validate-type-string "$mountpoint" || return 2
+
+    findmnt -n "$mountpoint" >/dev/null 2>&1 || return 0
+    stat "$mountpoint" >/dev/null 2>&1 && return 0
+
+    log-warning "Detaching stale FUSE endpoint" "remote_path=$mountpoint"
+    if common-command-exists fusermount; then
+        fusermount -uz "$mountpoint"
+    else
+        umount -l "$mountpoint"
+    fi
+}
+
 rclone-unmount() {
     local mountpoint="$1"
 
@@ -1470,13 +1497,22 @@ rclone-unmount() {
 
     log-info "Unmounting" "remote_path=$mountpoint"
 
-    # Try fusermount first, then umount
+    # A busy mount (anything holding a file open) makes a plain unmount
+    # fail. Under systemd that failure is followed by SIGTERM to rclone,
+    # which leaves a dead FUSE endpoint ("Transport endpoint is not
+    # connected") that blocks every restart. A lazy unmount detaches the
+    # path now and lets open handles drain, so fall back to it.
     local exit_code
     if common-command-exists fusermount; then
-        fusermount -u "$mountpoint"
+        fusermount -u "$mountpoint" 2>/dev/null
         exit_code=$?
+        if [[ $exit_code -ne 0 ]]; then
+            log-warning "Mount busy, detaching lazily" "remote_path=$mountpoint"
+            fusermount -uz "$mountpoint"
+            exit_code=$?
+        fi
     elif common-command-exists umount; then
-        umount "$mountpoint"
+        umount "$mountpoint" 2>/dev/null || umount -l "$mountpoint"
         exit_code=$?
     else
         log-error "No unmount tool available (fusermount, umount)"
