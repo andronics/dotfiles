@@ -130,6 +130,10 @@
         "credentials": "stevie@andronics.io",
         "drive_id": "0ABvydAC-sbcUUk9PVA",
         "mountpoint": "res/wallpaper"
+    },
+    "transfer-complete": {
+        "credentials": "stevie@andronics.io",
+        "drive_id": "0AHnNkQRuedBqUk9PVA",
+        "mountpoint": "transfer/complete"
     }
-
 }
