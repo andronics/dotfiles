@@ -2,32 +2,32 @@
     "arc-code": {
         "drive_id": "0AMN8oIdNrZNRUk9PVA",
         "mountpoint": "arc/code",
-        "pool": "stevie@andronics.io"
+        "pool": "remote-mount-mgr"
     },
     "arc-databases": {
         "drive_id": "0APceCTPYS7TWUk9PVA",
         "mountpoint": "arc/databases",
-        "pool": "stevie@andronics.io"
+        "pool": "remote-mount-mgr"
     },
     "arc-orgs": {
         "drive_id": "0ADWPhFvl1WJAUk9PVA",
         "mountpoint": "arc/orgs",
-        "pool": "stevie@andronics.io"
+        "pool": "remote-mount-mgr"
     },
     "arc-svcs": {
         "drive_id": "0AM72Xz8cgrZIUk9PVA",
         "mountpoint": "arc/svcs",
-        "pool": "stevie@andronics.io"
+        "pool": "remote-mount-mgr"
     },
     "arc-vaults": {
         "drive_id": "0ACb2yOcTuiJRUk9PVA",
         "mountpoint": "arc/vaults",
-        "pool": "stevie@andronics.io"
+        "pool": "remote-mount-mgr"
     },
     "arc-volumes": {
         "drive_id": "0AMIVKA3NTddpUk9PVA",
         "mountpoint": "arc/volumes",
-        "pool": "stevie@andronics.io"
+        "pool": "remote-mount-mgr"
     },
     "doc-live": {
         "mountpoint": "doc/live",
@@ -37,99 +37,99 @@
     "media-adult": {
         "drive_id": "0AGxPmBlhop0sUk9PVA",
         "mountpoint": "media/adult",
-        "pool": "stevie@andronics.io"
+        "pool": "remote-mount-mgr"
     },
     "media-audiobooks": {
         "drive_id": "0AKt8-k3Md30NUk9PVA",
         "mountpoint": "media/audiobooks",
-        "pool": "stevie@andronics.io"
+        "pool": "remote-mount-mgr"
     },
     "media-courses": {
         "drive_id": "0AOIRi6eDa52tUk9PVA",
         "mountpoint": "media/courses",
-        "pool": "stevie@andronics.io"
+        "pool": "remote-mount-mgr"
     },
     "media-documentaries": {
         "drive_id": "0AEFirVgB3etjUk9PVA",
         "mountpoint": "media/documentaries",
-        "pool": "stevie@andronics.io"
+        "pool": "remote-mount-mgr"
     },
     "media-ebooks": {
         "drive_id": "0APewWtC6aSPXUk9PVA",
         "mountpoint": "media/ebooks",
-        "pool": "stevie@andronics.io"
+        "pool": "remote-mount-mgr"
     },
     "media-movies": {
         "drive_id": "0ALyonjJNrlRoUk9PVA",
         "cache_max_size": "150G",
         "mountpoint": "media/movies",
-        "pool": "stevie@andronics.io"
+        "pool": "remote-mount-mgr"
     },
     "media-music": {
         "drive_id": "0AISKLrkHRzwVUk9PVA",
         "mountpoint": "media/music",
-        "pool": "stevie@andronics.io"
+        "pool": "remote-mount-mgr"
     },
     "media-photos": {
         "drive_id": "0ALEC-6d4Pl4IUk9PVA",
         "mountpoint": "media/photos",
-        "pool": "stevie@andronics.io"
+        "pool": "remote-mount-mgr"
     },
     "media-roms": {
         "drive_id": "0AKEOFfIIMb6nUk9PVA",
         "mountpoint": "media/roms",
-        "pool": "stevie@andronics.io"
+        "pool": "remote-mount-mgr"
     },
     "media-standup": {
         "drive_id": "0AADBSzPZztTmUk9PVA",
         "mountpoint": "media/standup",
-        "pool": "stevie@andronics.io"
+        "pool": "remote-mount-mgr"
     },
     "media-tv": {
         "drive_id": "0AEBmM5-iPnADUk9PVA",
         "cache_max_size": "150G",
         "mountpoint": "media/tv",
-        "pool": "stevie@andronics.io"
+        "pool": "remote-mount-mgr"
     },
     "org-andronics": {
         "drive_id": "0AG9lal-RGS-WUk9PVA",
         "mountpoint": "org/andronics",
-        "pool": "stevie@andronics.io"
+        "pool": "remote-mount-mgr"
     },
     "org-charities": {
         "drive_id": "0AN_lczYRXTRLUk9PVA",
         "mountpoint": "org/charities",
-        "pool": "stevie@andronics.io"
+        "pool": "remote-mount-mgr"
     },
     "org-foxie-systems": {
         "drive_id": "0AGlcHl_7Owg6Uk9PVA",
         "mountpoint": "org/foxie-systems",
-        "pool": "stevie@andronics.io"
+        "pool": "remote-mount-mgr"
     },
     "res-fonts": {
         "drive_id": "0ABMFR63ZcP_dUk9PVA",
         "mountpoint": "res/fonts",
-        "pool": "stevie@andronics.io"
+        "pool": "remote-mount-mgr"
     },
     "res-iso": {
         "drive_id": "0ACZpCirf99_QUk9PVA",
         "mountpoint": "res/iso",
-        "pool": "stevie@andronics.io"
+        "pool": "remote-mount-mgr"
     },
     "res-logos": {
         "drive_id": "0ANiJHtcSGkkgUk9PVA",
         "mountpoint": "res/logos",
-        "pool": "stevie@andronics.io"
+        "pool": "remote-mount-mgr"
     },
     "res-people": {
         "drive_id": "0ABfflfR7bedwUk9PVA",
         "mountpoint": "res/people",
-        "pool": "stevie@andronics.io"
+        "pool": "remote-mount-mgr"
     },
     "res-wallpaper": {
         "drive_id": "0ABvydAC-sbcUUk9PVA",
         "mountpoint": "res/wallpaper",
-        "pool": "stevie@andronics.io"
+        "pool": "remote-mount-mgr"
     },
     "transfer-complete": {
         "drive_id": "0AHnNkQRuedBqUk9PVA",
