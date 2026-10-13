@@ -8,15 +8,12 @@
 #
 # A pools.json entry names an ordered list of keys; a unit picks one by
 # name in its "pool" field:
-#   "<name>": {"keys": ["<key>", ...], "type": "oauth" | "service_account"}
-# Each key is the JSON file keys/<key>.json next to this config - an rclone
-# OAuth blob (client_id / client_secret / scope / token) or a Google
-# service-account key; the file itself says which. "type" is optional: set
-# it and every key must be of that type, omit it and a pool may mix both.
-# Those files hold the live secrets and are tracked only because
-# .gitattributes puts them behind git-crypt; never commit them in the
-# clear. pools.json itself holds none. Key selection, rotation and
-# rendering live in _remote_pool.
+#   "<name>": {"keys": ["<key>", ...]}
+# Each key is a Google service-account key file, keys/<key>.json next to
+# this config, named by its client_email. Those files hold the live
+# secrets and are tracked only because .gitattributes puts them behind
+# git-crypt; never commit them in the clear. pools.json itself holds none.
+# Key selection, rotation and rendering live in _remote_pool.
 #
 # Usage:
 #   source "${DOTLIB}/_remote_config"
@@ -78,13 +75,6 @@ _remote-config-unit-drive-id() {
     echo "${_v}"
 }
 
-_remote-config-unit-root-folder-id() {
-    local _v
-    _v=$(_remote-config-query "units" ".\"$1\".root_folder_id")
-    [[ "${_v}" == "null" ]] && _v=""
-    echo "${_v}"
-}
-
 _remote-config-unit-uid() {
     local _v
     _v=$(_remote-config-query "units" ".\"$1\".uid")
@@ -126,14 +116,6 @@ _remote-config-pool() {
 
 _remote-config-pool-names() {
     _remote-config-query "pools" "keys[]"
-}
-
-# The entry's declared key type, or empty when it accepts any.
-_remote-config-pool-type() {
-    local _v
-    _v=$(_remote-config-query "pools" ".\"$1\".type")
-    [[ "${_v}" == "null" ]] && _v=""
-    echo "${_v}"
 }
 
 _remote-config-pool-keys() {

@@ -10,6 +10,9 @@ After=network-online.target
 # rclone signals READY once the FUSE mount is live, so "started" means
 # mounted - which is what remote-sync@'s Requisite=/After= and the warm-up
 # below rely on. NotifyAccess=all: rclone is a child of the remote wrapper.
+# This process also runs the unit's sync as an rc job (remote-sync@ only
+# submits and waits), so its memory peaks while syncing: eight transfers
+# holding a 128M chunk each, plus read-ahead.
 Type=notify
 NotifyAccess=all
 Environment=PATH="%h/.local/bin:%h/.local/bin/lib:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"

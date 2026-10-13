@@ -1,5 +1,9 @@
 [Unit]
 Description=Remote Cloud Syncronisation
+# The sync is an rc job submitted to the mount's own rclone process over
+# its unix socket, so the mount must be up (Requisite) and a mount restart
+# aborts the job; the next timer run resumes where it stopped. Stopping
+# this unit stops the job (remote sync traps TERM and calls job/stop).
 Requisite=remote-mount@%i.service
 After=remote-mount@%i.service
 

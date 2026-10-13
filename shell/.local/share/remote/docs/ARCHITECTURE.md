@@ -64,11 +64,14 @@ shell/
 │   │   ├── remote/
 │   │   │   └── docs/ARCHITECTURE.md   # this file
 │   │   └── systemd/user/
-│   │       ├── remote-mount@.service  # Type=notify template unit
-│   │       └── remote-sync@.service   # Type=oneshot template unit
+│   │       ├── remote-mount@.service  # Type=notify template unit; hosts the sync job too
+│   │       ├── remote-sync@.service   # Type=oneshot template unit, driven by remote-sync@.timer
+│   │       ├── remote-sync@.timer
+│   │       ├── remote-healthcheck.service
+│   │       └── remote-healthcheck.timer
 └── .config/remote/
-    ├── pools.json                      # named key pools: {keys[], type?} - no secrets
-    ├── keys/<key>.json                 # OAuth blobs / service-account keys - git-crypt encrypted at rest
+    ├── pools.json                      # named key pools: {keys[]} - no secrets
+    ├── keys/<key>.json                 # service-account keys - git-crypt encrypted at rest
     ├── roots.json                      # local/remote mount roots
     └── units.json                      # unit definitions
 ```
@@ -128,10 +131,10 @@ The 17 subcommand functions, grouped below. `--dry-run` is a
 | `unmount <unit>` | `rclone-unmount` | fusermount→umount fallback |
 | `mount-all [pattern]` | `systemd-start "remote-mount@<unit>"` | Not synchronous in-process — see below |
 | `unmount-all [pattern]` | `systemd-stop "remote-mount@<unit>"` | |
-| `sync [--dry-run] <unit>` | `rclone-set-config`, `rclone-move` | Moves everything under the unit's local dir; a missing local dir is "nothing to sync" (exit 0) |
+| `sync [--dry-run] <unit>` | `rclone-rc-unix sync/move`, `rclone-rc-job-wait` over the unit's rc unix socket | An async move job inside the unit's own mount process; a missing local dir is "nothing to sync" (exit 0). `--dry-run` submits the job with `DryRun`; its "would move" lines go to the unit's `rclone.log` |
 | `list [pattern]` | `systemd-get-state` | Table of unit/mountpoint/status/cache size |
 | `verify [pattern]` | `rclone-is-mounted` | Config sanity + mount-state check (read-only) |
-| `health [pattern]` | `rclone-is-mounted`, `systemd-restart` | Liveness sweep for enabled units; restarts what's unhealthy — see below |
+| `health [pattern]` | `rclone-is-mounted`, `rclone-rc-alive`, `rclone-rc-unix core/stats`, `systemd-restart` | Liveness sweep for enabled units (mount table, bounded `stat`, rc answers); restarts what's unhealthy, rotates the pool on an unhandled cap hit — see below |
 | `warm <unit>` | `rclone rc vfs/refresh` over the unit's rc unix socket | Async recursive dir-cache preload; run as `ExecStartPost` of the mount unit. Skipped when the unit sets `"warm": false` in `units.json` (default true) |
 | `cleanup [--force]` | `rclone-is-mounted` | Stale runtime config / empty cache cleanup |
 | `enable <unit>` | `systemd-enable-start` | |
@@ -139,7 +142,7 @@ The 17 subcommand functions, grouped below. `--dry-run` is a
 | `restart <unit>` | `systemd-restart` | |
 | `enable-all` / `disable-all` / `restart-all [pattern]` | loop over the singular functions above | Safe: none of these hold a foreground process |
 | `status` | direct `systemctl --user list-units "remote-mount@*"` | No `_systemd` equivalent for a glob-filtered listing |
-| `rotate [--if-current <key>] <pool>` | `_remote-pool-advance`, `rclone rc backend/command set` | Next pool key; live mounts on the pool switch without a remount |
+| `rotate [--if-current <key>] <pool>` | `_remote-pool-advance`, `rclone-rc-unix backend/command set` | Next pool key; every live mount on the pool (and any sync job inside it) switches without a remount |
 | `pool [pool]` | | Current / exhausted state and key-file health per key |
 
 ### Why `mount` doesn't delegate to `_rclone`
@@ -196,21 +199,24 @@ changes.
 
 ### pools.json and keys/
 
-`pools.json` names key pools: `"<name>": {"keys": ["<key>", ...],
-"type": "oauth" | "service_account"}`. It holds no secrets. Each key is
-`keys/<key>.json`, either an rclone-style OAuth blob
-(`client_id`/`client_secret`/`scope`/`token`) or a Google service-account
-key file named by its `client_email`; the file itself says which, so a
-pool may mix both. `type` is an optional guard: when set, every key must be
-of that type. The key files are tracked only behind git-crypt
-(`.gitattributes` pattern; the ten service-account keys also sit in `pass`
-under `app/remote/` as a backup) - never commit them in the clear. Keep
-the files `600` and `keys/` `700`.
+`pools.json` names key pools: `"<name>": {"keys": ["<key>", ...]}`. It
+holds no secrets. Each key is `keys/<key>.json`, a Google service-account
+key file named by its `client_email`. Service accounts are the only
+credential supported: they are the only one rclone can swap on a live
+backend, which is what lets a rotation move a mount and the sync job
+inside it without a remount (OAuth identities were dropped for that
+reason; a personal My Drive, which a service account cannot back, is
+therefore not mountable). The key files are tracked only behind
+git-crypt (`.gitattributes` pattern; the keys also sit in `pass` under
+`app/remote/` as a backup) - never commit them in the clear. Keep the
+files `600` and `keys/` `700`.
 
 A unit's `pool` field names one. The current key of the pool renders into
-the unit's rclone.conf at mount and sync time; a single-key pool (each
-OAuth identity today) simply always uses that key. `pools.json` is tracked
-in the clear; only `keys/*.json` is behind git-crypt.
+the unit's rclone.conf at mount time, together with the drive-side upload
+tuning (`chunk_size = 128M`, `stop_on_upload_limit = true`): those are
+backend options, and a sync job must resolve to the mount's own fs
+instance, so they cannot be passed per job. `pools.json` is tracked in the
+clear; only `keys/*.json` is behind git-crypt.
 
 ### Key rotation (upload quota)
 
@@ -222,29 +228,23 @@ same shared drives) uploads through its current key until Drive answers
 timestamps, last rotation). Single-key pools never rotate: a cap-hit on
 one is just a failed sync.
 
-`remote sync` renders its own `sync.conf` from the current key, runs
-`rclone move --drive-stop-on-upload-limit`, and on exit 7 with the cap
-message in `sync.log` it calls `remote rotate --if-current <key>` and
-reruns, at most once per key. `--if-current` makes concurrent syncs on the
-same exhausted key rotate once, not N times. `remote rotate` also moves
-every live mount on the pool: service account to service account switches
-in place through rclone's rc `backend set` over the unit's unix socket (no
-remount, VFS and dir caches survive, an upload in flight on the old key
-fails once and the VFS writeback retries it under the new one), and the
-rendered runtime conf is rewritten to match. rclone can only swap a
-service-account file on a backend already built around one, so any
-transition involving an OAuth key restarts the mount instead; the rendered
-conf is how `rotate` knows what the running mount was built around.
-`remote health` scans each rotating
-mount's `rclone.log` for the cap error since the last rotation and rotates,
-since VFS writeback retries a 403 forever. `remote verify` (the mount's
-`ExecStartPre`) checks every key file parses as a usable key (of the
-pool's declared type, if any), which is what a missing git-crypt unlock
-looks like.
-
-Not every unit can use service accounts: one writing into a personal My
-Drive folder (`doc-live`, `root_folder_id`) hits the account's own quota,
-so that unit stays on its OAuth pool. Shared-drive units can all move over.
+`remote sync` submits an async `sync/move` to the unit's mount process
+(group `sync-<unit>`, per-job `_config` with eight transfers) and waits on
+`job/status`. When the job fails with the cap message it calls
+`remote rotate --if-current <key>`, resets the group's stats, and
+resubmits, at most once per key. `--if-current` makes concurrent syncs on
+the same exhausted key rotate once, not N times. `remote rotate` moves
+every live mount on the pool in place through rclone's rc `backend set`
+over the unit's unix socket: no remount, VFS and dir caches survive, a
+sync job running in the process carries on under the new key, an upload
+in flight on the old key fails once and is retried. The rendered runtime
+conf is rewritten to match. `remote health` asks each rotating mount for
+`core/stats`; a `lastError` carrying the cap message is a hit nothing
+handled (a VFS writeback upload, or a sync whose `remote sync` died first)
+and rotates, then resets the stats so the next sweep does not rotate
+again. `remote verify` (the mount's `ExecStartPre`) checks every key file
+parses as a service-account key for its name, which is what a missing
+git-crypt unlock looks like.
 
 ### sandbox.json
 
@@ -297,9 +297,13 @@ remote verify *-backup           # glob
 timer. rclone signals READY once the FUSE mount is live, so "started" means
 mounted. `remote-sync@.service` is
 `Type=oneshot` (`ExecStart=remote sync %i`), driven entirely by
-`remote-sync@.timer` (every 4h) since nothing else would ever run it, and now
-also gated by `Requisite=`/`After=remote-mount@%i.service` so it fails fast
-if the mount isn't active rather than racing a dead mountpoint.
+`remote-sync@.timer` (every 4h) since nothing else would ever run it, and
+gated by `Requisite=`/`After=remote-mount@%i.service` because the sync is
+an rc job inside the mount's process: there is no second rclone, the
+oneshot only submits and waits. A mount restart therefore aborts a running
+sync (the next timer run resumes, moved files are gone from the source),
+and stopping the sync unit stops the job (`remote sync` traps TERM and
+calls `job/stop`).
 
 A `remote-mount@.timer` existed previously (same 4h schedule, description
 copy-pasted from the sync timer) but had no real purpose beyond what

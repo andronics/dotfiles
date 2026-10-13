@@ -12,9 +12,9 @@
 # is all-or-nothing: DISPATCHER_DRY_RUN=true makes dispatcher-execute-command
 # skip calling the subcommand function entirely and just log "[DRY RUN]
 # Would call: ...". That would lose the informative per-command dry-run
-# output this module produces (e.g. sync's rclone --dry-run file listing),
-# so subcommands read their own --dry-run instead of relying on
-# dispatcher-is-dry-run.
+# output this module produces (e.g. mount's "would mount" line, or sync
+# actually submitting a DryRun job), so subcommands read their own
+# --dry-run instead of relying on dispatcher-is-dry-run.
 #
 # remote-mount is deliberately NOT delegated to _rclone's rclone-mount: that
 # function always runs `rclone mount --daemon` (backgrounds itself), but
@@ -30,7 +30,7 @@
 # Dependencies:
 #   Required:
 #     - _common, _log, _jq, _xdg: core utilities
-#     - _rclone, _systemd: delegated mount/unmount/sync/service-control
+#     - _rclone, _systemd: delegated unmount/rc calls/service-control
 #     - _singleton: per-unit sync lock (prevents overlapping remote-sync runs)
 #     - _remote_config, _remote_patterns, _remote_pool: domain modules
 
@@ -53,7 +53,7 @@ typeset -gA _REMOTE_DESCRIPTIONS=(
     [unmount]="Unmount a unit"
     [mount-all]="Mount all units matching a pattern (via systemd)"
     [unmount-all]="Unmount all units matching a pattern (via systemd)"
-    [sync]="Move a unit's local files to its remote"
+    [sync]="Move a unit's local files to its remote (an rc job inside the unit's mount)"
     [list]="List units with status and cache size"
     [verify]="Verify unit configuration and mount status"
     [health]="Check enabled units are actually mounted and responsive, restart if not"
@@ -236,6 +236,19 @@ remote-unmount-all() {
 # Sync
 # ------------------------------
 
+# Usage: remote-sync [--dry-run] <unit>
+# Runs as an rc job inside the unit's own mount process, not as a second
+# rclone: one fs instance and one credential per unit, so a pool rotation
+# moves the mount and the sync together, and the job's result comes back
+# over the socket instead of an exit code plus a log grep. The per-job
+# _config carries what a move needs (eight transfers: at Drive's
+# per-request latency one stream idles about half the time, eight of
+# them fill the uplink). The drive-side tuning (128M chunks,
+# stop_on_upload_limit) is in the rendered rclone.conf, see
+# _remote-pool-render-rclone-conf. A mount restart aborts the job; the
+# next timer run resumes, since moved files are gone from the source.
+# --dry-run submits the job with DryRun set: the "would move" lines land
+# in the unit's rclone.log.
 remote-sync() {
     local _dry_run=false
     [[ "$1" == "--dry-run" ]] && { _dry_run=true; shift; }
@@ -247,8 +260,7 @@ remote-sync() {
     singleton-try-lock "${_lock_name}" || { log-error "Sync already in progress for ${_unit_name}"; return 1; }
 
     local _runtime_dir="$(xdg-runtime-dir "remote")/${_unit_name}"
-    local _cfg="${_runtime_dir}/sync.conf"
-    local _sync_log="${_runtime_dir}/sync.log"
+    local _sock="${_runtime_dir}/rc.sock"
 
     local _mountpoint _root_local _root_remote _local_mount_point
     _mountpoint=$(_remote-config-unit-mountpoint "${_unit_name}")
@@ -264,26 +276,14 @@ remote-sync() {
         return 0
     fi
 
-    # Supersedes a plain `-f "${_cfg}"` check: a rendered config only proves
-    # the unit was mounted at some point, not that the mount is live now.
     rclone-is-mounted "${_root_remote}/${_mountpoint}" || { log-error "Unit not currently mounted: ${_unit_name}"; singleton-unlock "${_lock_name}"; return 1; }
+    [[ -S "${_sock}" ]] || { log-error "No control socket for ${_unit_name}"; singleton-unlock "${_lock_name}"; return 1; }
 
-    # --drive-stop-on-upload-limit turns Drive's daily upload cap into a
-    # fatal error (exit 7) instead of hours of silent retries. The log file
-    # is what tells a cap-hit apart from any other fatal error.
-    #
-    # Drive charges a fixed round-trip per resumable-upload chunk, so at the
-    # 8M default each stream idles about half the time waiting for the ack
-    # (~20 MiB/s per stream measured). 128M chunks amortise that; eight
-    # transfers then fill the uplink. Each transfer holds a chunk plus its
-    # read-ahead in RAM: about 1.6 GiB resident, measured.
-    local -a _move_opts=(--progress --delete-empty-src-dirs --drive-stop-on-upload-limit --drive-chunk-size 128M --log-file "${_sync_log}")
-    rclone-set-transfers 8
-    [[ "${_dry_run}" == "true" ]] && _move_opts+=(--dry-run)
+    local _group="sync-${_unit_name}" _config
+    _config=$(jq -nc --argjson dry "${_dry_run}" '{Transfers: 8, Checkers: 8, BufferSize: "16M", DryRun: $dry}')
 
-    # On a multi-key pool a cap-hit rotates the pool and reruns the move
-    # with the next key; files already moved are gone from the source, so
-    # the rerun continues where the last one stopped. Bounded by pool size.
+    # On a multi-key pool a cap-hit rotates the pool and resubmits the job
+    # under the next key. Bounded by pool size.
     local _pool _multi=false _attempts=1
     _pool=$(_remote-config-unit-pool "${_unit_name}")
     if _remote-pool-rotates "${_pool}"; then
@@ -291,24 +291,65 @@ remote-sync() {
         _attempts=$(_remote-config-pool-keys "${_pool}" | grep -c .)
     fi
 
-    local _rc=0 _key _started
-    rclone-set-config "${_cfg}"
-    while (( _attempts-- > 0 )); do
-        _rc=0
-        _remote-pool-render-rclone-conf "${_unit_name}" "${_pool}" > "${_cfg}" || { _rc=1; break; }
-        [[ "${_multi}" == "true" ]] && _key=$(_remote-pool-current "${_pool}")
-        _started=$(date +%s)
-        rclone-move "${_local_mount_point}" "${_unit_name}:" "${_move_opts[@]}" || _rc=$?
+    # Stopping remote-sync@<unit> must stop the job too, or it would carry
+    # on inside the mount with nothing watching it. The handler only flags
+    # and stops the job; the loop below notices and cleans up. The wait
+    # runs in the foreground (no command substitution) so the handler
+    # runs in this shell and the loop resumes after it.
+    _REMOTE_SYNC_SOCK="${_sock}" _REMOTE_SYNC_JOB="" _REMOTE_SYNC_ABORTED=false
+    trap '_remote-sync-abort' TERM INT
 
-        [[ "${_multi}" == "true" && ${_rc} -eq 7 ]] || break
-        _remote-pool-log-hit "${_sync_log}" "$(( _started - 1 ))" || break
+    local _rc=0 _key _reply _jobid _status _err
+    while (( _attempts-- > 0 )); do
+        [[ "${_REMOTE_SYNC_ABORTED}" == "true" ]] && { _rc=143; break; }
+        _rc=0
+        [[ "${_multi}" == "true" ]] && _key=$(_remote-pool-current "${_pool}")
+        _reply=$(rclone-rc-unix "${_sock}" sync/move "srcFs=${_local_mount_point}" "dstFs=${_unit_name}:" \
+            deleteEmptySrcDirs=true _async=true "_group=${_group}" "_config=${_config}") || { _rc=1; break; }
+        _jobid=$(jq -r '.jobid // empty' <<< "${_reply}")
+        [[ -n "${_jobid}" ]] || { log-error "Sync job for ${_unit_name} not accepted: ${_reply}"; _rc=1; break; }
+        _REMOTE_SYNC_JOB="${_jobid}"
+        printf '%s\n' "${_jobid}" > "${_runtime_dir}/sync.job"
+        log-info "Sync job ${_jobid} started for ${_unit_name}${_key:+ on ${_key}}"
+
+        rclone-rc-job-wait "${_sock}" "${_jobid}" > "${_runtime_dir}/sync.status" || _rc=1
+        _status=$(<"${_runtime_dir}/sync.status")
+        [[ "${_REMOTE_SYNC_ABORTED}" == "true" ]] && { _rc=143; break; }
+        (( _rc == 0 )) && break
+        _err=$(jq -r '.error // ""' <<< "${_status}")
+        if [[ "${_multi}" != "true" || "${_err}" != *"${_REMOTE_POOL_QUOTA_MSG}"* ]]; then
+            log-error "Sync job ${_jobid} failed for ${_unit_name}: ${_err:-rc socket stopped answering}"
+            break
+        fi
         log-warning "Upload cap hit on ${_key} while syncing ${_unit_name}"
         remote-rotate --if-current "${_key}" "${_pool}" || break
+        # Clears the group's lastError so remote-health does not rotate
+        # again for the same hit on its next sweep.
+        rclone-rc-unix "${_sock}" core/stats-reset "group=${_group}" >/dev/null 2>&1 || true
     done
 
+    trap - TERM INT
+    rm -f "${_runtime_dir}/sync.job" "${_runtime_dir}/sync.status"
     singleton-unlock "${_lock_name}"
-    [[ ${_rc} -ne 0 ]] && return ${_rc}
-    log-info "Sync complete"
+    (( _rc != 0 )) && return ${_rc}
+    log-info "Sync complete for ${_unit_name}: $(_remote-sync-summary "${_sock}" "${_group}")"
+}
+
+typeset -g _REMOTE_SYNC_SOCK="" _REMOTE_SYNC_JOB="" _REMOTE_SYNC_ABORTED=false
+
+_remote-sync-abort() {
+    _REMOTE_SYNC_ABORTED=true
+    log-warning "Sync interrupted: stopping job ${_REMOTE_SYNC_JOB:-<none>}"
+    [[ -n "${_REMOTE_SYNC_JOB}" ]] && rclone-rc-job-stop "${_REMOTE_SYNC_SOCK}" "${_REMOTE_SYNC_JOB}" 2>/dev/null
+    return 0
+}
+
+# Usage: _remote-sync-summary <socket> <group>
+_remote-sync-summary() {
+    local _st _bytes
+    _st=$(rclone-rc-unix "$1" core/stats "group=$2" short=true 2>/dev/null) || { echo "no stats"; return 0; }
+    _bytes=$(jq -r '.bytes // 0' <<< "${_st}" | numfmt --to=iec --suffix=B 2>/dev/null)
+    jq -r --arg b "${_bytes}" '"\(.transfers // 0) file(s), \($b), \(.errors // 0) error(s)"' <<< "${_st}"
 }
 
 # ------------------------------
@@ -450,39 +491,30 @@ remote-status() {
 # ------------------------------
 
 # Usage: remote-rotate [--if-current <key>] <pool>
-# Advances the pool, then moves every live mount on it to the new key.
-# Service account to service account switches in place through rclone's rc
-# `backend set` - no remount, the VFS cache and dir cache survive, and an
-# upload in flight on the old key fails once and is retried by the VFS
-# writeback under the new one. rclone can only swap a service-account file
-# on a backend already built around one, so any move involving an OAuth
-# key restarts the mount instead.
+# Advances the pool, then moves every live mount on it to the new key in
+# place through rclone's rc `backend set`: no remount, the VFS and dir
+# caches survive, a sync job running in the process carries on under the
+# new key, and an upload in flight on the old key fails once and is
+# retried.
 remote-rotate() {
     local _expected=""
     [[ "$1" == "--if-current" ]] && { _expected="$2"; shift 2; }
     local _pool="$1"
     _remote-pool-require "${_pool}" || return 1
 
-    local _key _file _type
+    local _key _file _opt
     _key=$(_remote-pool-advance "${_pool}" "${_expected}") || return 1
     _file=$(_remote-pool-key-file "${_pool}" "${_key}") || return 1
-    _type=$(_remote-pool-key-type "${_key}")
+    _opt=$(jq -nc --arg f "${_file}" '{service_account_file: $f}')
 
     local _unit _dir _switched=0 _failed=0
     while read -r _unit; do
         [[ -z "${_unit}" ]] && continue
         _dir="$(xdg-runtime-dir "remote")/${_unit}"
         [[ -S "${_dir}/rc.sock" ]] || continue
-        # The rendered conf says what the running mount was built around.
-        if [[ "${_type}" != "service_account" ]] || ! grep -q '^service_account_file = ' "${_dir}/rclone.conf" 2>/dev/null; then
-            log-info "Restarting mount ${_unit} onto ${_key}"
-            systemd-restart "remote-mount@${_unit}" && ((_switched++)) || ((_failed++)) || true
-            continue
-        fi
-        if rclone rc --unix-socket "${_dir}/rc.sock" backend/command command=set "fs=${_unit}:" \
-                -o "service_account_file=${_file}" >/dev/null 2>&1; then
+        if rclone-rc-unix "${_dir}/rc.sock" backend/command command=set "fs=${_unit}:" "opt=${_opt}" >/dev/null 2>&1; then
             log-info "Switched mount ${_unit} to ${_key}"
-            # Keep the rendered conf truthful for the next rotation's check.
+            # The runtime conf keeps saying what the process actually runs on.
             _remote-pool-render-rclone-conf "${_unit}" "${_pool}" > "${_dir}/rclone.conf.tmp" &&
                 mv -f "${_dir}/rclone.conf.tmp" "${_dir}/rclone.conf"
             ((_switched++)) || true
@@ -501,27 +533,25 @@ remote-pool() {
     _pools="${1:-$(_remote-config-pool-names)}"
     [[ -z "${_pools}" ]] && { log-error "No pools in pools.json"; return 1; }
 
-    local _pool _state _current _now _key _ex _frees _file _mark _ktype _decl
+    local _pool _state _current _now _key _ex _frees _file _mark
     _now=$(date +%s)
     while read -r _pool; do
         [[ -z "${_pool}" ]] && continue
         _remote-pool-require "${_pool}" || continue
         _state=$(_remote-pool-state "${_pool}")
         _current=$(jq -r '.current // ""' <<< "${_state}")
-        _decl=$(_remote-config-pool-type "${_pool}")
-        echo "${_pool} (${_decl:-any type}, window: ${REMOTE_POOL_QUOTA_WINDOW}s)"
-        printf "  %-3s %-66s %-16s %-8s %s\n" "" "KEY" "TYPE" "FILE" "STATE"
+        echo "${_pool} (window: ${REMOTE_POOL_QUOTA_WINDOW}s)"
+        printf "  %-3s %-66s %-8s %s\n" "" "KEY" "FILE" "STATE"
         while read -r _key; do
             [[ -z "${_key}" ]] && continue
             _mark=""; [[ "${_key}" == "${_current}" ]] && _mark="*"
             _file="bad"; _remote-pool-key-file "${_pool}" "${_key}" >/dev/null 2>&1 && _file="ok"
-            _ktype=$(_remote-pool-key-type "${_key}" 2>/dev/null) || _ktype="?"
             _ex=$(jq -r --arg k "${_key}" '.exhausted[$k] // 0' <<< "${_state}")
             if (( _ex + REMOTE_POOL_QUOTA_WINDOW > _now )); then
                 _frees=$(date -d "@$(( _ex + REMOTE_POOL_QUOTA_WINDOW ))" '+%F %T')
-                printf "  %-3s %-66s %-16s %-8s exhausted, frees %s\n" "${_mark}" "${_key}" "${_ktype}" "${_file}" "${_frees}"
+                printf "  %-3s %-66s %-8s exhausted, frees %s\n" "${_mark}" "${_key}" "${_file}" "${_frees}"
             else
-                printf "  %-3s %-66s %-16s %-8s available\n" "${_mark}" "${_key}" "${_ktype}" "${_file}"
+                printf "  %-3s %-66s %-8s available\n" "${_mark}" "${_key}" "${_file}"
             fi
         done <<< "$(_remote-config-pool-keys "${_pool}")"
         echo ""
@@ -636,7 +666,7 @@ remote-health() {
 
     # Declared outside the loop: re-running a bare `local x` on an already
     # set variable makes zsh print it, which spammed the journal every run.
-    local _unit _mountpoint _root_remote _mount_path _pool
+    local _unit _mountpoint _root_remote _mount_path _pool _sock _stats _healthy
     while read -r _unit; do
         [[ -z "${_unit}" ]] && continue
         systemd-is-enabled "remote-mount@${_unit}" || continue
@@ -645,11 +675,17 @@ remote-health() {
         _mountpoint=$(_remote-config-unit-mountpoint "${_unit}")
         _root_remote=$(_remote-config-root "remote")
         _mount_path="${_root_remote}/${_mountpoint}"
+        _sock="$(xdg-runtime-dir "remote")/${_unit}/rc.sock"
 
-        local _healthy=true
+        _healthy=true
         rclone-is-mounted "${_mount_path}" || _healthy=false
         if [[ "${_healthy}" == "true" ]]; then
             timeout --kill-after=5s 10s stat "${_mount_path}" >/dev/null 2>&1 || _healthy=false
+        fi
+        # Sync and rotate both go through the socket, so a mount that still
+        # serves I/O but no longer answers rc is unhealthy too.
+        if [[ "${_healthy}" == "true" ]]; then
+            rclone-rc-alive "${_sock}" || _healthy=false
         fi
 
         if [[ "${_healthy}" != "true" ]]; then
@@ -660,14 +696,17 @@ remote-health() {
         fi
         log-debug "Healthy: ${_unit}"
 
-        # A mount on a multi-key pool that hit the upload cap through its
-        # VFS writeback keeps retrying forever; the cap error in its log
-        # since the last rotation is the signal to move the pool on.
+        # A cap hit that nothing handled - a VFS writeback upload, or a
+        # sync job whose `remote sync` died before it could rotate - sits
+        # in the process's stats as lastError. remote-sync resets its own
+        # group after rotating, so what is still there here is unhandled.
         _pool=$(_remote-config-unit-pool "${_unit}")
         _remote-pool-rotates "${_pool}" || continue
-        if _remote-pool-log-hit "$(xdg-runtime-dir "remote")/${_unit}/rclone.log" "$(_remote-pool-rotated-at "${_pool}")"; then
+        _stats=$(rclone-rc-unix "${_sock}" core/stats short=true 2>/dev/null) || continue
+        if [[ "$(jq -r '.lastError // ""' <<< "${_stats}")" == *"${_REMOTE_POOL_QUOTA_MSG}"* ]]; then
             log-warning "Upload cap hit on mount ${_unit} - rotating pool ${_pool}"
             remote-rotate --if-current "$(_remote-pool-current "${_pool}")" "${_pool}" && ((_rotated++)) || true
+            rclone-rc-unix "${_sock}" core/stats-reset >/dev/null 2>&1 || true
         fi
     done <<< "${_units}"
 

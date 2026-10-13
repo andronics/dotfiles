@@ -3,13 +3,16 @@
 # _remote_pool - credential key selection, rendering and rotation for _remote
 # Part of the dotfiles library v2.0
 #
-# Every pools.json entry is a pool: an ordered list of keys, each a
-# JSON file under $XDG_CONFIG_HOME/remote/keys/ that is either an rclone
-# OAuth blob or a Google service-account key (a pool may hold both). One
-# key is "current"; a single-key pool never rotates. Google Drive caps uploads at ~750G per identity per rolling
-# 24h, so a multi-key pool (service accounts that are all members of the
-# same shared drives) uploads through the current key until Drive answers
-# "User rate limit exceeded.", then advances to the next one.
+# Every pools.json entry is a pool: an ordered list of Google service
+# account keys, each a JSON file under $XDG_CONFIG_HOME/remote/keys/. One
+# key is "current"; a single-key pool never rotates. Google Drive caps
+# uploads at ~750G per identity per rolling 24h, so a multi-key pool
+# (service accounts that are all members of the same shared drives)
+# uploads through the current key until Drive answers "User rate limit
+# exceeded.", then advances to the next one. Only service accounts: they
+# are the only credential rclone can swap on a live backend, which is what
+# lets a rotation move a mount and the sync job inside it without a
+# remount.
 #
 # Key files are tracked behind git-crypt (keep them 0600 in a 0700 dir).
 # Nothing at runtime needs gpg or pass, so pool-backed mounts start
@@ -42,9 +45,9 @@ source "${DOTLIB}/_remote_config" || { echo "[ERROR] _remote_pool requires _remo
 declare -g REMOTE_POOL_QUOTA_WINDOW="${REMOTE_POOL_QUOTA_WINDOW:-86400}"
 
 # The exact message rclone's drive backend treats as the daily upload cap
-# (and makes fatal under --drive-stop-on-upload-limit). Case matters: the
-# per-request throttle is "User Rate Limit Exceeded" and is retried, not
-# rotated.
+# (and makes fatal under stop_on_upload_limit); matched against the error
+# a sync job or the mount's stats report. Case matters: the per-request
+# throttle is "User Rate Limit Exceeded" and is retried, not rotated.
 declare -gr _REMOTE_POOL_QUOTA_MSG="User rate limit exceeded."
 
 # ------------------------------
@@ -190,34 +193,17 @@ _remote-pool-advance() {
 # Key material
 # ------------------------------
 
-# Usage: _remote-pool-key-type <key>
-# What the key file is: "service_account", "oauth", or nothing (and
-# return 1) when it is neither - which is also what a file left encrypted
-# by a missing git-crypt unlock looks like.
-_remote-pool-key-type() {
-    local _path _t
-    _path=$(_remote-pool-key-path "$1")
-    [[ -f "${_path}" ]] || return 1
-    _t=$(jq -r --arg k "$1" '
-        if (.type == "service_account" and .client_email == $k) then "service_account"
-        elif ((.client_id | strings) and (.client_secret | strings) and (.token.refresh_token | strings)) then "oauth"
-        else empty end' "${_path}" 2>/dev/null) || return 1
-    [[ -n "${_t}" ]] || return 1
-    echo "${_t}"
-}
-
 # Usage: _remote-pool-key-file <pool> <key>
-# Prints the key's path after checking it is a usable key, of the pool's
-# declared type when it declares one.
+# Prints the key's path after checking it parses as a service-account key
+# for that client_email. A file still encrypted because git-crypt was never
+# unlocked fails this check too, which is what makes `remote verify` catch
+# it before a mount is attempted.
 _remote-pool-key-file() {
-    local _pool="$1" _key="$2" _path _type _want
+    local _pool="$1" _key="$2" _path
     _path=$(_remote-pool-key-path "${_key}")
     [[ -f "${_path}" ]] || { log-error "Pool ${_pool}: key file missing: ${_path}"; return 1; }
-    _type=$(_remote-pool-key-type "${_key}") ||
-        { log-error "Pool ${_pool}: ${_path} is not a usable key for ${_key} (git-crypt not unlocked?)"; return 1; }
-    _want=$(_remote-config-pool-type "${_pool}")
-    [[ -z "${_want}" || "${_want}" == "${_type}" ]] ||
-        { log-error "Pool ${_pool}: ${_key} is a ${_type} key but the pool is declared ${_want}"; return 1; }
+    jq -e --arg k "${_key}" '.type == "service_account" and .client_email == $k' "${_path}" >/dev/null 2>&1 ||
+        { log-error "Pool ${_pool}: ${_path} is not a service-account key for ${_key} (git-crypt not unlocked?)"; return 1; }
     echo "${_path}"
 }
 
@@ -230,39 +216,20 @@ _remote-pool-render-rclone-conf() {
     _key=$(_remote-pool-current "${_pool}") || return 1
     _file=$(_remote-pool-key-file "${_pool}" "${_key}") || return 1
 
+    # The drive-side upload tuning lives here rather than on the sync call:
+    # a sync job must resolve to the mount's own fs instance (so one
+    # `backend set` moves both), and only the instance's config can carry
+    # backend options. 128M chunks: Drive charges a fixed round-trip per
+    # chunk, at the 8M default a stream idled about half the time.
+    # stop_on_upload_limit makes the daily cap a fatal error the job or
+    # the mount's stats report, instead of hours of silent retries.
     echo "[${_unit}]"
     echo "type = drive"
-    case "$(_remote-pool-key-type "${_key}")" in
-        service_account)
-            echo "scope = drive"
-            echo "service_account_file = ${_file}"
-            ;;
-        oauth)
-            # token must be one line: rclone parses the value as JSON.
-            jq -r '"client_id = \(.client_id)",
-                   "client_secret = \(.client_secret)",
-                   "scope = \(.scope // "drive")",
-                   "token = \(.token | tojson)"' "${_file}"
-            ;;
-    esac
-    echo "root_folder_id = $(_remote-config-unit-root-folder-id "${_unit}")"
+    echo "scope = drive"
+    echo "service_account_file = ${_file}"
     echo "team_drive = $(_remote-config-unit-drive-id "${_unit}")"
-}
-
-# ------------------------------
-# Detection
-# ------------------------------
-
-# Usage: _remote-pool-log-hit <rclone.log> <since-epoch>
-# True when the log has an upload-cap error newer than <since-epoch>.
-# rclone stamps lines as "2006/01/02 15:04:05", which date(1) parses as-is.
-_remote-pool-log-hit() {
-    local _log="$1" _since="${2:-0}" _line _ts
-    [[ -f "${_log}" ]] || return 1
-    _line=$(grep -F "${_REMOTE_POOL_QUOTA_MSG}" "${_log}" | tail -n 1)
-    [[ -z "${_line}" ]] && return 1
-    _ts=$(date -d "${_line[1,19]}" +%s 2>/dev/null) || return 1
-    (( _ts > _since ))
+    echo "chunk_size = 128M"
+    echo "stop_on_upload_limit = true"
 }
 
 # Units whose mount runs on this pool - the ones a rotation must switch live.
