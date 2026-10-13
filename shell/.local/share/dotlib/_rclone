@@ -1884,6 +1884,113 @@ rclone-rc-call() {
     return $?
 }
 
+# Call an rc endpoint on a unix socket
+#
+# Function: rclone-rc-unix
+# Description: Call an rc endpoint of an rclone process listening on a unix
+#   socket (e.g. a mount started with --rc-addr unix://...). Prints the JSON
+#   reply. Parameters are key=value; a value that is a JSON object or array
+#   is sent as such, anything else as a string, which is what rclone's own
+#   key=value form sends (some endpoints, e.g. vfs/refresh, reject a real
+#   JSON boolean). rclone refuses --json together with key=value args, so
+#   the whole request is assembled into one JSON body - that is also the
+#   only way nested parameters such as _config and _filter can be passed.
+# Parameters:
+#   $1 - Socket path (required)
+#   $2 - Endpoint (required, e.g. "core/stats")
+#   $@ - key=value parameters (optional)
+# Returns:
+#   0 - Success
+#   1 - Socket missing or rc error
+#   2 - Invalid argument
+# Example:
+#   rclone-rc-unix "$sock" sync/move srcFs=/src dstFs=unit: _async=true \
+#       _group=sync-unit '_config={"Transfers":8}'
+#
+rclone-rc-unix() {
+    local sock="$1" endpoint="$2"
+    shift 2
+
+    validate-type-string "$sock" || return 2
+    validate-type-string "$endpoint" || return 2
+    [[ -S "$sock" ]] || { log-error "No rc socket" "path=$sock"; return 1; }
+
+    local -a jq_args=()
+    local body='{}' kv key value
+    for kv in "$@"; do
+        key="${kv%%=*}"
+        value="${kv#*=}"
+        if [[ "$value" == [\{\[]* ]]; then
+            body=$(jq -c --arg k "$key" --argjson v "$value" '.[$k] = $v' <<< "$body") || return 2
+        else
+            body=$(jq -c --arg k "$key" --arg v "$value" '.[$k] = $v' <<< "$body") || return 2
+        fi
+    done
+
+    rclone rc --unix-socket "$sock" "$endpoint" --json "$body"
+}
+
+# Wait for an async rc job
+#
+# Function: rclone-rc-job-wait
+# Description: Poll job/status until the job finishes, then print its final
+#   status JSON (fields: finished, success, error, duration, output, ...).
+# Parameters:
+#   $1 - Socket path (required)
+#   $2 - Job id (required)
+#   $3 - Poll interval in seconds (optional, default 5)
+# Returns:
+#   0 - Job finished successfully
+#   1 - Job failed, or the socket stopped answering
+# Example:
+#   status=$(rclone-rc-job-wait "$sock" "$jobid") || echo "failed: $(jq -r .error <<< "$status")"
+#
+rclone-rc-job-wait() {
+    local sock="$1" jobid="$2" interval="${3:-5}" job_status
+
+    validate-type-string "$jobid" || return 2
+
+    while true; do
+        job_status=$(rclone-rc-unix "$sock" job/status "jobid=$jobid") || return 1
+        [[ "$(jq -r '.finished' <<< "$job_status")" == "true" ]] && break
+        sleep "$interval"
+    done
+
+    echo "$job_status"
+    [[ "$(jq -r '.success' <<< "$job_status")" == "true" ]]
+}
+
+# Stop an async rc job
+#
+# Function: rclone-rc-job-stop
+# Parameters:
+#   $1 - Socket path (required)
+#   $2 - Job id (required)
+# Returns:
+#   0 - Stop request accepted
+#   1 - rc error (unknown job, socket gone)
+#
+rclone-rc-job-stop() {
+    rclone-rc-unix "$1" job/stop "jobid=$2" >/dev/null
+}
+
+# Probe an rc socket
+#
+# Function: rclone-rc-alive
+# Description: True when the process behind the socket answers core/pid
+#   within 10s. A wedged rclone keeps its socket file, so a bounded call
+#   is what tells "listening" from "alive".
+# Parameters:
+#   $1 - Socket path (required)
+# Returns:
+#   0 - Alive
+#   1 - No answer in time, or no socket
+#
+rclone-rc-alive() {
+    [[ -S "$1" ]] || return 1
+    timeout --kill-after=5s 10s rclone rc --unix-socket "$1" core/pid >/dev/null 2>&1
+}
+
 # Get RC stats
 #
 # Function: rclone-rc-stats
