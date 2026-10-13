@@ -1,139 +1,139 @@
 {
     "arc-code": {
-        "credentials": "stevie@andronics.io",
         "drive_id": "0AMN8oIdNrZNRUk9PVA",
-        "mountpoint": "arc/code"
+        "mountpoint": "arc/code",
+        "pool": "stevie@andronics.io"
     },
     "arc-databases": {
-        "credentials": "stevie@andronics.io",
         "drive_id": "0APceCTPYS7TWUk9PVA",
-        "mountpoint": "arc/databases"
+        "mountpoint": "arc/databases",
+        "pool": "stevie@andronics.io"
     },
     "arc-orgs": {
-        "credentials": "stevie@andronics.io",
         "drive_id": "0ADWPhFvl1WJAUk9PVA",
-        "mountpoint": "arc/orgs"
+        "mountpoint": "arc/orgs",
+        "pool": "stevie@andronics.io"
     },
     "arc-svcs": {
-        "credentials": "stevie@andronics.io",
         "drive_id": "0AM72Xz8cgrZIUk9PVA",
-        "mountpoint": "arc/svcs"
+        "mountpoint": "arc/svcs",
+        "pool": "stevie@andronics.io"
     },
     "arc-vaults": {
-        "credentials": "stevie@andronics.io",
         "drive_id": "0ACb2yOcTuiJRUk9PVA",
-        "mountpoint": "arc/vaults"
+        "mountpoint": "arc/vaults",
+        "pool": "stevie@andronics.io"
     },
     "arc-volumes": {
-        "credentials": "stevie@andronics.io",
         "drive_id": "0AMIVKA3NTddpUk9PVA",
-        "mountpoint": "arc/volumes"
+        "mountpoint": "arc/volumes",
+        "pool": "stevie@andronics.io"
     },
     "doc-live": {
-        "credentials": "andronics@gmail.com",
         "mountpoint": "doc/live",
-        "root_folder_id": "1wD4ySd5U1bYQsCdGPE9CcXIxP9sCOyD3"
+        "root_folder_id": "1wD4ySd5U1bYQsCdGPE9CcXIxP9sCOyD3",
+        "pool": "andronics@gmail.com"
     },
     "media-adult": {
-        "credentials": "stevie@andronics.io",
         "drive_id": "0AGxPmBlhop0sUk9PVA",
-        "mountpoint": "media/adult"
+        "mountpoint": "media/adult",
+        "pool": "stevie@andronics.io"
     },
     "media-audiobooks": {
-        "credentials": "stevie@andronics.io",
         "drive_id": "0AKt8-k3Md30NUk9PVA",
-        "mountpoint": "media/audiobooks"
+        "mountpoint": "media/audiobooks",
+        "pool": "stevie@andronics.io"
     },
     "media-courses": {
-        "credentials": "stevie@andronics.io",
         "drive_id": "0AOIRi6eDa52tUk9PVA",
-        "mountpoint": "media/courses"
+        "mountpoint": "media/courses",
+        "pool": "stevie@andronics.io"
     },
     "media-documentaries": {
-        "credentials": "stevie@andronics.io",
         "drive_id": "0AEFirVgB3etjUk9PVA",
-        "mountpoint": "media/documentaries"
+        "mountpoint": "media/documentaries",
+        "pool": "stevie@andronics.io"
     },
     "media-ebooks": {
-        "credentials": "stevie@andronics.io",
         "drive_id": "0APewWtC6aSPXUk9PVA",
-        "mountpoint": "media/ebooks"
+        "mountpoint": "media/ebooks",
+        "pool": "stevie@andronics.io"
     },
     "media-movies": {
-        "credentials": "stevie@andronics.io",
         "drive_id": "0ALyonjJNrlRoUk9PVA",
         "cache_max_size": "150G",
-        "mountpoint": "media/movies"
+        "mountpoint": "media/movies",
+        "pool": "stevie@andronics.io"
     },
     "media-music": {
-        "credentials": "stevie@andronics.io",
         "drive_id": "0AISKLrkHRzwVUk9PVA",
-        "mountpoint": "media/music"
+        "mountpoint": "media/music",
+        "pool": "stevie@andronics.io"
     },
     "media-photos": {
-        "credentials": "stevie@andronics.io",
         "drive_id": "0ALEC-6d4Pl4IUk9PVA",
-        "mountpoint": "media/photos"
+        "mountpoint": "media/photos",
+        "pool": "stevie@andronics.io"
     },
     "media-roms": {
-        "credentials": "stevie@andronics.io",
         "drive_id": "0AKEOFfIIMb6nUk9PVA",
-        "mountpoint": "media/roms"
+        "mountpoint": "media/roms",
+        "pool": "stevie@andronics.io"
     },
     "media-standup": {
-        "credentials": "stevie@andronics.io",
         "drive_id": "0AADBSzPZztTmUk9PVA",
-        "mountpoint": "media/standup"
+        "mountpoint": "media/standup",
+        "pool": "stevie@andronics.io"
     },
     "media-tv": {
-        "credentials": "stevie@andronics.io",
         "drive_id": "0AEBmM5-iPnADUk9PVA",
         "cache_max_size": "150G",
-        "mountpoint": "media/tv"
+        "mountpoint": "media/tv",
+        "pool": "stevie@andronics.io"
     },
     "org-andronics": {
-        "credentials": "stevie@andronics.io",
         "drive_id": "0AG9lal-RGS-WUk9PVA",
-        "mountpoint": "org/andronics"
+        "mountpoint": "org/andronics",
+        "pool": "stevie@andronics.io"
     },
     "org-charities": {
-        "credentials": "stevie@andronics.io",
         "drive_id": "0AN_lczYRXTRLUk9PVA",
-        "mountpoint": "org/charities"
+        "mountpoint": "org/charities",
+        "pool": "stevie@andronics.io"
     },
     "org-foxie-systems": {
-        "credentials": "stevie@andronics.io",
         "drive_id": "0AGlcHl_7Owg6Uk9PVA",
-        "mountpoint": "org/foxie-systems"
+        "mountpoint": "org/foxie-systems",
+        "pool": "stevie@andronics.io"
     },
     "res-fonts": {
-        "credentials": "stevie@andronics.io",
         "drive_id": "0ABMFR63ZcP_dUk9PVA",
-        "mountpoint": "res/fonts"
+        "mountpoint": "res/fonts",
+        "pool": "stevie@andronics.io"
     },
     "res-iso": {
-        "credentials": "stevie@andronics.io",
         "drive_id": "0ACZpCirf99_QUk9PVA",
-        "mountpoint": "res/iso"
+        "mountpoint": "res/iso",
+        "pool": "stevie@andronics.io"
     },
     "res-logos": {
-        "credentials": "stevie@andronics.io",
         "drive_id": "0ANiJHtcSGkkgUk9PVA",
-        "mountpoint": "res/logos"
+        "mountpoint": "res/logos",
+        "pool": "stevie@andronics.io"
     },
     "res-people": {
-        "credentials": "stevie@andronics.io",
         "drive_id": "0ABfflfR7bedwUk9PVA",
-        "mountpoint": "res/people"
+        "mountpoint": "res/people",
+        "pool": "stevie@andronics.io"
     },
     "res-wallpaper": {
-        "credentials": "stevie@andronics.io",
         "drive_id": "0ABvydAC-sbcUUk9PVA",
-        "mountpoint": "res/wallpaper"
+        "mountpoint": "res/wallpaper",
+        "pool": "stevie@andronics.io"
     },
     "transfer-complete": {
-        "credentials": "stevie@andronics.io",
         "drive_id": "0AHnNkQRuedBqUk9PVA",
-        "mountpoint": "transfer/complete"
+        "mountpoint": "transfer/complete",
+        "pool": "remote-mount-mgr"
     }
 }
