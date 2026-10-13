@@ -68,6 +68,9 @@ typeset -gA _REMOTE_DESCRIPTIONS=(
     [status]="Show systemd status for all remote-mount units"
     [rotate]="Advance a credential pool to its next key and move live mounts onto it"
     [pool]="Show credential pool state (current key, exhausted keys, key-file health)"
+    [stats]="Live transfer stats per mounted unit (speed, bytes, files, errors)"
+    [jobs]="Running rc jobs per mounted unit (sync, dir-cache refresh)"
+    [throttle]="Set or clear a bandwidth limit on mounted units without a restart"
 )
 
 # Usage: _remote-require-unit <unit> || return 1
@@ -556,6 +559,98 @@ remote-pool() {
         done <<< "$(_remote-config-pool-keys "${_pool}")"
         echo ""
     done <<< "${_pools}"
+}
+
+# ------------------------------
+# rc views
+# ------------------------------
+
+# Usage: remote-stats [pattern]
+# What each mounted unit's rclone process is doing right now, from
+# core/stats: the sum over the sync job and the VFS. SPEED is the current
+# rate over files in flight; BYTES and FILES count since the process
+# started or its stats were last reset.
+remote-stats() {
+    local _pattern="${1:-*}" _units
+    _units=$(_remote-patterns-match-units "${_pattern}")
+    [[ -z "${_units}" ]] && { log-error "No units match pattern: ${_pattern}"; return 1; }
+
+    printf "%-22s %10s %10s %6s %6s  %s\n" "UNIT" "SPEED" "BYTES" "FILES" "ERRORS" "LAST ERROR"
+    local _unit _sock _st
+    while read -r _unit; do
+        [[ -z "${_unit}" ]] && continue
+        _sock="$(xdg-runtime-dir "remote")/${_unit}/rc.sock"
+        [[ -S "${_sock}" ]] || continue
+        _st=$(rclone-rc-unix "${_sock}" core/stats 2>/dev/null) ||
+            { printf "%-22s %s\n" "${_unit}" "(rc not answering)"; continue; }
+        jq -r --arg u "${_unit}" '
+            def iec: if . >= 1073741824 then "\((. / 1073741824 * 10 | round) / 10)G"
+                     elif . >= 1048576 then "\(. / 1048576 | round)M"
+                     elif . >= 1024 then "\(. / 1024 | round)K"
+                     else "\(. | round)B" end;
+            [ $u,
+              (([.transferring[]?.speedAvg // 0] | add // 0 | iec) + "/s"),
+              (.bytes // 0 | iec),
+              (.transfers // 0 | tostring),
+              (.errors // 0 | tostring),
+              ((.lastError // "") | .[0:60]) ] | @tsv' <<< "${_st}" |
+            awk -F'\t' '{ printf "%-22s %10s %10s %6s %6s  %s\n", $1, $2, $3, $4, $5, $6 }'
+    done <<< "${_units}"
+}
+
+# Usage: remote-jobs [pattern]
+# Jobs running inside each mounted unit's process: a sync (group
+# sync-<unit>) or a dir-cache refresh from remote-warm.
+remote-jobs() {
+    local _pattern="${1:-*}" _units
+    _units=$(_remote-patterns-match-units "${_pattern}")
+    [[ -z "${_units}" ]] && { log-error "No units match pattern: ${_pattern}"; return 1; }
+
+    printf "%-22s %6s %-24s %s\n" "UNIT" "JOB" "GROUP" "RUNNING FOR"
+    local _unit _sock _list _id _st _started _found=0 _t0
+    while read -r _unit; do
+        [[ -z "${_unit}" ]] && continue
+        _sock="$(xdg-runtime-dir "remote")/${_unit}/rc.sock"
+        [[ -S "${_sock}" ]] || continue
+        # rclone runs every rc call as a job, so job/list reports itself as
+        # running; anything started after this timestamp is our own call.
+        _t0=$(date +%s.%N)
+        _list=$(rclone-rc-unix "${_sock}" job/list 2>/dev/null) || continue
+        while read -r _id; do
+            [[ -z "${_id}" ]] && continue
+            _st=$(rclone-rc-unix "${_sock}" job/status "jobid=${_id}" 2>/dev/null) || continue
+            _started=$(date -d "$(jq -r '.startTime' <<< "${_st}")" +%s.%N 2>/dev/null) || continue
+            (( _started >= _t0 )) && continue
+            printf "%-22s %6s %-24s %.0fs\n" "${_unit}" "${_id}" "$(jq -r '.group // "-"' <<< "${_st}")" "$(( _t0 - _started ))"
+            ((_found++)) || true
+        done <<< "$(jq -r '.runningIds[]?' <<< "${_list}")"
+    done <<< "${_units}"
+    (( _found == 0 )) && echo "(no running jobs)"
+    return 0
+}
+
+# Usage: remote-throttle <unit|pattern> <rate|off>
+# core/bwlimit on each matching mounted unit, same syntax as --bwlimit
+# ("10M", "5M:1M" for up:down, "off"). Takes effect on transfers in
+# flight and lasts until the mount restarts; nothing persists it.
+remote-throttle() {
+    local _pattern="$1" _rate="$2"
+    [[ -z "${_pattern}" || -z "${_rate}" ]] && { log-error "Usage: remote throttle <unit|pattern> <rate|off>"; return 1; }
+    local _units
+    _units=$(_remote-patterns-match-units "${_pattern}")
+    [[ -z "${_units}" ]] && { log-error "No units match pattern: ${_pattern}"; return 1; }
+
+    local _unit _sock _r _n=0
+    while read -r _unit; do
+        [[ -z "${_unit}" ]] && continue
+        _sock="$(xdg-runtime-dir "remote")/${_unit}/rc.sock"
+        [[ -S "${_sock}" ]] || continue
+        _r=$(rclone-rc-unix "${_sock}" core/bwlimit "rate=${_rate}" 2>/dev/null) ||
+            { log-error "Failed to set bandwidth limit on ${_unit}"; continue; }
+        log-info "${_unit}: bandwidth limit $(jq -r '.rate' <<< "${_r}")"
+        ((_n++)) || true
+    done <<< "${_units}"
+    (( _n > 0 )) || { log-error "No mounted unit matches ${_pattern}"; return 1; }
 }
 
 # ------------------------------

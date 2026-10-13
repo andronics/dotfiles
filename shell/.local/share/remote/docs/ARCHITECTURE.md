@@ -144,6 +144,9 @@ The 17 subcommand functions, grouped below. `--dry-run` is a
 | `status` | direct `systemctl --user list-units "remote-mount@*"` | No `_systemd` equivalent for a glob-filtered listing |
 | `rotate [--if-current <key>] <pool>` | `_remote-pool-advance`, `rclone-rc-unix backend/command set` | Next pool key; every live mount on the pool (and any sync job inside it) switches without a remount |
 | `pool [pool]` | | Current / exhausted state and key-file health per key |
+| `stats [pattern]` | `rclone-rc-unix core/stats` | Per mounted unit: current speed, bytes, files, errors, last error |
+| `jobs [pattern]` | `rclone-rc-unix job/list`, `job/status` | Running jobs inside each mount process (sync, dir-cache refresh) |
+| `throttle <unit\|pattern> <rate\|off>` | `rclone-rc-unix core/bwlimit` | Bandwidth limit on live mounts, no restart; not persisted |
 
 ### Why `mount` doesn't delegate to `_rclone`
 
@@ -185,8 +188,8 @@ revoked token) still passes that check while actual I/O hangs. A bounded
 inside the sweep loop specifically so one stuck probe can't block the rest
 of the sweep, even in that worst case.
 
-No consecutive-failure backoff — a persistently broken unit (e.g. revoked
-OAuth grant) gets a restart attempt every 10 minutes indefinitely. Considered
+No consecutive-failure backoff — a persistently broken unit (e.g. a deleted
+service account) gets a restart attempt every 10 minutes indefinitely. Considered
 and deliberately skipped for now; add it later if it turns out to matter in
 practice.
 
