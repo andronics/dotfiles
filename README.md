@@ -96,7 +96,7 @@ pass entries        ← github.com/andronics/password-store (private)
    │ pass show git/crypt-key
 git-crypt key       ← 32-byte symmetric key, never on disk in plaintext
    │ AES via git clean/smudge
-*.env files         ← tracked in this (public) repo
+encrypted files     ← *.env, remote service-account keys (tracked in this public repo)
 ```
 
 Patterns under git-crypt are declared in `.gitattributes` at the repo root. The clean/smudge filters are wired automatically by `shell/.postinstall` on first install — it runs `./shell/.local/bin/git-crypt init` if `.gitattributes` declares the filter and `.git/config` doesn't yet have it.
@@ -108,7 +108,7 @@ cd ~/.dotfiles && ./shell/.local/bin/git-crypt init
 git checkout HEAD -- .       # re-checkout to materialize decrypted contents
 ```
 
-Currently no files are encrypted — the wiring is symbolic. Add a pattern to `.gitattributes` and re-add the matching files (`git rm --cached <file>; git add <file>`) to start encrypting.
+Currently encrypted: `*.env` and the `remote` service-account key files under `shell/.config/remote/keys/`. To encrypt more, add a pattern to `.gitattributes` and re-add the matching files (`git rm --cached <file>; git add <file>`).
 
 > The `git-crypt` script in this repo is a custom openssl-based implementation, not Andrew Ayer's upstream `git-crypt` Arch package. Same clean/smudge concept; symmetric-only; deliberate.
 
