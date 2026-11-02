@@ -1,0 +1,136 @@
+#!/usr/bin/env zsh
+
+# _coord - coordinator switchboard: one hidden floating terminal per Claude
+# Code coordinator, summoned one at a time.
+#
+# Each coordinator window is alacritty with class `coord` and the
+# coordinator's name as instance. bspwmrc's `coord` rule makes it floating,
+# sticky, centred and hidden at birth. The session runs inside tmux
+# (`<name>-coordinator`), so closing the window only detaches it, and a
+# session started from another terminal is attached rather than duplicated.
+#
+# Usage:
+#   source "${DOTLIB}/_coord"
+#
+# Dependencies:
+#   Required:
+#     - _common, _log
+#   External:
+#     - bspwm (bspc), xprop, alacritty, tmux, flock
+#     - _coordinator from shell/.config/zsh/.zshrc.d/55-coordinators
+
+[[ -n "${COORD_LOADED:-}" ]] && return 0
+declare -gr COORD_LOADED=1
+
+source "${DOTLIB}/_common" || { echo "[ERROR] _coord requires _common" >&2; return 1; }
+source "${DOTLIB}/_log"    2>/dev/null || true
+
+declare -g _COORD_CLASS="coord"
+declare -g _COORD_LAUNCH_TIMEOUT="${COORD_LAUNCH_TIMEOUT:-10}"
+
+typeset -gA _COORD_DESCRIPTIONS=(
+    [toggle]="Show <name>'s window (launching it if needed), or hide it if it is focused"
+    [launch]="Start <name>'s window hidden, attaching to its tmux session if one exists"
+    [list]="List coordinator windows and whether each is hidden or visible"
+)
+
+# ------------------------------
+# Private Helpers
+# ------------------------------
+
+_coord-check-name() {
+    [[ "$1" =~ '^[a-z0-9][a-z0-9-]*$' ]] && return 0
+    log-error "[coord] invalid coordinator name: '$1'"
+    return 1
+}
+
+# Prints "<node> <instance>" for each coord window bspwm manages, narrowed by
+# an optional node-selector modifier such as `.!hidden`.
+_coord-windows() {
+    local _modifier=${1:-} _node _wm_class
+    for _node in ${(f)"$(bspc query -N -n ".window${_modifier}" 2>/dev/null)"}; do
+        _wm_class=$(xprop -id "$_node" WM_CLASS 2>/dev/null) || continue
+        [[ "$_wm_class" =~ "= \"([^\"]*)\", \"${_COORD_CLASS}\"\$" ]] && print -r -- "$_node ${match[1]}"
+    done
+}
+
+_coord-node() {
+    local _node _instance
+    _coord-windows | while read -r _node _instance; do
+        [[ "$_instance" == "$1" ]] && { print -r -- "$_node"; return 0; }
+    done
+}
+
+# Polls bspwm rather than X: the window exists in X a moment before bspwm
+# manages it, and bspc rejects a node it doesn't know yet.
+_coord-wait() {
+    local _node _tries=$(( _COORD_LAUNCH_TIMEOUT * 10 ))
+    while (( _tries-- > 0 )); do
+        _node=$(_coord-node "$1")
+        [[ -n "$_node" ]] && { print -r -- "$_node"; return 0; }
+        sleep 0.1
+    done
+    log-error "[coord] $1: no window after ${_COORD_LAUNCH_TIMEOUT}s"
+    return 1
+}
+
+# ------------------------------
+# Public
+# ------------------------------
+
+coord-launch() {
+    local _name=$1
+    _coord-check-name "$_name" || return 1
+
+    # `; exec zsh -i`: if claude exits or fails to start (e.g. 55-coordinators
+    # isn't loaded), the window keeps a shell showing why instead of vanishing.
+    setsid -f alacritty \
+        --class "${_COORD_CLASS},${_name}" \
+        --title "${_COORD_CLASS} - ${_name}" \
+        -e tmux new-session -A -s "${_name}-coordinator" \
+            "zsh -ic '_coordinator ${_name}; exec zsh -i'" \
+        </dev/null >/dev/null 2>&1
+}
+
+coord-toggle() {
+    local _name=$1 _node _other _instance
+    _coord-check-name "$_name" || return 1
+
+    # Serialises a double-tapped chord, so the second press finds the window
+    # the first one launched instead of launching another.
+    local _lock="${XDG_RUNTIME_DIR:-${HOME}/.cache}/coord-${_name}.lock" _fd
+    exec {_fd}>"$_lock"
+    flock -w "$_COORD_LAUNCH_TIMEOUT" "$_fd" || { exec {_fd}>&-; log-error "[coord] $_name: lock busy"; return 1; }
+
+    {
+        _node=$(_coord-node "$_name")
+        if [[ -z "$_node" ]]; then
+            # Subshell closes its copy of the lock fd so alacritty doesn't
+            # inherit it and hold the lock for its lifetime.
+            ( exec {_fd}>&-; coord-launch "$_name" ) || return 1
+            _node=$(_coord-wait "$_name") || return 1
+        fi
+
+        if bspc query -N -n "${_node}.focused.!hidden" >/dev/null 2>&1; then
+            bspc node "$_node" --flag hidden=on
+            return
+        fi
+
+        _coord-windows '.!hidden' | while read -r _other _instance; do
+            [[ "$_other" != "$_node" ]] && bspc node "$_other" --flag hidden=on
+        done
+
+        bspc node "$_node" --flag hidden=off --focus
+    } always {
+        exec {_fd}>&-
+    }
+}
+
+coord-list() {
+    local _node _instance _state
+    _coord-windows | while read -r _node _instance; do
+        _state=visible
+        bspc query -N -n "${_node}.hidden" >/dev/null 2>&1 && _state=hidden
+        printf '%-14s %-8s %s\n' "$_instance" "$_state" "$_node"
+    done
+}
