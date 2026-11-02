@@ -11,16 +11,16 @@ super + Return + {_, alt, shift}
   {$TERMINAL, terminal drop scratch, terminal draw}
 
 # launcher - gui
-super + space + {_, alt}
-  { rofi -show drun -show-icons, $HOME/.local/bin/apps }
+super + space
+  rofi -show drun -show-icons
 
 # preselect on {north, south, west, east} postion
 super + {Up, Down, Left, Right}
   bspc node -p "{~north,~south,~west,~east}"
 
-# focus on {north, south, west, east} node
-super + {Up, Down, Left, Right}  + alt
-  bspc node -f { north, south, west, east }
+# focus on {north, south} node
+super + {Up, Down} + alt
+  bspc node -f { north, south }
 
 # focus on {next,previous} desktop
 super + {n, p}
@@ -41,6 +41,14 @@ super + shift + c
 # coordinator - toggle {brain, template, folio, homelab, metalayerlab, apps, dotfiles}
 super + c ; {b, t, f, h, m, a, d}
   coord toggle {brain,template,folio,homelab,metalayerlab,apps,dotfiles}
+
+# coordinator - pick from menu
+super + alt + space
+  coord pick
+
+# coordinator - cycle {previous, next}
+super + alt + {Left, Right}
+  coord cycle {prev,next}
 
 # coordinator - dock inner edge {left, right}
 super + {bracketleft, bracketright}
