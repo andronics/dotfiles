@@ -42,6 +42,10 @@ super + shift + c
 super + c ; {b, t, f, h, m, a, d}
   coord toggle {brain,template,folio,homelab,metalayerlab,apps,dotfiles}
 
+# coordinator - dock width {narrower, wider}
+super + {bracketleft, bracketright}
+  coord width {-128,+128}
+
 # node - equalise
 super + e + {_, alt}
   bspc node {@parent, @/} --equalize
