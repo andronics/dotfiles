@@ -47,5 +47,6 @@ bspc rule -r "*:*:*"
 bspc rule -a Alacritty border=off
 
 # Coordinator switchboard (desktop/.local/bin/coord): born hidden, summoned by
-# `coord toggle <name>`. Half-width, centred on the 5120x1440 ultrawide.
-bspc rule -a coord state=floating sticky=on hidden=on center=on rectangle=2560x1280+0+0
+# `coord toggle <name>`, which docks it to the right edge and reserves that
+# strip with right_padding while it is shown, so no geometry here.
+bspc rule -a coord state=floating sticky=on hidden=on

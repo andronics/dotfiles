@@ -5,7 +5,10 @@
 #
 # Each coordinator window is alacritty with class `coord` and the
 # coordinator's name as instance. bspwmrc's `coord` rule makes it floating,
-# sticky, centred and hidden at birth. The session runs inside tmux
+# sticky and hidden at birth; showing one docks it to the right edge of the
+# focused monitor and sets that monitor's right_padding to its width, so tiled
+# windows give the strip up only while a coordinator is shown. The width is
+# persisted in ${XDG_STATE_HOME}/coord/width. The session runs inside tmux
 # (`<name>-coordinator`), so closing the window only detaches it, and a
 # session started from another terminal is attached rather than duplicated.
 #
@@ -16,7 +19,7 @@
 #   Required:
 #     - _common, _log
 #   External:
-#     - bspwm (bspc), xprop, alacritty, tmux, flock
+#     - bspwm (bspc), xprop, jq, alacritty, tmux, flock
 #     - _coordinator from shell/.config/zsh/.zshrc.d/55-coordinators
 
 [[ -n "${COORD_LOADED:-}" ]] && return 0
@@ -27,9 +30,12 @@ source "${DOTLIB}/_log"    2>/dev/null || true
 
 declare -g _COORD_CLASS="coord"
 declare -g _COORD_LAUNCH_TIMEOUT="${COORD_LAUNCH_TIMEOUT:-10}"
+declare -g _COORD_WIDTH_FILE="${XDG_STATE_HOME:-$HOME/.local/state}/coord/width"
+declare -gi _COORD_WIDTH_DEFAULT=1280 _COORD_WIDTH_MIN=640 _COORD_WIDTH_MAX=2560
 
 typeset -gA _COORD_DESCRIPTIONS=(
-    [toggle]="Show <name>'s window (launching it if needed), or hide it if it is focused"
+    [toggle]="Show <name>'s window docked right (launching it if needed), or hide it if it is focused"
+    [width]="Print the dock width, or set it with {+N|-N|N} (${_COORD_WIDTH_MIN}-${_COORD_WIDTH_MAX}), resizing a shown coordinator"
     [launch]="Start <name>'s window hidden, attaching to its tmux session if one exists"
     [list]="List coordinator windows and whether each is hidden or visible"
 )
@@ -74,6 +80,72 @@ _coord-wait() {
     return 1
 }
 
+_coord-width-clamp() {
+    local -i _width=$1
+    (( _width < _COORD_WIDTH_MIN )) && _width=_COORD_WIDTH_MIN
+    (( _width > _COORD_WIDTH_MAX )) && _width=_COORD_WIDTH_MAX
+    print -r -- "$_width"
+}
+
+_coord-width-get() {
+    local _width
+    _width=$(<"$_COORD_WIDTH_FILE") 2>/dev/null
+    [[ "$_width" =~ '^[0-9]+$' ]] || _width=$_COORD_WIDTH_DEFAULT
+    _coord-width-clamp "$_width"
+}
+
+# Docks the node to the right edge of <monitor> (default: the focused one,
+# moving it there), <width> wide including its border, between the top and
+# bottom padding, and reserves the strip with that monitor's right_padding.
+# bspc only moves and resizes floating windows relatively, hence the deltas
+# from the current floating rectangle.
+_coord-place() {
+    local _node=$1 _width=$2 _mon=${3:-}
+    local -i _mx _my _mw _mh _top _bottom _bw _fx _fy _fw _fh _x _y _w _h
+
+    [[ -n "$_mon" ]] || _mon=$(bspc query -M -m focused) || return 1
+    if [[ "$(bspc query -M -n "$_node")" != "$_mon" ]]; then
+        bspc node "$_node" --to-monitor "$_mon" || return 1
+    fi
+
+    read -r _mx _my _mw _mh <<< "$(bspc query -T -m "$_mon" \
+        | jq -r '.rectangle | "\(.x) \(.y) \(.width) \(.height)"')"
+    read -r _bw _fx _fy _fw _fh <<< "$(bspc query -T -n "$_node" \
+        | jq -r '.client | "\(.borderWidth) \(.floatingRectangle | "\(.x) \(.y) \(.width) \(.height)")"')"
+    # Per-monitor, not the global `bspc config`: tiled windows obey the
+    # monitor's own padding, which can differ from bspwmrc's global value.
+    _top=$(bspc config -m "$_mon" top_padding)
+    _bottom=$(bspc config -m "$_mon" bottom_padding)
+
+    # X draws the border outside the floating rectangle.
+    _x=$(( _mx + _mw - _width ))
+    _y=$(( _my + _top ))
+    _w=$(( _width - 2 * _bw ))
+    _h=$(( _mh - _top - _bottom - 2 * _bw ))
+
+    if (( _w != _fw || _h != _fh )); then
+        bspc node "$_node" --resize bottom_right $(( _w - _fw )) $(( _h - _fh ))
+    fi
+    if (( _x != _fx || _y != _fy )); then
+        bspc node "$_node" --move $(( _x - _fx )) $(( _y - _fy ))
+    fi
+    bspc config -m "$_mon" right_padding "$_width"
+}
+
+# Gives the strip back to tiled windows on every monitor no coordinator is
+# shown on. Assumes right_padding is otherwise 0, as bspwmrc sets it.
+_coord-unpad() {
+    local _node _instance _mon
+    local -A _held
+    _coord-windows '.!hidden' | while read -r _node _instance; do
+        _held[$(bspc query -M -n "$_node")]=1
+    done
+    for _mon in ${(f)"$(bspc query -M)"}; do
+        (( ${+_held[$_mon]} )) && continue
+        [[ "$(bspc config -m "$_mon" right_padding)" == 0 ]] || bspc config -m "$_mon" right_padding 0
+    done
+}
+
 # ------------------------------
 # Public
 # ------------------------------
@@ -113,14 +185,53 @@ coord-toggle() {
 
         if bspc query -N -n "${_node}.focused.!hidden" >/dev/null 2>&1; then
             bspc node "$_node" --flag hidden=on
+            _coord-unpad
             return
         fi
+
+        # Padding is set before the swap and released only after it, so
+        # swapping coordinators never lets tiled windows reflow into the strip.
+        _coord-place "$_node" "$(_coord-width-get)" || return 1
 
         _coord-windows '.!hidden' | while read -r _other _instance; do
             [[ "$_other" != "$_node" ]] && bspc node "$_other" --flag hidden=on
         done
 
         bspc node "$_node" --flag hidden=off --focus
+        _coord-unpad
+    } always {
+        exec {_fd}>&-
+    }
+}
+
+coord-width() {
+    local _arg=${1:-} _width _node _instance
+    if [[ -z "$_arg" ]]; then
+        _coord-width-get
+        return
+    fi
+    [[ "$_arg" =~ '^[+-]?[0-9]+$' ]] || { log-error "[coord] width: expected +N, -N or N, got '$_arg'"; return 1; }
+
+    # Serialises a held-down key's repeats, which would otherwise race on the
+    # read-modify-write of the width file.
+    local _lock="${XDG_RUNTIME_DIR:-${HOME}/.cache}/coord-width.lock" _fd
+    exec {_fd}>"$_lock"
+    flock -w "$_COORD_LAUNCH_TIMEOUT" "$_fd" || { exec {_fd}>&-; log-error "[coord] width: lock busy"; return 1; }
+
+    {
+        _width=$(_coord-width-get)
+        case "$_arg" in
+            [+-]*) _width=$(( _width + _arg )) ;;
+            *)     _width=$_arg ;;
+        esac
+        _width=$(_coord-width-clamp "$_width")
+
+        mkdir -p "${_COORD_WIDTH_FILE:h}" && print -r -- "$_width" >| "$_COORD_WIDTH_FILE" || return 1
+
+        _coord-windows '.!hidden' | while read -r _node _instance; do
+            _coord-place "$_node" "$_width" "$(bspc query -M -n "$_node")"
+        done
+        print -r -- "$_width"
     } always {
         exec {_fd}>&-
     }
