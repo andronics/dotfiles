@@ -43,7 +43,7 @@ declare -g _COORD_SIDE_DEFAULT=right
 
 typeset -gA _COORD_DESCRIPTIONS=(
     [toggle]="Show <name>'s window docked on the dock side's edge (launching it if needed), or hide it if it is focused"
-    [width]="Print the dock panel's visible width (the reserved strip adds bspwm's window_gap on each side), or set it with {+N|-N|N} (${_COORD_WIDTH_MIN}-${_COORD_WIDTH_MAX}) or move the inner edge with {left|right} [N] (default ${_COORD_WIDTH_STEP}), resizing a shown coordinator"
+    [width]="Print the dock panel's visible width (the reserved strip is that plus bspwm's window_gap), or set it with {+N|-N|N} (${_COORD_WIDTH_MIN}-${_COORD_WIDTH_MAX}) or move the inner edge with {left|right} [N] (default ${_COORD_WIDTH_STEP}), resizing a shown coordinator"
     [side]="Print the dock side, or set it with {left|right}, re-docking a shown coordinator"
     [launch]="Start <name>'s window hidden, attaching to its tmux session if one exists"
     [list]="List coordinator windows and whether each is hidden or visible"
