@@ -1,0 +1,23 @@
+# Claude Code coordinator sessions. Each one lives in /pool/local/actors/<name>/:
+#   PROMPT.md  its launch prompt (edit it there; these functions read it)
+#   README.md  what it owns
+#   memory/    a link to its Claude memory, for browsing
+# Its memory belongs to that home, so always launch from it. Extra arguments go
+# to claude, e.g. `folio-coordinator --model opus`. Check `tmux ls` / ListAgents
+# first: two of the same coordinator would both act. Vault cheatsheets:
+# "🤖 Launching the <Name> Coordinator".
+
+_coordinator() {
+  local home=/pool/local/actors/$1; shift
+  [ -r "$home/PROMPT.md" ] || { print -u2 "no prompt: $home/PROMPT.md"; return 1; }
+  cd "$home" || return
+  command claude --permission-mode bypassPermissions --dangerously-skip-permissions "$@" "$(<"$home/PROMPT.md")"
+}
+
+template-coordinator()     { _coordinator template "$@"; }
+brain-coordinator()        { _coordinator brain "$@"; }
+folio-coordinator()        { _coordinator folio "$@"; }
+homelab-coordinator()      { _coordinator homelab "$@"; }
+metalayerlab-coordinator() { _coordinator metalayerlab "$@"; }
+apps-coordinator()         { _coordinator apps "$@"; }
+dotfiles-coordinator()     { _coordinator dotfiles "$@"; }
