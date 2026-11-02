@@ -42,9 +42,13 @@ super + shift + c
 super + c ; {b, t, f, h, m, a, d}
   coord toggle {brain,template,folio,homelab,metalayerlab,apps,dotfiles}
 
-# coordinator - dock width {wider, narrower}
+# coordinator - dock inner edge {left, right}
 super + {bracketleft, bracketright}
-  coord width {+128,-128}
+  coord width {left,right}
+
+# coordinator - dock side {left, right}
+super + shift + {bracketleft, bracketright}
+  coord side {left,right}
 
 # node - equalise
 super + e + {_, alt}

@@ -5,12 +5,15 @@
 #
 # Each coordinator window is alacritty with class `coord` and the
 # coordinator's name as instance. bspwmrc's `coord` rule makes it floating,
-# sticky and hidden at birth; showing one docks it to the right edge of the
-# focused monitor and sets that monitor's right_padding to its width, so tiled
-# windows give the strip up only while a coordinator is shown. The width is
-# persisted in ${XDG_STATE_HOME}/coord/width. The session runs inside tmux
-# (`<name>-coordinator`), so closing the window only detaches it, and a
-# session started from another terminal is attached rather than duplicated.
+# sticky and hidden at birth; showing one docks it to the left or right edge
+# of the focused monitor and sets that monitor's left_padding or right_padding
+# to its width, so tiled windows give the strip up only while a coordinator is
+# shown. The width and side are persisted in ${XDG_STATE_HOME}/coord/{width,side}.
+# Width can be set absolutely, by delta, or by moving the panel's inner edge
+# `left`/`right`, which resolves to wider or narrower from the side. The
+# session runs inside tmux (`<name>-coordinator`), so closing the window only
+# detaches it, and a session started from another terminal is attached rather
+# than duplicated.
 #
 # Usage:
 #   source "${DOTLIB}/_coord"
@@ -32,10 +35,14 @@ declare -g _COORD_CLASS="coord"
 declare -g _COORD_LAUNCH_TIMEOUT="${COORD_LAUNCH_TIMEOUT:-10}"
 declare -g _COORD_WIDTH_FILE="${XDG_STATE_HOME:-$HOME/.local/state}/coord/width"
 declare -gi _COORD_WIDTH_DEFAULT=1280 _COORD_WIDTH_MIN=640 _COORD_WIDTH_MAX=2560
+declare -gi _COORD_WIDTH_STEP=128
+declare -g _COORD_SIDE_FILE="${XDG_STATE_HOME:-$HOME/.local/state}/coord/side"
+declare -g _COORD_SIDE_DEFAULT=right
 
 typeset -gA _COORD_DESCRIPTIONS=(
-    [toggle]="Show <name>'s window docked right (launching it if needed), or hide it if it is focused"
-    [width]="Print the dock width, or set it with {+N|-N|N} (${_COORD_WIDTH_MIN}-${_COORD_WIDTH_MAX}), resizing a shown coordinator"
+    [toggle]="Show <name>'s window docked on the dock side's edge (launching it if needed), or hide it if it is focused"
+    [width]="Print the dock width, or set it with {+N|-N|N} (${_COORD_WIDTH_MIN}-${_COORD_WIDTH_MAX}) or move the inner edge with {left|right} [N] (default ${_COORD_WIDTH_STEP}), resizing a shown coordinator"
+    [side]="Print the dock side, or set it with {left|right}, re-docking a shown coordinator"
     [launch]="Start <name>'s window hidden, attaching to its tmux session if one exists"
     [list]="List coordinator windows and whether each is hidden or visible"
 )
@@ -94,13 +101,31 @@ _coord-width-get() {
     _coord-width-clamp "$_width"
 }
 
-# Docks the node to the right edge of <monitor> (default: the focused one,
+_coord-side-get() {
+    local _side
+    _side=$(<"$_COORD_SIDE_FILE") 2>/dev/null
+    [[ "$_side" == (left|right) ]] || _side=$_COORD_SIDE_DEFAULT
+    print -r -- "$_side"
+}
+
+# Serialises the read-modify-write of the width and side files, e.g. a
+# held-down key's repeats. Sets the caller's _fd; the caller closes it.
+_coord-dock-lock() {
+    local _lock="${XDG_RUNTIME_DIR:-${HOME}/.cache}/coord-dock.lock"
+    exec {_fd}>"$_lock"
+    flock -w "$_COORD_LAUNCH_TIMEOUT" "$_fd" && return 0
+    exec {_fd}>&-
+    log-error "[coord] dock lock busy"
+    return 1
+}
+
+# Docks the node to the <side> edge of <monitor> (default: the focused one,
 # moving it there), <width> wide including its border, between the top and
-# bottom padding, and reserves the strip with that monitor's right_padding.
-# bspc only moves and resizes floating windows relatively, hence the deltas
-# from the current floating rectangle.
+# bottom padding, and reserves the strip with that side's padding, releasing
+# the other side's. bspc only moves and resizes floating windows relatively,
+# hence the deltas from the current floating rectangle.
 _coord-place() {
-    local _node=$1 _width=$2 _mon=${3:-}
+    local _node=$1 _width=$2 _side=$3 _mon=${4:-} _other
     local -i _mx _my _mw _mh _top _bottom _bw _fx _fy _fw _fh _x _y _w _h
 
     [[ -n "$_mon" ]] || _mon=$(bspc query -M -m focused) || return 1
@@ -118,7 +143,11 @@ _coord-place() {
     _bottom=$(bspc config -m "$_mon" bottom_padding)
 
     # X draws the border outside the floating rectangle.
-    _x=$(( _mx + _mw - _width ))
+    if [[ "$_side" == left ]]; then
+        _x=$_mx _other=right
+    else
+        _x=$(( _mx + _mw - _width )) _other=left
+    fi
     _y=$(( _my + _top ))
     _w=$(( _width - 2 * _bw ))
     _h=$(( _mh - _top - _bottom - 2 * _bw ))
@@ -129,20 +158,34 @@ _coord-place() {
     if (( _x != _fx || _y != _fy )); then
         bspc node "$_node" --move $(( _x - _fx )) $(( _y - _fy ))
     fi
-    bspc config -m "$_mon" right_padding "$_width"
+    # The new side is padded before the old one is released, so re-docking
+    # never lets tiled windows reflow through the full monitor width.
+    bspc config -m "$_mon" "${_side}_padding" "$_width"
+    [[ "$(bspc config -m "$_mon" "${_other}_padding")" == 0 ]] || bspc config -m "$_mon" "${_other}_padding" 0
+}
+
+# Re-places every shown coordinator on its own monitor.
+_coord-redock() {
+    local _width=$1 _side=$2 _node _instance
+    _coord-windows '.!hidden' | while read -r _node _instance; do
+        _coord-place "$_node" "$_width" "$_side" "$(bspc query -M -n "$_node")"
+    done
 }
 
 # Gives the strip back to tiled windows on every monitor no coordinator is
-# shown on. Assumes right_padding is otherwise 0, as bspwmrc sets it.
+# shown on, whichever side it was on. Assumes left_padding and right_padding
+# are otherwise 0, as bspwmrc sets them.
 _coord-unpad() {
-    local _node _instance _mon
+    local _node _instance _mon _pad
     local -A _held
     _coord-windows '.!hidden' | while read -r _node _instance; do
         _held[$(bspc query -M -n "$_node")]=1
     done
     for _mon in ${(f)"$(bspc query -M)"}; do
         (( ${+_held[$_mon]} )) && continue
-        [[ "$(bspc config -m "$_mon" right_padding)" == 0 ]] || bspc config -m "$_mon" right_padding 0
+        for _pad in left_padding right_padding; do
+            [[ "$(bspc config -m "$_mon" "$_pad")" == 0 ]] || bspc config -m "$_mon" "$_pad" 0
+        done
     done
 }
 
@@ -191,7 +234,7 @@ coord-toggle() {
 
         # Padding is set before the swap and released only after it, so
         # swapping coordinators never lets tiled windows reflow into the strip.
-        _coord-place "$_node" "$(_coord-width-get)" || return 1
+        _coord-place "$_node" "$(_coord-width-get)" "$(_coord-side-get)" || return 1
 
         _coord-windows '.!hidden' | while read -r _other _instance; do
             [[ "$_other" != "$_node" ]] && bspc node "$_other" --flag hidden=on
@@ -204,23 +247,32 @@ coord-toggle() {
     }
 }
 
+# `left`/`right` move the panel's inner edge, so the sign depends on the side:
+# docked right, moving the inner edge left widens it; docked left, narrows it.
 coord-width() {
-    local _arg=${1:-} _width _node _instance
+    local _arg=${1:-} _step=${2:-$_COORD_WIDTH_STEP} _width _side _fd
     if [[ -z "$_arg" ]]; then
         _coord-width-get
         return
     fi
-    [[ "$_arg" =~ '^[+-]?[0-9]+$' ]] || { log-error "[coord] width: expected +N, -N or N, got '$_arg'"; return 1; }
+    case "$_arg" in
+        left|right)
+            [[ "$_step" =~ '^[0-9]+$' ]] || { log-error "[coord] width: expected a step N after '$_arg', got '$_step'"; return 1; } ;;
+        *)
+            [[ "$_arg" =~ '^[+-]?[0-9]+$' ]] || { log-error "[coord] width: expected +N, -N, N, left [N] or right [N], got '$_arg'"; return 1; } ;;
+    esac
 
-    # Serialises a held-down key's repeats, which would otherwise race on the
-    # read-modify-write of the width file.
-    local _lock="${XDG_RUNTIME_DIR:-${HOME}/.cache}/coord-width.lock" _fd
-    exec {_fd}>"$_lock"
-    flock -w "$_COORD_LAUNCH_TIMEOUT" "$_fd" || { exec {_fd}>&-; log-error "[coord] width: lock busy"; return 1; }
-
+    _coord-dock-lock || return 1
     {
         _width=$(_coord-width-get)
+        _side=$(_coord-side-get)
         case "$_arg" in
+            left|right)
+                if [[ "$_arg" == "$_side" ]]; then
+                    _width=$(( _width - _step ))
+                else
+                    _width=$(( _width + _step ))
+                fi ;;
             [+-]*) _width=$(( _width + _arg )) ;;
             *)     _width=$_arg ;;
         esac
@@ -228,10 +280,26 @@ coord-width() {
 
         mkdir -p "${_COORD_WIDTH_FILE:h}" && print -r -- "$_width" >| "$_COORD_WIDTH_FILE" || return 1
 
-        _coord-windows '.!hidden' | while read -r _node _instance; do
-            _coord-place "$_node" "$_width" "$(bspc query -M -n "$_node")"
-        done
+        _coord-redock "$_width" "$_side"
         print -r -- "$_width"
+    } always {
+        exec {_fd}>&-
+    }
+}
+
+coord-side() {
+    local _side=${1:-} _fd
+    if [[ -z "$_side" ]]; then
+        _coord-side-get
+        return
+    fi
+    [[ "$_side" == (left|right) ]] || { log-error "[coord] side: expected left or right, got '$_side'"; return 1; }
+
+    _coord-dock-lock || return 1
+    {
+        mkdir -p "${_COORD_SIDE_FILE:h}" && print -r -- "$_side" >| "$_COORD_SIDE_FILE" || return 1
+        _coord-redock "$(_coord-width-get)" "$_side"
+        print -r -- "$_side"
     } always {
         exec {_fd}>&-
     }
