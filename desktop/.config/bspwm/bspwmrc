@@ -47,7 +47,7 @@ bspc rule -r "*:*:*"
 bspc rule -a Alacritty border=off
 
 # Coordinator switchboard (desktop/.local/bin/coord): born hidden, summoned by
-# `coord toggle <name>`, which docks it to the left or right edge (`coord side`)
-# and reserves that strip with left_padding or right_padding while it is
-# shown, so no geometry here.
+# `coord toggle <name>`, `coord pick` or `coord cycle`, which dock it to the
+# left or right edge (`coord side`) and reserve that strip with left_padding
+# or right_padding while it is shown, so no geometry here.
 bspc rule -a coord state=floating sticky=on hidden=on

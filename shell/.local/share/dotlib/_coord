@@ -3,6 +3,11 @@
 # _coord - coordinator switchboard: one hidden floating terminal per Claude
 # Code coordinator, summoned one at a time.
 #
+# The switchboard order is _COORD_NAMES (brain, template, folio, homelab,
+# metalayerlab, apps, dotfiles): `pick` lists it in a rofi menu and `cycle`
+# steps through it, wrapping. sxhkdrc's `super + c` chord can't read it and
+# spells the same names out. `toggle` accepts any valid name.
+#
 # Each coordinator window is alacritty with class `coord` and the
 # coordinator's name as instance. bspwmrc's `coord` rule makes it floating,
 # sticky and hidden at birth; showing one docks it to the left or right edge
@@ -10,7 +15,8 @@
 # to cover it, so tiled windows give the strip up only while a coordinator is
 # shown. The panel keeps bspwm's window gap as a tiled window would; the width
 # is its visible width, gap excluded. The width and side are persisted in
-# ${XDG_STATE_HOME}/coord/{width,side}.
+# ${XDG_STATE_HOME}/coord/{width,side}, and the last coordinator shown in
+# ${XDG_STATE_HOME}/coord/last, which `cycle` re-shows when none is shown.
 # Width can be set absolutely, by delta, or by moving the panel's inner edge
 # `left`/`right`, which resolves to wider or narrower from the side. The
 # session runs inside tmux (`<name>-coordinator`), so closing the window only
@@ -24,7 +30,7 @@
 #   Required:
 #     - _common, _log
 #   External:
-#     - bspwm (bspc), xprop, jq, alacritty, tmux, flock
+#     - bspwm (bspc), xprop, jq, alacritty, tmux, flock, rofi (pick)
 #     - _coordinator from shell/.config/zsh/.zshrc.d/55-coordinators
 
 [[ -n "${COORD_LOADED:-}" ]] && return 0
@@ -40,9 +46,13 @@ declare -gi _COORD_WIDTH_DEFAULT=1280 _COORD_WIDTH_MIN=640 _COORD_WIDTH_MAX=2560
 declare -gi _COORD_WIDTH_STEP=128
 declare -g _COORD_SIDE_FILE="${XDG_STATE_HOME:-$HOME/.local/state}/coord/side"
 declare -g _COORD_SIDE_DEFAULT=right
+declare -g _COORD_LAST_FILE="${XDG_STATE_HOME:-$HOME/.local/state}/coord/last"
+typeset -ga _COORD_NAMES=(brain template folio homelab metalayerlab apps dotfiles)
 
 typeset -gA _COORD_DESCRIPTIONS=(
     [toggle]="Show <name>'s window docked on the dock side's edge (launching it if needed), or hide it if it is focused"
+    [pick]="Choose a coordinator from a rofi menu of ${(j:, :)_COORD_NAMES} and their state, and show it (launching it if needed); the shown one is only focused"
+    [cycle]="Show the {next|prev} coordinator in the order pick lists them, wrapping and launching it if needed; with none shown, re-show the last one shown (or ${_COORD_NAMES[1]})"
     [width]="Print the dock panel's visible width (the reserved strip is that plus bspwm's window_gap), or set it with {+N|-N|N} (${_COORD_WIDTH_MIN}-${_COORD_WIDTH_MAX}) or move the inner edge with {left|right} [N] (default ${_COORD_WIDTH_STEP}), resizing a shown coordinator"
     [side]="Print the dock side, or set it with {left|right}, re-docking a shown coordinator"
     [launch]="Start <name>'s window hidden, attaching to its tmux session if one exists"
@@ -110,14 +120,33 @@ _coord-side-get() {
     print -r -- "$_side"
 }
 
-# Serialises the read-modify-write of the width and side files, e.g. a
-# held-down key's repeats. Sets the caller's _fd; the caller closes it.
-_coord-dock-lock() {
-    local _lock="${XDG_RUNTIME_DIR:-${HOME}/.cache}/coord-dock.lock"
+# Prints the last coordinator shown, if it is still in _COORD_NAMES.
+_coord-last-get() {
+    local _name
+    _name=$(<"$_COORD_LAST_FILE") 2>/dev/null
+    (( ${_COORD_NAMES[(Ie)$_name]} )) && print -r -- "$_name"
+}
+
+# Prints the shown coordinator, if one in _COORD_NAMES is shown.
+_coord-current() {
+    local _node _instance
+    _coord-windows '.!hidden' | while read -r _node _instance; do
+        (( ${_COORD_NAMES[(Ie)$_instance]} )) && { print -r -- "$_instance"; return 0; }
+    done
+}
+
+# Takes ${XDG_RUNTIME_DIR}/coord-<lock>.lock. `dock` serialises the
+# read-modify-write of the width and side files, e.g. a held-down key's
+# repeats. `switch` serialises showing and hiding, so a double-tapped chord or
+# a repeating cycle key finds the window the previous press launched and the
+# coordinator it left shown, instead of launching another or stepping from a
+# stale one. Sets the caller's _fd; the caller closes it.
+_coord-lock() {
+    local _lock="${XDG_RUNTIME_DIR:-${HOME}/.cache}/coord-$1.lock"
     exec {_fd}>"$_lock"
     flock -w "$_COORD_LAUNCH_TIMEOUT" "$_fd" && return 0
     exec {_fd}>&-
-    log-error "[coord] dock lock busy"
+    log-error "[coord] $1 lock busy"
     return 1
 }
 
@@ -208,6 +237,35 @@ _coord-unpad() {
     done
 }
 
+# Shows <name>'s window (node <node> if the caller already looked it up)
+# docked, launching it if needed, hides any other shown coordinator and
+# records <name> as the last shown. Already shown, it is re-docked and
+# focused, never hidden. The caller holds the switch lock in _fd.
+_coord-show() {
+    local _name=$1 _node=${2:-} _other _instance
+    [[ -n "$_node" ]] || _node=$(_coord-node "$_name")
+    if [[ -z "$_node" ]]; then
+        # Subshell closes its copy of the lock fd so alacritty doesn't
+        # inherit it and hold the lock for its lifetime.
+        ( exec {_fd}>&-; coord-launch "$_name" ) || return 1
+        _node=$(_coord-wait "$_name") || return 1
+    fi
+
+    # Padding is set before the swap and released only after it, so
+    # swapping coordinators never lets tiled windows reflow into the strip.
+    _coord-place "$_node" "$(_coord-width-get)" "$(_coord-side-get)" || return 1
+
+    _coord-windows '.!hidden' | while read -r _other _instance; do
+        [[ "$_other" != "$_node" ]] && bspc node "$_other" --flag hidden=on
+    done
+
+    bspc node "$_node" --flag hidden=off --focus
+    _coord-unpad
+
+    mkdir -p "${_COORD_LAST_FILE:h}" && print -r -- "$_name" >| "$_COORD_LAST_FILE"
+    return 0
+}
+
 # ------------------------------
 # Public
 # ------------------------------
@@ -227,40 +285,81 @@ coord-launch() {
 }
 
 coord-toggle() {
-    local _name=$1 _node _other _instance
+    local _name=$1 _node _fd
     _coord-check-name "$_name" || return 1
 
-    # Serialises a double-tapped chord, so the second press finds the window
-    # the first one launched instead of launching another.
-    local _lock="${XDG_RUNTIME_DIR:-${HOME}/.cache}/coord-${_name}.lock" _fd
-    exec {_fd}>"$_lock"
-    flock -w "$_COORD_LAUNCH_TIMEOUT" "$_fd" || { exec {_fd}>&-; log-error "[coord] $_name: lock busy"; return 1; }
-
+    _coord-lock switch || return 1
     {
         _node=$(_coord-node "$_name")
-        if [[ -z "$_node" ]]; then
-            # Subshell closes its copy of the lock fd so alacritty doesn't
-            # inherit it and hold the lock for its lifetime.
-            ( exec {_fd}>&-; coord-launch "$_name" ) || return 1
-            _node=$(_coord-wait "$_name") || return 1
-        fi
-
-        if bspc query -N -n "${_node}.focused.!hidden" >/dev/null 2>&1; then
+        if [[ -n "$_node" ]] && bspc query -N -n "${_node}.focused.!hidden" >/dev/null 2>&1; then
             bspc node "$_node" --flag hidden=on
             _coord-unpad
             return
         fi
+        _coord-show "$_name" "$_node"
+    } always {
+        exec {_fd}>&-
+    }
+}
 
-        # Padding is set before the swap and released only after it, so
-        # swapping coordinators never lets tiled windows reflow into the strip.
-        _coord-place "$_node" "$(_coord-width-get)" "$(_coord-side-get)" || return 1
+# The cursor starts on the shown coordinator (also highlighted as active), or
+# the last one shown. rofi runs outside the lock: it can sit open
+# indefinitely, and the state it lists is only a hint.
+coord-pick() {
+    local _node _instance _name _current _choice _fd
+    local -i _row=0
+    local -a _rows
+    local -A _state
 
-        _coord-windows '.!hidden' | while read -r _other _instance; do
-            [[ "$_other" != "$_node" ]] && bspc node "$_other" --flag hidden=on
-        done
+    _coord-windows | while read -r _node _instance; do
+        _state[$_instance]=hidden
+        bspc query -N -n "${_node}.!hidden" >/dev/null 2>&1 && _state[$_instance]=showing
+    done
+    _current=$(_coord-current)
+    for _name in "${_COORD_NAMES[@]}"; do
+        _rows+=("$(printf '%-14s %s' "$_name" "${_state[$_name]:-not running}")")
+    done
+    _name=${_current:-$(_coord-last-get)}
+    [[ -n "$_name" ]] && _row=$(( ${_COORD_NAMES[(Ie)$_name]} - 1 ))
 
-        bspc node "$_node" --flag hidden=off --focus
-        _coord-unpad
+    # -format i returns the row index, so the state column never has to be
+    # parsed back out. Escape exits non-zero with no output: nothing to do.
+    _choice=$(print -rl -- "${_rows[@]}" | rofi -dmenu -i -no-custom -format i \
+        -p "Coordinator" -selected-row "$_row" \
+        ${_current:+-a} ${_current:+$_row}) || return 0
+    [[ "$_choice" =~ '^[0-9]+$' ]] && (( _choice < ${#_COORD_NAMES} )) || return 0
+
+    _coord-lock switch || return 1
+    {
+        _coord-show "${_COORD_NAMES[_choice + 1]}"
+    } always {
+        exec {_fd}>&-
+    }
+}
+
+# Steps from the shown coordinator. With none shown, both directions re-show
+# the last one shown rather than stepping past it: after hiding a coordinator,
+# the first press brings back what was just there.
+coord-cycle() {
+    local _dir=${1:-next} _name _fd
+    local -i _i _n=${#_COORD_NAMES}
+    [[ "$_dir" == (next|prev) ]] || { log-error "[coord] cycle: expected next or prev, got '$_dir'"; return 1; }
+
+    _coord-lock switch || return 1
+    {
+        _name=$(_coord-current)
+        if [[ -n "$_name" ]]; then
+            _i=${_COORD_NAMES[(Ie)$_name]}
+            if [[ "$_dir" == next ]]; then
+                _i=$(( _i % _n + 1 ))
+            else
+                _i=$(( (_i + _n - 2) % _n + 1 ))
+            fi
+        else
+            _i=${_COORD_NAMES[(Ie)$(_coord-last-get)]}
+            (( _i )) || _i=1
+        fi
+        _coord-show "${_COORD_NAMES[_i]}"
     } always {
         exec {_fd}>&-
     }
@@ -281,7 +380,7 @@ coord-width() {
             [[ "$_arg" =~ '^[+-]?[0-9]+$' ]] || { log-error "[coord] width: expected +N, -N, N, left [N] or right [N], got '$_arg'"; return 1; } ;;
     esac
 
-    _coord-dock-lock || return 1
+    _coord-lock dock || return 1
     {
         _width=$(_coord-width-get)
         _side=$(_coord-side-get)
@@ -314,7 +413,7 @@ coord-side() {
     fi
     [[ "$_side" == (left|right) ]] || { log-error "[coord] side: expected left or right, got '$_side'"; return 1; }
 
-    _coord-dock-lock || return 1
+    _coord-lock dock || return 1
     {
         mkdir -p "${_COORD_SIDE_FILE:h}" && print -r -- "$_side" >| "$_COORD_SIDE_FILE" || return 1
         _coord-redock "$(_coord-width-get)" "$_side"
