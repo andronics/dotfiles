@@ -1,7 +1,7 @@
 general.import = ["/home/andronics/.config/alacritty/themes/catppuccin-mocha.toml"]
 
 [font]
-size = 14.0
+size = 16.0
 
 [font.bold]
 family = "Source Code Pro for Powerline"
