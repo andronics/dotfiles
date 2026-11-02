@@ -35,8 +35,12 @@ super + b + {_, alt}
   bspc node {@parent, @/} --balance
 
 # Recepticles - clear
-super + c
+super + shift + c
   for win in `bspc query -n -n ".leaf.\!window"`; do bspc node $win -k; done
+
+# coordinator - toggle {brain, template, folio, homelab, metalayerlab, apps, dotfiles}
+super + c ; {b, t, f, h, m, a, d}
+  coord toggle {brain,template,folio,homelab,metalayerlab,apps,dotfiles}
 
 # node - equalise
 super + e + {_, alt}

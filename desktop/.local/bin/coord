@@ -1,0 +1,11 @@
+#!/usr/bin/env zsh
+set -e
+
+source "${DOTLIB}/_dispatcher" || { echo "missing _dispatcher" >&2; exit 1; }
+source "${DOTLIB}/_coord"      || { echo "missing _coord"      >&2; exit 1; }
+
+dispatcher-init "coord" \
+    --route=function \
+    --description="Coordinator switchboard: one hidden terminal per Claude Code coordinator"
+
+dispatcher-execute "$@"
