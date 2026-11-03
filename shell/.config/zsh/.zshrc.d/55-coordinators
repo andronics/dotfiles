@@ -11,7 +11,8 @@ _coordinator() {
   local home=/pool/local/actors/$1; shift
   [ -r "$home/PROMPT.md" ] || { print -u2 "no prompt: $home/PROMPT.md"; return 1; }
   cd "$home" || return
-  command claude --permission-mode bypassPermissions --dangerously-skip-permissions "$@" "$(<"$home/PROMPT.md")"
+  # Unattended, so prompt suggestions only cost usage; the env var beats the promptSuggestionEnabled setting.
+  CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false command claude --permission-mode bypassPermissions --dangerously-skip-permissions "$@" "$(<"$home/PROMPT.md")"
 }
 
 template-coordinator()     { _coordinator template "$@"; }
