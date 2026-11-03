@@ -1,0 +1,222 @@
+#!/usr/bin/env zsh
+
+# _theme_ui - the theme picker: `theme pick`, a rofi menu over `theme apply`
+# (super + alt + space).
+#
+#   theme pick [schemes]   every scheme, the current mode's first, each row a
+#                          preview chip in the scheme's own resolved colours
+#                          (bg behind fg text and accent, urgent and busy
+#                          blocks, as _coord-menu-row draws in pango), its
+#                          title and mode; the applied one is marked current,
+#                          ringed and selected. Two rows follow: Wallpapers
+#                          (the view below; Escape there comes back) and the
+#                          dark/light switch (theme mode toggle).
+#   theme pick wallpapers  the [wallpaper] dirs with thumbnails as icons;
+#                          Enter runs `theme wallpaper <img>` (its colours)
+#
+# Enter runs the command once rofi has closed; Escape runs nothing.
+# --dry-run prints the command instead of running it, so the picker can be
+# shown without changing the theme.
+#
+# The swatches are the roles `apply` would resolve (contrast floors, prefs
+# accent, overrides.json), not raw palette slots, cached per scheme in
+# ${THEME_CACHE_DIR}/pick/<slug> and remade when the scheme, prefs.toml,
+# overrides.json or _theme is newer. Resolving all thirteen takes just under a
+# second, once.
+#
+# Environment:
+#   THEME_PICK_THEME     rofi theme: a name in ~/.config/rofi/themes or a
+#                        path (default theme-picker); a missing one falls
+#                        back to rofi's default look rather than an error
+#   and the THEME_* overrides of _theme (THEME_STATE_DIR, THEME_CONFIG_DIR,
+#   THEME_CACHE_DIR, THEME_WALLPAPER_DIRS)
+#
+# Usage:
+#   source "${DOTLIB}/_theme_ui"
+#
+# Dependencies:
+#   Required:
+#     - _theme
+#   External:
+#     - rofi (-markup-rows, row icons); notify-send for a failed apply when
+#       there is no terminal (optional)
+
+[[ -n "${THEME_UI_LOADED:-}" ]] && return 0
+declare -gr THEME_UI_LOADED=1
+
+source "${DOTLIB}/_theme" || { echo "[ERROR] _theme_ui requires _theme" >&2; return 1; }
+
+declare -g _THEME_PICK_THEME="${THEME_PICK_THEME:-theme-picker}"
+# Wallpaper rows add the icon column the scheme rows don't have.
+declare -g _THEME_PICK_WALL_STR='element { children: [ element-icon, element-text ]; } element-icon { size: 96px; }'
+
+_THEME_DESCRIPTIONS[pick]="rofi picker: [schemes] (default; colour preview per row, the current one marked; also Wallpapers and the dark/light switch) or wallpapers (thumbnails); Enter applies, --dry-run prints the command instead"
+
+# ------------------------------
+# Private Helpers
+# ------------------------------
+
+# reply = the -theme arguments for _THEME_PICK_THEME, or none if it is missing.
+_theme-ui-rofi-theme() {
+    local t=$_THEME_PICK_THEME
+    [[ "$t" == */* ]] || t="${XDG_CONFIG_HOME:-$HOME/.config}/rofi/themes/$t.rasi"
+    reply=()
+    [[ -r "$t" ]] && reply=(-theme "$t")
+    return 0
+}
+
+_theme-ui-escape() {
+    REPLY=${${${1//&/&amp;}//</&lt;}//>/&gt;}
+}
+
+# REPLY = "<mode> <bg> <fg> <accent> <urgent> <busy> <title>" for scheme
+# slug $1, from the cache when it is newer than everything it was made from.
+_theme-ui-scheme-colours() {
+    local slug=$1 file cache dep line
+    _theme-scheme-file "$slug" 2>/dev/null || return 1
+    file=$REPLY
+    _theme-cache-dir; cache="$REPLY/pick/$slug"
+    if [[ -s "$cache" ]]; then
+        line=$(<"$cache")
+        for dep in "$file" "$_THEME_CONFIG/prefs.toml" "$_THEME_STATE/overrides.json" "${DOTLIB}/_theme"; do
+            [[ -e "$dep" && "$dep" -nt "$cache" ]] && { line=; break; }
+        done
+        [[ -n "$line" ]] && { REPLY=$line; return 0; }
+    fi
+    _theme-load-source "$slug" 2>/dev/null && _theme-resolve 2>/dev/null || return 1
+    REPLY="$_THEME_MODE ${_THEME_ROLE[bg]} ${_THEME_ROLE[fg]} ${_THEME_ROLE[accent]} ${_THEME_ROLE[urgent]} ${_THEME_ROLE[busy]} ${_THEME_IN[scheme.name]:-$slug}"
+    mkdir -p "${cache:h}" 2>/dev/null &&
+        print -r -- "$REPLY" > "$cache.$$" && mv -f -- "$cache.$$" "$cache" 2>/dev/null
+    return 0
+}
+
+# REPLY = one scheme row as pango markup: the chip in the scheme's colours,
+# its title, then mode (and current) small and faint. $1 = the cached line,
+# $2 = non-empty when it is the applied scheme.
+_theme-ui-scheme-row() {
+    local -a c=(${=1})
+    local title=${(j: :)c[7,-1]} block='██'
+    _theme-ui-escape "$title"; title=$REPLY
+    REPLY="<span font_family='monospace' background='${c[2]}'> <span foreground='${c[3]}'>Aa</span> <span foreground='${c[4]}'>$block</span><span foreground='${c[5]}'>$block</span><span foreground='${c[6]}'>$block</span> </span>  ${title}  <span size='small' fgalpha='55%'>${c[1]}${2:+ · current}</span>"
+}
+
+# The scheme menu. Sets reply to the command picked (apply <slug>, mode
+# toggle) or to (wallpapers); returns 1 on Escape.
+_theme-ui-pick-schemes() {
+    local f slug cur= mode other choice
+    local -a order rows slugs
+    local -i row=0 active=-1 i
+    _theme-pref-mode; mode=$REPLY
+    if _theme-source-current 2>/dev/null; then
+        mode=${THEME_META[mode]:-$mode}
+        [[ "${THEME_META[source]}" == scheme:* ]] && cur=${THEME_META[name]}
+    fi
+    _theme-schemes-of-mode "$mode"; order=("${reply[@]}")
+    for f in "$_THEME_CONFIG"/schemes/*.y(a|)ml(N:t:r); do
+        (( ${order[(Ie)$f]} )) || order+=("$f")
+    done
+    for slug in "${order[@]}"; do
+        _theme-ui-scheme-colours "$slug" || { log-warning "[theme] pick: skipped $slug (doesn't resolve; see theme check $slug)"; continue; }
+        if [[ "$slug" == "$cur" ]]; then
+            _theme-ui-scheme-row "$REPLY" 1
+            active=${#rows} row=${#rows}
+        else
+            _theme-ui-scheme-row "$REPLY"
+        fi
+        rows+=("$REPLY"); slugs+=("$slug")
+    done
+    (( ${#rows} )) || { log-error "[theme] pick: no schemes in $_THEME_CONFIG/schemes"; return 1; }
+    [[ "$mode" == dark ]] && other=light || other=dark
+    rows+=("Wallpapers  <span size='small' fgalpha='55%'>colours from a picture</span>"
+           "${(C)other} mode  <span size='small' fgalpha='55%'>theme mode toggle</span>")
+
+    _theme-ui-rofi-theme
+    # -format i returns the row index, so the markup is never parsed back.
+    choice=$(print -rl -- "${rows[@]}" | rofi -dmenu -i -no-custom -markup-rows -format i \
+        "${reply[@]}" -p "Theme" -selected-row "$row" \
+        ${${(M)active:#<->}:+-a} ${${(M)active:#<->}:+$active}) || return 1
+    [[ "$choice" == <-> ]] && (( choice < ${#rows} )) || return 1
+    i=$(( choice + 1 ))
+    if (( i <= ${#slugs} )); then
+        reply=(apply "${slugs[i]}")
+    elif (( i == ${#slugs} + 1 )); then
+        reply=(wallpapers)
+    else
+        reply=(mode toggle)
+    fi
+}
+
+# The wallpaper menu. Sets reply to (wallpaper <image>); returns 1 on Escape
+# or when there are none.
+_theme-ui-pick-wallpapers() {
+    local f cur= sha icon choice
+    local -a walls rows
+    local -i row=0 active=-1
+    _theme-wallpaper-list
+    for f in "${reply[@]}"; do _theme-wallpaper-image "$f" && walls+=("$f"); done
+    (( ${#walls} )) || { log-error "[theme] pick: no wallpapers (theme list wallpapers)"; return 1; }
+    # Only a generated theme's wallpaper is current: under a scheme the
+    # picture is just a backdrop, and picking it would change the colours.
+    if _theme-source-current 2>/dev/null && [[ "${THEME_META[source]}" == image:* ]]; then
+        _theme-wallpaper-current; cur=$REPLY
+    fi
+    for f in "${walls[@]}"; do
+        sha=$(sha256sum -- "$f" 2>/dev/null) && sha=${sha%% *}
+        if [[ -n "$sha" ]]; then _theme-thumb "$f" "$sha" 2>/dev/null; else REPLY=$f; fi
+        icon=$REPLY
+        _theme-ui-escape "${f:t:r}"
+        if [[ "$f" == "$cur" ]]; then
+            active=${#rows} row=${#rows}
+            REPLY+="  <span size='small' fgalpha='55%'>current</span>"
+        fi
+        rows+=("$REPLY"$'\0icon\x1f'"$icon")
+    done
+
+    _theme-ui-rofi-theme
+    choice=$(print -rl -- "${rows[@]}" | rofi -dmenu -i -no-custom -markup-rows -show-icons -format i \
+        "${reply[@]}" -theme-str "$_THEME_PICK_WALL_STR" -p "Wallpaper" -selected-row "$row" \
+        ${${(M)active:#<->}:+-a} ${${(M)active:#<->}:+$active}) || return 1
+    [[ "$choice" == <-> ]] && (( choice < ${#walls} )) || return 1
+    reply=(wallpaper "${walls[choice + 1]}")
+}
+
+# ------------------------------
+# Public
+# ------------------------------
+
+# theme pick [schemes|wallpapers] [--dry-run]
+theme-pick() {
+    local what=schemes a
+    local -i dry=0
+    for a; do
+        case "$a" in
+            -h|--help) theme-help; return 0 ;;
+            schemes|scheme|s) what=schemes ;;
+            wallpapers|wallpaper|w) what=wallpapers ;;
+            -n|--dry-run) dry=1 ;;
+            *) log-error "[theme] usage: theme pick [schemes|wallpapers] [--dry-run]"; return 2 ;;
+        esac
+    done
+    (( $+commands[rofi] )) || { log-error "[theme] pick needs rofi"; return 1; }
+    _theme-paths
+    if [[ "$what" == wallpapers ]]; then
+        _theme-ui-pick-wallpapers || return 0
+    else
+        while :; do
+            _theme-ui-pick-schemes || return 0
+            [[ "${reply[1]}" == wallpapers ]] || break
+            # Escape in the wallpapers goes back to the schemes.
+            _theme-ui-pick-wallpapers && break
+        done
+    fi
+    if (( dry )); then
+        print -r -- theme "${(@q-)reply}"
+        return 0
+    fi
+    local -a cmd=("${reply[@]}")
+    "theme-${cmd[1]}" "${(@)cmd[2,-1]}" && return 0
+    # From the key binding there is no terminal to show the log.
+    [[ -t 2 ]] || { (( $+commands[notify-send] )) &&
+        notify-send --app-name=theme --urgency=critical "theme ${cmd[1]} failed" "theme ${(j: :)cmd}: run it in a terminal for the log"; }
+    return 1
+}
