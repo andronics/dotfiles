@@ -40,7 +40,8 @@
 #
 # Dependencies:
 #   Required:
-#     - _common, _log, _theme (the strip's colours)
+#     - _common, _log
+#     - _theme (bar and pick only, sourced on first use)
 #   External:
 #     - bspwm (bspc), xprop, jq, alacritty, tmux, flock, rofi (pick)
 #     - notify-send (libnotify >= 0.7.9 for --action) and a notification
@@ -54,7 +55,6 @@ declare -gr COORD_LOADED=1
 
 source "${DOTLIB}/_common" || { echo "[ERROR] _coord requires _common" >&2; return 1; }
 source "${DOTLIB}/_log"    2>/dev/null || true
-source "${DOTLIB}/_theme"  || { echo "[ERROR] _coord requires _theme" >&2; return 1; }
 
 declare -g _COORD_CLASS="coord"
 declare -g _COORD_LAUNCH_TIMEOUT="${COORD_LAUNCH_TIMEOUT:-10}"
@@ -88,6 +88,8 @@ typeset -gA _COORD_ICONS=(
 # and `pick` fill _COORD_BAR_COLORS from the current theme.zsh each time they
 # run (theme-roles; Catppuccin Mocha when no theme is applied). A new theme
 # shows on the next poke. key=#rrggbb args to `bar` still override.
+# _theme is sourced then, not here, so `status`, which every hook runs,
+# doesn't pay for loading it.
 typeset -ga _COORD_BAR_ROLES=(dim=dim busy=busy waiting=urgent ink=on_urgent shown=accent)
 typeset -gA _COORD_BAR_COLORS=()
 
@@ -389,6 +391,12 @@ coord-toggle() {
     }
 }
 
+# Fills _COORD_BAR_COLORS from the current theme.
+_coord-colors() {
+    source "${DOTLIB}/_theme" || { log-error "[coord] _theme missing"; return 1; }
+    theme-roles _COORD_BAR_COLORS "${_COORD_BAR_ROLES[@]}"
+}
+
 # Fills the caller's _running and _shown (local -A there). Running means the
 # coordinator's window or its tmux session exists; shown, a visible window.
 _coord-scan() {
@@ -448,7 +456,7 @@ coord-pick() {
     local -a _rows _active _theme_args
     local -A _running _shown
 
-    theme-roles _COORD_BAR_COLORS "${_COORD_BAR_ROLES[@]}"
+    _coord-colors
     _coord-scan
     _current=$(_coord-current)
     for _name in "${_COORD_NAMES[@]}"; do
@@ -653,7 +661,7 @@ coord-bar() {
     local _arg _name _icon _cell _out=
     local -A _color _running _shown
 
-    theme-roles _COORD_BAR_COLORS "${_COORD_BAR_ROLES[@]}"
+    _coord-colors
     _color=("${(@kv)_COORD_BAR_COLORS}")
     for _arg in "$@"; do
         [[ "$_arg" =~ '^([a-z]+)=(#[0-9A-Fa-f]{6,8})$' ]] && (( ${+_color[${match[1]}]} )) \
