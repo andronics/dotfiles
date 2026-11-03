@@ -1,0 +1,366 @@
+#!/usr/bin/env zsh
+
+# _desk - polybar desktop strip: one cell per non-empty bspwm desktop, showing
+# the icons of the apps on it, in the coordinator strip's visual language.
+#
+# `bar` draws the bar monitor's desktops in bspwm's order. A desktop is empty
+# when it has no visible window once coordinator panels (class `coord`,
+# sticky, so they ride along on the focused desktop) are set aside; empty
+# desktops are hidden, except the focused one, which shows a placeholder so
+# the strip never loses track of where you are. Each window's WM_CLASS (class,
+# then instance, case-insensitively) picks a glyph from _DESK_ICONS; repeats
+# of one glyph collapse to it plus a superscript count and a cell shows at
+# most _DESK_MAX_ICONS glyphs, then +N. The focused desktop is underlined, an
+# urgent one is a filled pill, a mode glyph follows for a monocle desktop or
+# a floating, fullscreen or sticky focused window, and a dim + cell ends the
+# strip. Left-click focuses a desktop, middle-click sends the focused window
+# there; on the + cell they run `new` and `new --take`.
+#
+# `watch` is the polybar custom/script (tail = true) loop: it prints `bar`,
+# then reprints after each burst of bspc events (lines arriving within
+# _DESK_SETTLE of each other), only when the line changed. Bursts that
+# include a desktop focus, node removal or node transfer run `prune` first,
+# so leaving an empty desktop removes it. After _DESK_IDLE quiet seconds it
+# repeats the line so a vanished reader is noticed; TERM, PIPE and the end of
+# `bspc subscribe` all end it and its subscribe process.
+#
+# The monitor is the argument, else $DESK_MONITOR, else $HOST_MONITOR (the
+# bar's monitor in polybar's bars/base, inherited by its scripts), else the
+# focused one; one bar per monitor gives one strip per monitor.
+#
+# Desktops are also managed by `bsp desktops-daemon` (_bsp), which keeps one
+# spare empty desktop at the end; `prune` removes that spare when it isn't
+# focused and the daemon re-adds it on a later node event. Names don't
+# matter here: cells and clicks use desktop ids.
+#
+# Usage:
+#   source "${DOTLIB}/_desk"
+#
+# Dependencies:
+#   Required:
+#     - _common, _log
+#   External:
+#     - bspwm (bspc), jq, xprop (windows bspwm saw before they set WM_CLASS)
+#     - polybar, Symbols Nerd Font Mono (bar font-0); a text font carrying
+#       superscript digits for the counts (Roboto Mono has ¹-⁴, Adwaita Mono
+#       the rest, both polybar fallbacks)
+
+[[ -n "${DESK_LOADED:-}" ]] && return 0
+declare -gr DESK_LOADED=1
+
+source "${DOTLIB}/_common" || { echo "[ERROR] _desk requires _common" >&2; return 1; }
+source "${DOTLIB}/_log"    2>/dev/null || true
+
+# Mirrors _coord's _COORD_CLASS; sourcing _coord just for it would drag in
+# its dependencies.
+declare -g _DESK_SKIP_CLASS="coord"
+declare -gi _DESK_MAX_ICONS=3
+declare -g _DESK_GAP="%{O8}"   # polybar offset between desktop cells
+declare -g _DESK_KEEP_NAME="0"
+declare -g _DESK_SETTLE="${DESK_SETTLE:-0.05}"
+declare -gi _DESK_IDLE="${DESK_IDLE:-10}"
+# Urgency has no event of its own; bspwm only reports it through `report`.
+typeset -ga _DESK_EVENTS=(
+    desktop_add desktop_remove desktop_rename desktop_swap desktop_transfer
+    desktop_focus desktop_layout
+    node_add node_remove node_transfer node_swap node_focus node_flag node_state
+    monitor_add monitor_remove monitor_swap monitor_focus
+    report
+)
+
+# Symbols Nerd Font Mono (polybar font-0) glyphs, keyed by lower-cased
+# WM_CLASS class or instance. Where polybar's apps.ini launches the app, its
+# glyph is reused so launcher and strip agree.
+typeset -gA _DESK_ICONS=(
+    [alacritty]=$''              # dev-terminal
+    [terminal]=$''
+    [terminal-drop]=$''
+    [terminal-draw]=$''
+    [kitty]=$''
+    [xterm]=$''
+    [urxvt]=$''
+    [firefox]=$'\U000F0239'            # md-firefox
+    [navigator]=$'\U000F0239'
+    [librewolf]=$'\U000F0239'
+    [google-chrome]=$'\U000F02AF'      # md-google_chrome
+    [chromium]=$'\U000F02AF'
+    [brave-browser]=$'\U000F02AF'
+    [code]=$''                   # cod-code
+    [com.microsoft.vscode]=$''
+    [code-oss]=$''
+    [vscodium]=$''
+    [nemo]=$''                   # oct-file_directory
+    [thunar]=$''
+    [pcmanfm]=$''
+    [org.gnome.nautilus]=$''
+    [spotify]=$'\U000F04C7'            # md-spotify
+    [virtualbox]=$'\U000F05B3'         # md-microsoft_windows
+    ['virtualbox manager']=$'\U000F05B3'
+    ['virtualbox machine']=$'\U000F05B3'
+    [obsidian]=$'\U000F01C8'           # md-diamond_stone
+    [md.obsidian.obsidian]=$'\U000F01C8'
+    [discord]=$'\U000F066F'            # md-discord
+    [slack]=$'\U000F04B1'              # md-slack
+    [steam]=$'\U000F04D3'              # md-steam
+    [telegramdesktop]=$''        # fa-telegram
+    [thunderbird]=$'\U000F01EE'        # md-email
+    [vlc]=$'\U000F057C'                # md-vlc
+    [mpv]=$'\U000F040C'                # md-play_circle
+    [gimp]=$'\U000F03D8'               # md-palette
+    [inkscape]=$'\U000F0559'           # md-vector_curve
+    [libreoffice]=$'\U000F0219'        # md-file_document
+    [libreoffice-writer]=$'\U000F022D' # md-file_word_box
+    [libreoffice-calc]=$'\U000F10E1'   # md-file_table_box
+    [libreoffice-impress]=$'\U000F0229' # md-file_presentation_box
+    [zathura]=$'\U000F0226'            # md-file_pdf_box
+    [org.pwmt.zathura]=$'\U000F0226'
+    [evince]=$'\U000F0226'
+    [feh]=$'\U000F02E9'                # md-image
+    [nsxiv]=$'\U000F02E9'
+    [sxiv]=$'\U000F02E9'
+    [eog]=$'\U000F02E9'
+    [keepassxc]=$'\U000F0BC4'          # md-shield_key
+    [gcr-prompter]=$'\U000F0306'       # md-key
+    [pinentry]=$'\U000F0306'
+    [pavucontrol]=$'\U000F057E'        # md-volume_high
+    [blueman-manager]=$'\U000F00AF'    # md-bluetooth
+    [system-config-printer]=$'\U000F042A' # md-printer
+    [simple-scan]=$'\U000F06AB'        # md-scanner
+    [gnome-calculator]=$'\U000F00EC'   # md-calculator
+)
+declare -g _DESK_ICON_FALLBACK=$'\U000F0614'   # md-application_outline
+declare -g _DESK_ICON_EMPTY=$'\U000F0130'      # md-checkbox_blank_circle_outline
+declare -g _DESK_ICON_NEW=$'\U000F0415'        # md-plus
+# Mode glyphs; floating, fullscreen and sticky are modules/bspwm.ini's.
+typeset -gA _DESK_MODE_ICONS=(
+    [monocle]=$'\U000F0C0F'            # md-alpha_m_box_outline
+    [floating]=$''               # fa-window_restore
+    [fullscreen]=$''             # fa-window_maximize
+    [sticky]=$''                 # fa-sticky_note
+)
+typeset -ga _DESK_SUPERSCRIPTS=('' '²' '³' '⁴' '⁵' '⁶' '⁷' '⁸' '⁹')
+
+# Colours for `bar`. These mirror polybar's [colors] (lavender, red, crust,
+# text, overlay0) because polybar can't interpolate references inside a
+# command, as in _coord. key=value args still override.
+typeset -gA _DESK_BAR_COLORS=(
+    [focused]='#b4befe' [urgent]='#f38ba8' [ink]='#11111b' [mode]='#cdd6f4' [dim]='#6c7086'
+)
+
+typeset -gA _DESK_DESCRIPTIONS=(
+    [bar]="Print the polybar strip for [monitor] (default \$DESK_MONITOR, \$HOST_MONITOR, else focused): one cell of app icons per non-empty desktop, focused underlined, urgent as a pill, then the focused desktop's mode and a + cell; [key=#rrggbb ...] overrides the built-in colours: ${(kj:, :)_DESK_BAR_COLORS}"
+    [watch]="Print the strip, then reprint it after each burst of bspc events when it changed, pruning first after desktop focus, node removal or node transfer, and repeat it after ${_DESK_IDLE}s quiet (DESK_IDLE); for a polybar custom/script with tail = true, exits when its reader goes away"
+    [new]="Create a desktop named the lowest free integer right after the focused one on the focused monitor and focus it; --take moves the focused window there and follows (not a ${_DESK_SKIP_CLASS} panel)"
+    [prune]="Remove every desktop with no nodes at all (hidden windows count) that isn't its monitor's focused desktop, never desktop '${_DESK_KEEP_NAME}' nor a monitor's last; prints the names removed"
+)
+
+# Per desktop of the monitor tree on stdin, one tab-separated line: decimal
+# id, focused, urgent, layout, the focused window's state and sticky flag (or
+# -), then one id<US>class<US>instance field per visible window. Tabs never
+# sit next to each other, so zsh's whitespace IFS splitting loses nothing.
+declare -g _DESK_JQ_BAR='
+    def nz: if . == null or . == "" then "-" else . end;
+    .focusedDesktopId as $f
+    | .desktops[] | . as $d
+    | [.root | .. | objects | select(.client? != null and .client.className != $skip)] as $all
+    | [$all[] | select(.hidden | not)] as $w
+    | ([$w[] | select(.id == $d.focusedNodeId)] | first) as $fn
+    | [($d.id | tostring),
+       (if $d.id == $f then "1" else "0" end),
+       (if any($all[]; .client.urgent) then "1" else "0" end),
+       $d.layout,
+       ($fn.client.state | nz),
+       (if $fn.sticky then "1" else "0" end)]
+      + [$w[] | "\(.id)\u001f\(.client.className | nz)\u001f\(.client.instanceName | nz)"]
+    | join("\t")'
+
+# Ids and names of desktops `prune` may remove, from `bspc wm -d`. root ==
+# null means no node at all: hidden windows and receptacles keep a desktop.
+declare -g _DESK_JQ_PRUNE='
+    .monitors[]
+    | .focusedDesktopId as $f
+    | (.desktops | length) as $n
+    | [.desktops[] | select(.root == null and .id != $f and .name != $keep)]
+    | if length >= $n then .[1:] else . end
+    | .[] | "\(.id)\t\(.name)"'
+
+# ------------------------------
+# Private Helpers
+# ------------------------------
+
+_desk-hex() {
+    printf '0x%08X' "$1"
+}
+
+_desk-tree() {
+    local _monitor=${1:-${DESK_MONITOR:-${HOST_MONITOR:-}}}
+    [[ -n "$_monitor" ]] && bspc query -T -m "$_monitor" 2>/dev/null && return 0
+    bspc query -T -m focused
+}
+
+# Sets REPLY to the glyph for a window. bspwm records WM_CLASS when it
+# manages a window; apps that set it later (Spotify) arrive blank, so ask X.
+_desk-icon() {
+    local _wid=$1 _class=${(L)2} _instance=${(L)3} _xclass
+    if [[ "$_class" == - && "$_instance" == - ]]; then
+        _xclass=$(xprop -id "$_wid" WM_CLASS 2>/dev/null)
+        [[ "$_xclass" =~ '= "([^"]*)", "([^"]*)"$' ]] && { _instance=${(L)match[1]}; _class=${(L)match[2]}; }
+    fi
+    REPLY=${_DESK_ICONS[$_class]:-${_DESK_ICONS[$_instance]:-$_DESK_ICON_FALLBACK}}
+}
+
+_desk-is-prune-event() {
+    [[ "$1" == (desktop_focus|node_remove|node_transfer)(| *) ]]
+}
+
+# ------------------------------
+# Public Functions
+# ------------------------------
+
+# Cell styles stack as in coord-bar: urgent fills the cell, focused adds an
+# underline. Polybar action tags wrap each cell; right-click and scroll are
+# the module's own handlers.
+desk-bar() {
+    local _arg _monitor= _tree _line _id _focused _urgent _layout _state _sticky
+    local _win _icon _cell _actions _mode= _out=
+    local -A _color=("${(@kv)_DESK_BAR_COLORS}") _count
+    local -a _f _w _order _icons _cells _modes
+
+    for _arg in "$@"; do
+        if [[ "$_arg" =~ '^([a-z]+)=(#[0-9A-Fa-f]{6,8})$' ]]; then
+            (( ${+_color[${match[1]}]} )) && _color[${match[1]}]=${match[2]}
+        else
+            _monitor=$_arg
+        fi
+    done
+
+    _tree=$(_desk-tree "$_monitor") || { log-error "[desk] bspwm not reachable"; return 1; }
+
+    for _line in ${(f)"$(jq -r --arg skip "$_DESK_SKIP_CLASS" "$_DESK_JQ_BAR" <<<"$_tree")"}; do
+        _f=("${(@ps:\t:)_line}")
+        _id=$(_desk-hex "${_f[1]}")
+        _focused=${_f[2]} _urgent=${_f[3]} _layout=${_f[4]} _state=${_f[5]} _sticky=${_f[6]}
+
+        _order=() _count=() _icons=()
+        for _win in "${(@)_f[7,-1]}"; do
+            _w=("${(@ps:\x1f:)_win}")
+            _desk-icon "${_w[1]}" "${_w[2]}" "${_w[3]}"
+            (( ${+_count[$REPLY]} )) || _order+=("$REPLY")
+            (( ++_count[$REPLY] ))
+        done
+
+        if (( ${#_order} == 0 )); then
+            (( _focused )) || continue
+            _icons=("$_DESK_ICON_EMPTY")
+        fi
+        for _icon in "${(@)_order[1,_DESK_MAX_ICONS]}"; do
+            _icons+=("${_icon}${_DESK_SUPERSCRIPTS[${_count[$_icon]}]-⁹⁺}")
+        done
+        (( ${#_order} > _DESK_MAX_ICONS )) && _icons+=("+$(( ${#_order} - _DESK_MAX_ICONS ))")
+
+        _cell=" ${(j: :)_icons} "
+        (( _urgent )) && _cell="%{B${_color[urgent]}}%{F${_color[ink]}}${_cell}%{F-}%{B-}"
+        (( _focused )) && _cell="%{u${_color[focused]}}%{+u}${_cell}%{-u}"
+        _cells+=("%{A1:bspc desktop -f ${_id}:}%{A2:bspc node -d ${_id}:}${_cell}%{A}%{A}")
+
+        if (( _focused )); then
+            _modes=()
+            [[ "$_layout" == monocle ]] && _modes+=("${_DESK_MODE_ICONS[monocle]}")
+            [[ "$_state" == (floating|fullscreen) ]] && _modes+=("${_DESK_MODE_ICONS[$_state]}")
+            (( _sticky )) && _modes+=("${_DESK_MODE_ICONS[sticky]}")
+            (( ${#_modes} )) && _mode="%{F${_color[mode]}} ${(j: :)_modes} %{F-}"
+        fi
+    done
+
+    _out="${(pj:$_DESK_GAP:)_cells}${_mode}"
+    _out+="%{A1:desk new:}%{A2:desk new --take:}%{F${_color[dim]}} ${_DESK_ICON_NEW} %{F-}%{A}%{A}"
+    print -r -- "$_out"
+}
+
+desk-prune() {
+    local _line _id _name
+    for _line in ${(f)"$(bspc wm -d | jq -r --arg keep "$_DESK_KEEP_NAME" "$_DESK_JQ_PRUNE")"}; do
+        _id=${_line%%$'\t'*} _name=${_line#*$'\t'}
+        # bspwm itself refuses to remove a desktop holding nodes or a
+        # monitor's last one, so a window landing after the dump is safe.
+        bspc desktop "$(_desk-hex "$_id")" -r 2>/dev/null && print -r -- "$_name"
+    done
+    return 0
+}
+
+# bspwm appends new desktops at the monitor's end; bubbling it back past the
+# desktops after the focused one lands it right after the focused one, by id,
+# so duplicate names elsewhere can't confuse it (unlike `monitor -o`).
+desk-new() {
+    local _take=0 _name=1 _current _new _node _class _i
+    local -a _names _before _after
+
+    case "${1:-}" in
+        "")     ;;
+        --take) _take=1 ;;
+        *)      log-error "[desk] new: unknown option '$1' (expected --take)"; return 1 ;;
+    esac
+
+    _names=(${(f)"$(bspc query -D --names)"})
+    while (( ${_names[(Ie)$_name]} )); do (( _name++ )); done
+
+    _current=$(bspc query -D -d focused) || return 1
+    _before=(${(f)"$(bspc query -D -m focused)"})
+    if (( _take )); then
+        _node=$(bspc query -N -n focused.window 2>/dev/null) || _node=
+        [[ -n "$_node" ]] && _class=$(bspc query -T -n "$_node" | jq -r '.client.className // ""')
+        [[ "$_class" == "$_DESK_SKIP_CLASS" ]] && _node=
+    fi
+
+    bspc monitor focused -a "$_name" || { log-error "[desk] new: could not add desktop '$_name'"; return 1; }
+    _after=(${(f)"$(bspc query -D -m focused)"})
+    _new=${${_after:|_before}[1]}
+    [[ -n "$_new" ]] || { log-error "[desk] new: added '$_name' but could not find it"; return 1; }
+
+    for (( _i = ${#_before} - ${_before[(Ie)$_current]}; _i > 0; _i-- )); do
+        bspc desktop "$_new" -b prev || break
+    done
+
+    if [[ -n "$_node" ]]; then
+        bspc node "$_node" -d "$_new" --follow
+    else
+        bspc desktop -f "$_new"
+    fi
+}
+
+desk-watch() {
+    local _pid _event _line _last= _prune
+
+    coproc bspc subscribe "${_DESK_EVENTS[@]}"
+    _pid=$!
+    # A function's EXIT trap fires on its return; TERM from polybar and PIPE
+    # from a closed stdout exit through it, so subscribe is never orphaned.
+    trap "kill $_pid 2>/dev/null" EXIT
+    trap "kill $_pid 2>/dev/null; exit 0" TERM INT HUP PIPE
+
+    _last=$(desk-bar "$@") || return 1
+    print -r -- "$_last" 2>/dev/null || return 0
+
+    while :; do
+        if ! read -r -p -t "$_DESK_IDLE" _event; then
+            # Timeout or subscribe gone. A closed stdout only shows on a
+            # write and an unchanged bar never writes, so a quiet spell
+            # rewrites the same line: a reader that went away (polybar
+            # killed with SIGKILL can't signal us) ends us within
+            # _DESK_IDLE seconds instead of on the next change.
+            kill -0 "$_pid" 2>/dev/null || return 0
+            print -r -- "$_last" 2>/dev/null || return 0
+            continue
+        fi
+        _prune=0
+        _desk-is-prune-event "$_event" && _prune=1
+        while read -r -p -t "$_DESK_SETTLE" _event; do
+            _desk-is-prune-event "$_event" && _prune=1
+        done
+        (( _prune )) && desk-prune >/dev/null
+        _line=$(desk-bar "$@") || continue
+        [[ "$_line" == "$_last" ]] && continue
+        print -r -- "$_line" 2>/dev/null || return 0
+        _last=$_line
+    done
+}

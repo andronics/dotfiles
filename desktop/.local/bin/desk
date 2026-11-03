@@ -1,0 +1,11 @@
+#!/usr/bin/env zsh
+set -e
+
+source "${DOTLIB}/_dispatcher" || { echo "missing _dispatcher" >&2; exit 1; }
+source "${DOTLIB}/_desk"       || { echo "missing _desk"       >&2; exit 1; }
+
+dispatcher-init "desk" \
+    --route=function \
+    --description="Polybar desktop strip: app icons per non-empty bspwm desktop, plus desktop create and prune"
+
+dispatcher-execute "$@"
