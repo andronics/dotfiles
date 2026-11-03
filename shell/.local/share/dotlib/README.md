@@ -87,7 +87,7 @@ Auto-handled — do not define module functions with these names:
 - `help`, `--help`, `-h` — show auto-generated help (or `<prefix>-help` if defined).
 - `version`, `--version` — show version (or `<prefix>-version` if defined).
 - `commands`, `list-commands` — list subcommands with descriptions.
-- `completion <shell>` — emit bash or zsh completion script.
+- `completion <shell>` — emit bash or zsh completion script. The zsh one defines `_<name>_cmd`; the repo keeps a copy per tool in `shell/.config/zsh/completions`, refreshed by `./dotfiles completions`.
 
 ### Global flags
 

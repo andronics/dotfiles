@@ -57,7 +57,7 @@ sudo pacman -S --needed bspwm sxhkd polybar picom dunst rofi gtk3 \
 ./dotfiles install shell desktop                # workstation
 ```
 
-`./dotfiles` is a thin stow wrapper. Subcommands: `install` (`i`), `uninstall` (`u`), `reinstall` (`r`). With no args, acts on every package. Per-package `.preinstall` / `.postinstall` hooks run automatically when present.
+`./dotfiles` is a thin stow wrapper. Subcommands: `install` (`i`), `uninstall` (`u`), `reinstall` (`r`), `completions` (`c`). With no args, acts on every package; `completions [tool...]` regenerates `shell/.config/zsh/completions/_<tool>_cmd` for each dotlib dispatcher (or just the tools named), leaving hand-written ones alone. Per-package `.preinstall` / `.postinstall` hooks run automatically when present.
 
 ### 5. (Optional) Switch this repo to SSH
 
