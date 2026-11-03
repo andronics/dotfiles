@@ -43,7 +43,7 @@
 #
 # Dependencies:
 #   Required:
-#     - _common, _log
+#     - _common, _log, _theme (the strip's colours and cell gap)
 #   External:
 #     - bspwm (bspc), jq, xprop (windows bspwm saw before they set WM_CLASS)
 #     - polybar, Symbols Nerd Font Mono (bar font-0); every glyph here is
@@ -57,11 +57,12 @@ zmodload -F zsh/datetime p:EPOCHREALTIME p:EPOCHSECONDS
 
 source "${DOTLIB}/_common" || { echo "[ERROR] _desk requires _common" >&2; return 1; }
 source "${DOTLIB}/_log"    2>/dev/null || true
+source "${DOTLIB}/_theme"  || { echo "[ERROR] _desk requires _theme" >&2; return 1; }
 
 # Mirrors _coord's _COORD_CLASS; sourcing _coord just for it would drag in
 # its dependencies.
 declare -g _DESK_SKIP_CLASS="coord"
-declare -g _DESK_GAP="%{O8}"   # polybar offset between desktop cells
+declare -g _DESK_GAP=   # polybar offset between desktop cells, %{O<cell_gap>}
 declare -g _DESK_KEEP_NAME="0"
 declare -g _DESK_SETTLE="${DESK_SETTLE:-0.05}"
 declare -gi _DESK_IDLE="${DESK_IDLE:-10}"
@@ -150,15 +151,17 @@ typeset -gA _DESK_MODE_ICONS=(
     [sticky]=$''                 # fa-sticky_note
 )
 
-# Colours for `bar`. These mirror polybar's [colors] (lavender, red, crust,
-# text, overlay0) because polybar can't interpolate references inside a
-# command, as in _coord. key=value args still override.
-typeset -gA _DESK_BAR_COLORS=(
-    [focused]='#b4befe' [urgent]='#f38ba8' [ink]='#11111b' [mode]='#cdd6f4' [dim]='#6c7086'
-)
+# Colours for `bar`: key=theme role, as in _coord. polybar can't interpolate
+# references inside a command, so `bar` and `watch` fill _DESK_BAR_COLORS
+# and _DESK_GAP from the current theme.zsh when they start (theme-roles;
+# Catppuccin Mocha when no theme is applied). `watch` reads them once: a new
+# theme reaches it through the polybar restart `theme reload polybar` does.
+# key=#rrggbb args still override.
+typeset -ga _DESK_BAR_ROLES=(focused=accent urgent=urgent ink=on_urgent mode=fg dim=dim)
+typeset -gA _DESK_BAR_COLORS=()
 
 typeset -gA _DESK_DESCRIPTIONS=(
-    [bar]="Print the polybar strip for [monitor] (default \$DESK_MONITOR, \$HOST_MONITOR, else focused): one fixed-width cell per non-empty desktop showing one app icon, rotating through its distinct apps every ${_DESK_ROTATE}s (DESK_ROTATE), focused underlined, urgent as a pill, then the focused desktop's mode and a + cell; [key=#rrggbb ...] overrides the built-in colours: ${(kj:, :)_DESK_BAR_COLORS}"
+    [bar]="Print the polybar strip for [monitor] (default \$DESK_MONITOR, \$HOST_MONITOR, else focused): one fixed-width cell per non-empty desktop showing one app icon, rotating through its distinct apps every ${_DESK_ROTATE}s (DESK_ROTATE), focused underlined, urgent as a pill, then the focused desktop's mode and a + cell, coloured from the current theme; [key=#rrggbb ...] overrides a colour (key=role): ${(j:, :)_DESK_BAR_ROLES}"
     [watch]="Print the strip, then reprint it after each burst of bspc events and on each rotation tick when it changed, pruning first after desktop focus, node removal or node transfer, and repeat it after ${_DESK_IDLE}s unprinted (DESK_IDLE); for a polybar custom/script with tail = true, exits when its reader goes away"
     [new]="Create a desktop named the lowest free integer right after the focused one on the focused monitor and focus it; --take moves the focused window there and follows (not a ${_DESK_SKIP_CLASS} panel)"
     [prune]="Remove every desktop with no nodes at all (hidden windows count) that isn't its monitor's focused desktop, never desktop '${_DESK_KEEP_NAME}' nor a monitor's last; prints the names removed"
@@ -217,6 +220,14 @@ _desk-icon() {
         [[ "$_xclass" =~ '= "([^"]*)", "([^"]*)"$' ]] && { _instance=${(L)match[1]}; _class=${(L)match[2]}; }
     fi
     REPLY=${_DESK_ICONS[$_class]:-${_DESK_ICONS[$_instance]:-$_DESK_ICON_FALLBACK}}
+}
+
+# Fills _DESK_BAR_COLORS and _DESK_GAP from the current theme.
+_desk-theme() {
+    local -A _metric
+    theme-roles _DESK_BAR_COLORS "${_DESK_BAR_ROLES[@]}"
+    theme-roles _metric gap=cell_gap
+    _DESK_GAP="%{O${_metric[gap]}}"
 }
 
 _desk-is-prune-event() {
@@ -292,6 +303,7 @@ _desk-render() {
 # ------------------------------
 
 desk-bar() {
+    _desk-theme
     _desk-render "$@" || return 1
     print -r -- "$REPLY"
 }
@@ -361,6 +373,7 @@ desk-watch() {
     trap "kill $_pid 2>/dev/null" EXIT
     trap "kill $_pid 2>/dev/null; exit 0" TERM INT HUP PIPE
 
+    _desk-theme
     _desk-render "$@" || return 1
     _last=$REPLY _printed=$EPOCHSECONDS
     print -r -- "$_last" 2>/dev/null || return 0
