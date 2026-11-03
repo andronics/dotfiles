@@ -109,14 +109,17 @@ declare -gr _THEME_MIN_FG_DIM=4.5 _THEME_MIN_DIM=3.0 _THEME_MIN_INDICATOR=3.0
 declare -gr _THEME_MIN_ON=4.5 _THEME_MIN_DELTA_E=0.08 _THEME_MIN_DELTA_L=0.03
 declare -gr _THEME_FONT_FLOOR=6
 
-# Roles of catppuccin-mocha as resolved: what `get` answers before any
-# theme has been applied. self-test fails if it drifts from the resolver.
+# Roles of catppuccin-mocha as resolved, plus the metrics the polybar strips
+# read: what `get` and `roles` answer before any theme has been applied. The
+# only fallback table in the codebase; self-test fails if it drifts from the
+# resolver.
 typeset -gA _THEME_FALLBACK=(
     [bg]='#1e1e2e' [bg_alt]='#313244' [surface]='#313244' [border]='#313244'
     [fg]='#cdd6f4' [fg_dim]='#a6adc8' [dim]='#6c7086' [accent]='#b4befe'
     [focused]='#b4befe' [on_accent]='#11111b' [urgent]='#f38ba8'
     [on_urgent]='#11111b' [busy]='#fab387' [ok]='#a6e3a1' [warn]='#f9e2af'
     [info]='#94e2d5' [cursor]='#f5e0dc' [selection]='#313244'
+    [cell_gap]=8
 )
 
 # extension -> validator function, run on every rendered file.
@@ -143,6 +146,7 @@ typeset -gA _THEME_DESCRIPTIONS=(
     [apply]="Resolve, render, validate and swap in <scheme|build-id|default>; keeps the current theme on any failure"
     [current]="Show the applied theme's name, source, mode, scale and contrast; --json prints spec.json"
     [get]="Print one value: a role (accent, fg, ...), palette slot or name, size, metric or font"
+    [roles]="Print <key>=<role> ... as '<key> <value>' lines, each role (or palette name, size, metric) from the current theme or the built-in fallback; in zsh, theme-roles <assoc> <key>=<role> ... fills an assoc instead"
     [list]="List [schemes|history|builds] (default schemes)"
     [check]="Resolve [scheme] (default: the current one) without applying; print roles, contrast and adjustments; non-zero if a guarantee can't be met"
     [swatch]="Print the current theme, or [scheme], as truecolour blocks"
@@ -163,6 +167,9 @@ Commands:
   get <key>                         One value: role, palette slot/name, size,
                                     metric or font (e.g. accent, base0D,
                                     lavender, terminal, gap, mono)
+  roles <key>=<role> ...            Several values as "<key> <value>" lines;
+                                    in zsh, theme-roles <assoc> ... fills an
+                                    assoc (the polybar strips)
   list [schemes|history|builds]     What can be applied (default schemes)
   check [scheme]                    Resolve without applying; roles, contrast
                                     ratios and adjustments; exit 1 on failure
@@ -559,8 +566,8 @@ _theme-contrast-table() {
 }
 
 # Point sizes from fonts.base x fonts.scale, a type scale (ratio 1.2) on the
-# menu size, and pixel metrics. gap is unscaled (decision D5), and so is
-# bar_height: the bar keeps its height and its text grows inside it.
+# menu size, and pixel metrics. gap and cell_gap are unscaled (decision D5),
+# and so is bar_height: the bar keeps its height and its text grows inside it.
 _theme-sizes() {
     local k v
     local -F scale=${_THEME_IN[prefs.fonts.scale]:-1} n menu
@@ -581,7 +588,7 @@ _theme-sizes() {
     for k v in "${(@kv)_THEME_IN}"; do
         [[ "$k" == prefs.metrics.* ]] || continue
         k=${k#prefs.metrics.}
-        if [[ "$k" == (gap|bar_height) ]]; then _THEME_METRIC[$k]=$(( int(rint(v)) ))
+        if [[ "$k" == (gap|cell_gap|bar_height) ]]; then _THEME_METRIC[$k]=$(( int(rint(v)) ))
         else _THEME_METRIC[$k]=$(( int(rint(v * scale)) )); fi
     done
     _THEME_METRIC[cursor]=$(( int(rint(${_THEME_IN[prefs.cursor.size]:-24} * scale)) ))
@@ -949,6 +956,37 @@ theme-get() {
     return 1
 }
 
+# theme-roles [<assoc>] <key>=<role> ...
+# Fills the caller's assoc <assoc> (declared there, or global) with key ->
+# the current theme's value for role, looked up as `get` does (role, palette
+# slot or name, size, metric), else _THEME_FALLBACK's when no theme is
+# applied or the build predates the role. Without <assoc>, prints
+# "<key> <value>" lines. One `source` of theme.zsh, so the polybar strips call
+# it per draw. Returns 1 if some role is unknown (its key is left as it was).
+theme-roles() {
+    local _tr_assoc= _tr_pair _tr_key _tr_role _tr_map _tr_ref _tr_val _tr_rc=0 _tr_have=0
+    [[ "${1:-}" == (-h|--help) ]] && { theme-help; return 0; }
+    [[ "${1:-}" =~ '^[A-Za-z_][A-Za-z0-9_]*$' ]] && { _tr_assoc=$1; shift; }
+    _theme-paths
+    _theme-source-current && _tr_have=1
+    for _tr_pair in "$@"; do
+        _tr_key=${_tr_pair%%=*} _tr_role=${_tr_pair#*=} _tr_val=
+        (( _tr_have )) && for _tr_map in THEME_ROLE THEME_PALETTE THEME_SIZE THEME_METRIC; do
+            _tr_ref="${_tr_map}[$_tr_role]"
+            (( ${(P)+_tr_ref} )) && { _tr_val=${(P)_tr_ref}; break; }
+        done
+        : ${_tr_val:=${_THEME_FALLBACK[$_tr_role]:-}}
+        if [[ -z "$_tr_val" || ! "$_tr_key" =~ '^[A-Za-z_][A-Za-z0-9_]*$' ]]; then
+            log-error "[theme] roles: no value for '$_tr_pair'"; _tr_rc=1
+        elif [[ -n "$_tr_assoc" ]]; then
+            : ${(P)${:-${_tr_assoc}[$_tr_key]}::=$_tr_val}
+        else
+            print -r -- "$_tr_key $_tr_val"
+        fi
+    done
+    return $_tr_rc
+}
+
 theme-reload() {
     [[ "${1:-}" == (-h|--help) ]] && { theme-help; return 0; }
     _theme-paths
@@ -1155,7 +1193,21 @@ _theme-self-test-run() {
     for role in "${_THEME_ROLES[@]}"; do
         [[ "${THEME_ROLE[$role]}" == "${_THEME_FALLBACK[$role]}" ]] || drift+=" $role=${THEME_ROLE[$role]}"
     done
+    for role in ${(k)_THEME_FALLBACK}; do
+        (( ${_THEME_ROLES[(Ie)$role]} )) && continue
+        [[ "${THEME_METRIC[$role]:-}" == "${_THEME_FALLBACK[$role]}" ]] || drift+=" $role=${THEME_METRIC[$role]:-}"
+    done
     [[ -z "$drift" ]] && ok "fallback table matches resolved catppuccin-mocha" || bad "fallback drift:$drift"
+    local -A strip=()
+    theme-roles strip waiting=urgent ink=on_urgent gap=cell_gap 2>/dev/null
+    [[ "${strip[waiting]} ${strip[ink]} ${strip[gap]}" == "#f38ba8 #11111b 8" ]] &&
+        ok "roles: waiting=urgent ink=on_urgent gap=cell_gap fill an assoc (#f38ba8 #11111b 8)" ||
+        bad "roles: ${(kv)strip}"
+    strip=()
+    ( THEME_STATE_DIR="$scratch/none" theme-roles strip shown=accent 2>/dev/null && print -r -- "${strip[shown]}" ) |
+        read -r role
+    [[ "$role" == "${_THEME_FALLBACK[accent]}" ]] && ok "roles: no state falls back to ${_THEME_FALLBACK[accent]}" ||
+        bad "roles with no state gave '$role'"
     [[ "${THEME_SIZE[terminal]} ${THEME_SIZE[menu]} ${THEME_SIZE[bar]} ${THEME_METRIC[gap]} ${THEME_METRIC[bar_height]}" == "16.25 13.75 12.5 5 50" ]] &&
         ok "sizes: terminal 16.25, menu 13.75, bar 12.5; gap 5 and bar_height 50 unscaled" ||
         bad "sizes: ${(kv)THEME_SIZE} gap ${THEME_METRIC[gap]} bar_height ${THEME_METRIC[bar_height]}"
