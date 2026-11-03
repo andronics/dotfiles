@@ -139,6 +139,22 @@ _coord_cmd() {
                     _coord_cmd_load names
                     _coord_cmd_offer name coordinators 'coordinator' && ret=0
                     ;;
+                stop|restart)
+                    # One name (or, for stop, --all) and --yes, in any order.
+                    local -a prev=(${(@)words[2,CURRENT-1]}) sopt=() w
+                    local named=
+                    for w in $prev; do [[ $w == -* ]] || named=1; done
+                    (( ${prev[(Ie)--yes]} || ${prev[(Ie)-y]} )) \
+                        || sopt+=('--yes:skip the question about missing pause notes')
+                    if [[ $sub == stop ]] && [[ -z $named ]] && (( ! ${prev[(Ie)--all]} )); then
+                        sopt+=('--all:every running coordinator')
+                    fi
+                    (( ${#sopt} )) && _describe -t options 'option' sopt && ret=0
+                    if [[ -z $named ]] && (( ! ${prev[(Ie)--all]} )); then
+                        _coord_cmd_load names
+                        _coord_cmd_offer name coordinators 'coordinator' && ret=0
+                    fi
+                    ;;
                 cycle)
                     (( CURRENT == 2 )) || return 1
                     local -a dir=('next:the next coordinator, wrapping' 'prev:the previous coordinator, wrapping')
