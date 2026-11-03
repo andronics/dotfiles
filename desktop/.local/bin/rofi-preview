@@ -1,15 +1,16 @@
 #!/usr/bin/env zsh
 # rofi-preview <variant> - open a rofi theme variant on harmless sample rows
-# and print what was picked instead of acting on it. Themes and _coord come
-# from the checkout this script lives in (stow links resolve back to it), so
-# a worktree previews its own, uninstalled themes.
+# and print what was picked instead of acting on it. Themes, _coord and _power
+# come from the checkout this script lives in (stow links resolve back to it),
+# so a worktree previews its own, uninstalled themes. Besides one variant per
+# theme, `confirm` shows power's Yes/No question (themes/prompt.rasi).
 
 _repo=${0:A:h:h:h:h}
 _themes="${_repo}/desktop/.config/rofi/themes"
-_variants=(${_themes}/*.rasi(N:t:r))
+_variants=(${_themes}/*.rasi(N:t:r) confirm)
 
 _variant=${1:-}
-if [[ -z "$_variant" || ! -r "${_themes}/${_variant}.rasi" ]]; then
+if [[ -z "$_variant" || ${_variants[(Ie)$_variant]} -eq 0 ]]; then
     print -u2 "usage: ${0:t} <variant>   variants: ${_variants[*]}"
     exit 2
 fi
@@ -48,16 +49,19 @@ case "$_variant" in
         done
         # The cursor starts off the shown cell so both the ring and the pill show.
         _args+=(-markup-rows -format i -p "Coordinator" -selected-row 1 -a 0) ;;
-    power)
-        _rows=(
-            "Lock"$'\0icon\x1f'"system-lock-screen"
-            "Log out"$'\0icon\x1f'"system-log-out"
-            "Suspend"$'\0icon\x1f'"system-suspend"
-            "Hibernate"$'\0icon\x1f'"system-hibernate"
-            "Reboot"$'\0icon\x1f'"system-reboot"
-            "Shut down"$'\0icon\x1f'"system-shutdown"
-        )
-        _args+=(-mesg "Power (preview: nothing runs)") ;;
+    power|confirm)
+        # The real menu and question from _power, minus the acting.
+        export DOTLIB="${_repo}/shell/.local/share/dotlib"
+        export POWER_MENU_THEME="${_themes}/power.rasi" POWER_CONFIRM_THEME="${_themes}/prompt.rasi"
+        source "${DOTLIB}/_power" || exit 1
+        if [[ "$_variant" == power ]]; then
+            _power-menu-choose -mesg "Power (preview: nothing runs)" \
+                && print -r -- "power: picked '${REPLY}'" || print -r -- "power: cancelled"
+        else
+            _power-confirm-ask suspend \
+                && print -r -- "confirm: picked 'Yes'" || print -r -- "confirm: No or cancelled"
+        fi
+        exit 0 ;;
     prompt)
         _args=(${_args:#-no-custom} -p "Rename") ;;
     *)
