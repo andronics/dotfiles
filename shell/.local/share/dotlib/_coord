@@ -4,7 +4,7 @@
 # Code coordinator, summoned one at a time.
 #
 # The switchboard order is _COORD_NAMES (brain, template, folio, homelab,
-# metalayerlab, apps, dotfiles): `pick` lists it in a rofi menu and `cycle`
+# metalayerlab, apps, dotfiles, ideas): `pick` lists it in a rofi menu and `cycle`
 # steps through it, wrapping. sxhkdrc's `super + c` chord can't read it and
 # spells the same names out. `toggle` accepts any valid name.
 #
@@ -63,7 +63,7 @@ declare -gi _COORD_WIDTH_STEP=128
 declare -g _COORD_SIDE_FILE="${XDG_STATE_HOME:-$HOME/.local/state}/coord/side"
 declare -g _COORD_SIDE_DEFAULT=right
 declare -g _COORD_LAST_FILE="${XDG_STATE_HOME:-$HOME/.local/state}/coord/last"
-typeset -ga _COORD_NAMES=(brain template folio homelab metalayerlab apps dotfiles)
+typeset -ga _COORD_NAMES=(brain template folio homelab metalayerlab apps dotfiles ideas)
 declare -g _COORD_ACTORS_DIR="${COORD_ACTORS_DIR:-/pool/local/actors}"
 declare -g _COORD_STATE_DIR="${XDG_RUNTIME_DIR:-$HOME/.cache}/coord/state"
 declare -gi _COORD_NOTIFY_BODY_MAX=200
@@ -79,6 +79,7 @@ typeset -gA _COORD_ICONS=(
     [metalayerlab]=$'\U000F0F58'   # md-layers_triple
     [apps]=$'\U000F003B'           # md-apps
     [dotfiles]=$'\U000F0493'       # md-cog
+    [ideas]=$'\U000F0335'          # md-lightbulb
 )
 
 # Colours for `bar`. These mirror polybar's [colors] (overlay0, peach, red,
