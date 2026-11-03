@@ -30,6 +30,10 @@ super + {n, p}
 super + {n, p} + alt
   bspc node -d $(bspc query -D -d "{next,prev}") --follow
 
+# desktop - new after the focused one {_, taking the focused node}
+super + shift + n + {_, alt}
+  desk new {_, --take}
+
 # node - balance
 super + b + {_, alt}
   bspc node {@parent, @/} --balance
