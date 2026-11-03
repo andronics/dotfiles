@@ -1,0 +1,315 @@
+#!/usr/bin/env zsh
+
+# _colour - colour maths in pure zsh: hex <-> sRGB <-> OKLab/OKLCH, WCAG
+# relative luminance and contrast, OKLab distance, mixing, and moving a colour
+# along OKLCH lightness until it meets a contrast ratio against a background.
+#
+# Functions return through REPLY (one value) or reply (several) instead of
+# printing, so callers avoid a subshell per colour; the resolver in _theme
+# makes a few hundred of these calls per theme.
+#
+# Colours are "#rrggbb" (the leading # is optional on input). sRGB channels
+# are floats in 0..1; OKLCH hue is in degrees.
+#
+# Gamut mapping: an OKLCH colour outside sRGB keeps its lightness and hue and
+# loses chroma (bisection) until it fits, the CSS Color 4 approach without the
+# deltaE tolerance step. That is exact enough at 8 bits per channel and keeps
+# this module in zsh (decision D11).
+#
+# Usage:
+#   source "${DOTLIB}/_colour"
+#
+# Dependencies:
+#   zsh/mathfunc (cbrt, atan, cos, sin, sqrt)
+
+[[ -n "${COLOUR_LOADED:-}" ]] && return 0
+declare -gr COLOUR_LOADED=1
+
+zmodload zsh/mathfunc || { echo "[ERROR] _colour requires zsh/mathfunc" >&2; return 1; }
+
+declare -gr _COLOUR_PI=3.14159265358979323846
+
+# Per-hex memo of luminance and OKLab: a resolve asks for the same few
+# colours hundreds of times.
+typeset -gA _COLOUR_LUM_MEMO _COLOUR_LAB_MEMO
+
+# ------------------------------
+# Private Helpers
+# ------------------------------
+
+# sRGB transfer function and its inverse, one channel.
+_colour-lin() {
+    local -F c=$1
+    if (( c <= 0.04045 )); then REPLY=$(( c / 12.92 ))
+    else REPLY=$(( ((c + 0.055) / 1.055) ** 2.4 )); fi
+}
+
+_colour-gam() {
+    local -F c=$1
+    if (( c <= 0.0031308 )); then REPLY=$(( 12.92 * c ))
+    else REPLY=$(( 1.055 * c ** (1.0 / 2.4) - 0.055 )); fi
+}
+
+# OKLab -> linear sRGB, unclamped: reply=(r g b).
+_colour-oklab-to-lin() {
+    local -F L=$1 a=$2 b=$3 l_ m_ s_ l m s
+    l_=$(( L + 0.3963377774 * a + 0.2158037573 * b ))
+    m_=$(( L - 0.1055613458 * a - 0.0638541728 * b ))
+    s_=$(( L - 0.0894841775 * a - 1.2914855480 * b ))
+    l=$(( l_ * l_ * l_ )); m=$(( m_ * m_ * m_ )); s=$(( s_ * s_ * s_ ))
+    reply=(
+        $(( 4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s ))
+        $(( -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s ))
+        $(( -0.0041960863 * l - 0.7034186147 * m + 1.7076147010 * s ))
+    )
+}
+
+# True when every channel of linear sRGB reply-style args is in 0..1, with a
+# little slack for float noise.
+_colour-in-gamut() {
+    local -F c
+    for c; do (( c >= -0.0001 && c <= 1.0001 )) || return 1; done
+}
+
+# ------------------------------
+# Public
+# ------------------------------
+
+# colour-parse <hex>: reply=(r g b), sRGB 0..1. Returns 1 if not #rrggbb.
+colour-parse() {
+    local h=${1#\#}
+    [[ "$h" =~ '^[[:xdigit:]]{6}$' ]] || { reply=(); return 1; }
+    reply=( $(( 0x${h[1,2]} / 255.0 )) $(( 0x${h[3,4]} / 255.0 )) $(( 0x${h[5,6]} / 255.0 )) )
+}
+
+# colour-valid <hex>: status only.
+colour-valid() {
+    [[ "$1" =~ '^#[[:xdigit:]]{6}$' ]]
+}
+
+# colour-hex <r> <g> <b>: REPLY="#rrggbb" from sRGB 0..1, clamped.
+colour-hex() {
+    local -F c
+    local -i v
+    local out='#' part
+    for c in "$@"; do
+        (( c < 0 )) && c=0
+        (( c > 1 )) && c=1
+        v=$(( int(rint(c * 255)) ))
+        printf -v part '%02x' $v
+        out+=$part
+    done
+    REPLY=$out
+}
+
+# colour-luminance <hex>: REPLY = WCAG 2 relative luminance.
+colour-luminance() {
+    REPLY=${_COLOUR_LUM_MEMO[$1]:-}
+    [[ -n "$REPLY" ]] && return 0
+    colour-parse "$1" || return 1
+    local -F r g b
+    _colour-lin ${reply[1]}; r=$REPLY
+    _colour-lin ${reply[2]}; g=$REPLY
+    _colour-lin ${reply[3]}; b=$REPLY
+    REPLY=$(( 0.2126 * r + 0.7152 * g + 0.0722 * b ))
+    _COLOUR_LUM_MEMO[$1]=$REPLY
+}
+
+# colour-contrast <hex> <hex>: REPLY = WCAG 2 contrast ratio (1..21).
+colour-contrast() {
+    local -F l1 l2 t
+    colour-luminance "$1" || return 1; l1=$REPLY
+    colour-luminance "$2" || return 1; l2=$REPLY
+    (( l1 < l2 )) && { t=$l1; l1=$l2; l2=$t; }
+    REPLY=$(( (l1 + 0.05) / (l2 + 0.05) ))
+}
+
+# colour-to-oklab <hex>: reply=(L a b).
+colour-to-oklab() {
+    if [[ -n "${_COLOUR_LAB_MEMO[$1]:-}" ]]; then
+        reply=(${=_COLOUR_LAB_MEMO[$1]})
+        return 0
+    fi
+    colour-parse "$1" || return 1
+    local -F r g b l m s
+    _colour-lin ${reply[1]}; r=$REPLY
+    _colour-lin ${reply[2]}; g=$REPLY
+    _colour-lin ${reply[3]}; b=$REPLY
+    l=$(( cbrt(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b) ))
+    m=$(( cbrt(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b) ))
+    s=$(( cbrt(0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b) ))
+    reply=(
+        $(( 0.2104542553 * l + 0.7936177850 * m - 0.0040720468 * s ))
+        $(( 1.9779984951 * l - 2.4285922050 * m + 0.4505937099 * s ))
+        $(( 0.0259040371 * l + 0.7827717662 * m - 0.8086757660 * s ))
+    )
+    _COLOUR_LAB_MEMO[$1]="${reply[*]}"
+}
+
+# colour-to-oklch <hex>: reply=(L C h), h in degrees 0..360.
+colour-to-oklch() {
+    colour-to-oklab "$1" || return 1
+    local -F L=${reply[1]} a=${reply[2]} b=${reply[3]} C h
+    C=$(( sqrt(a * a + b * b) ))
+    h=$(( atan(b, a) * 180.0 / _COLOUR_PI ))
+    (( h < 0 )) && h=$(( h + 360.0 ))
+    reply=($L $C $h)
+}
+
+# colour-from-oklab <L> <a> <b>: REPLY hex (clamped, no gamut mapping).
+colour-from-oklab() {
+    _colour-oklab-to-lin "$@"
+    local -F r g b
+    _colour-gam ${reply[1]}; r=$REPLY
+    _colour-gam ${reply[2]}; g=$REPLY
+    _colour-gam ${reply[3]}; b=$REPLY
+    colour-hex $r $g $b
+}
+
+# colour-from-oklch <L> <C> <h>: REPLY hex. Out-of-gamut colours keep L and h
+# and lose chroma until they fit.
+colour-from-oklch() {
+    local -F L=$1 C=$2 h=$3 lo hi mid rad
+    local -i i
+    (( L < 0 )) && L=0
+    (( L > 1 )) && L=1
+    rad=$(( h * _COLOUR_PI / 180.0 ))
+    _colour-oklab-to-lin $L $(( C * cos(rad) )) $(( C * sin(rad) ))
+    if ! _colour-in-gamut "${reply[@]}"; then
+        lo=0; hi=$C
+        for (( i = 0; i < 10; i++ )); do
+            mid=$(( (lo + hi) / 2 ))
+            _colour-oklab-to-lin $L $(( mid * cos(rad) )) $(( mid * sin(rad) ))
+            if _colour-in-gamut "${reply[@]}"; then lo=$mid; else hi=$mid; fi
+        done
+        C=$lo
+    fi
+    colour-from-oklab $L $(( C * cos(rad) )) $(( C * sin(rad) ))
+}
+
+# colour-delta-e <hex> <hex>: REPLY = Euclidean distance in OKLab (ΔE_OK).
+colour-delta-e() {
+    local -F L1 a1 b1
+    colour-to-oklab "$1" || return 1
+    L1=${reply[1]}; a1=${reply[2]}; b1=${reply[3]}
+    colour-to-oklab "$2" || return 1
+    REPLY=$(( sqrt((L1 - reply[1]) ** 2 + (a1 - reply[2]) ** 2 + (b1 - reply[3]) ** 2) ))
+}
+
+# colour-delta-l <hex> <hex>: REPLY = |ΔL| in OKLab.
+colour-delta-l() {
+    local -F L1
+    colour-to-oklab "$1" || return 1; L1=${reply[1]}
+    colour-to-oklab "$2" || return 1
+    REPLY=$(( abs(L1 - reply[1]) ))
+}
+
+# colour-mix <hex> <hex> <t>: REPLY = OKLab mix, t=0 is the first colour.
+colour-mix() {
+    local -F t=$3 L1 a1 b1
+    colour-to-oklab "$1" || return 1
+    L1=${reply[1]}; a1=${reply[2]}; b1=${reply[3]}
+    colour-to-oklab "$2" || return 1
+    colour-from-oklab $(( L1 + (reply[1] - L1) * t )) $(( a1 + (reply[2] - a1) * t )) \
+        $(( b1 + (reply[3] - b1) * t ))
+}
+
+# colour-lighten <hex> <dL> / colour-darken <hex> <dL>: REPLY, OKLCH lightness
+# moved by dL (0..1), hue kept.
+colour-lighten() {
+    colour-to-oklch "$1" || return 1
+    colour-from-oklch $(( reply[1] + $2 )) ${reply[2]} ${reply[3]}
+}
+
+colour-darken() {
+    colour-to-oklch "$1" || return 1
+    colour-from-oklch $(( reply[1] - $2 )) ${reply[2]} ${reply[3]}
+}
+
+# colour-rotate <hex> <degrees>: REPLY with the OKLCH hue turned, L and C kept
+# (C reduced if the result leaves sRGB).
+colour-rotate() {
+    colour-to-oklch "$1" || return 1
+    local -F h=$(( reply[3] + $2 ))
+    (( h < 0 )) && h=$(( h + 360.0 ))
+    (( h >= 360 )) && h=$(( h - 360.0 ))
+    colour-from-oklch ${reply[1]} ${reply[2]} $h
+}
+
+# colour-fit-contrast <hex> <bg> <ratio>: REPLY = the colour with <hex>'s hue
+# and chroma (chroma reduced at the gamut edge) whose lightness is the closest
+# to <bg>'s that still reaches <ratio>, on the side of <bg> (lighter or darker)
+# that can reach the higher contrast. Returns 1, with REPLY the best
+# achievable (pure white or black end), when no lightness reaches <ratio>.
+#
+# Bisection runs on the quantised hex so the result meets the ratio after
+# rounding to 8 bits, not just in floats.
+colour-fit-contrast() {
+    local fg=$1 bg=$2 best cand
+    local -F ratio=$3 L C h bgL lo hi mid cw cb
+    local -i i up
+    colour-contrast '#ffffff' "$bg" || return 1; cw=$REPLY
+    colour-contrast '#000000' "$bg"; cb=$REPLY
+    (( up = cw >= cb ))
+    colour-to-oklch "$fg" || return 1
+    C=${reply[2]}; h=${reply[3]}
+    colour-to-oklab "$bg"; bgL=${reply[1]}
+
+    if (( up )); then lo=$bgL; hi=1.0; else lo=0.0; hi=$bgL; fi
+    # The far end first: if even that fails, nothing in between can pass.
+    colour-from-oklch $(( up ? hi : lo )) $C $h; best=$REPLY
+    colour-contrast "$best" "$bg"
+    if (( REPLY < ratio )); then
+        REPLY=$best
+        return 1
+    fi
+    for (( i = 0; i < 13; i++ )); do
+        mid=$(( (lo + hi) / 2 ))
+        colour-from-oklch $mid $C $h
+        cand=$REPLY
+        colour-contrast "$cand" "$bg"
+        if (( REPLY >= ratio )); then
+            best=$cand
+            if (( up )); then hi=$mid; else lo=$mid; fi
+        else
+            if (( up )); then lo=$mid; else hi=$mid; fi
+        fi
+    done
+    REPLY=$best
+}
+
+# colour-ensure-contrast <hex> <bg> <ratio>: REPLY = <hex> unchanged if it
+# already meets <ratio> against <bg>, else colour-fit-contrast's answer.
+# Returns 1 when <ratio> is out of reach (REPLY = best achievable).
+colour-ensure-contrast() {
+    colour-contrast "$1" "$2" || return 1
+    if (( REPLY >= $3 )); then REPLY=$1; return 0; fi
+    colour-fit-contrast "$1" "$2" "$3"
+}
+
+# colour-best-on <bg> <ratio> <candidate...>: REPLY = the candidate with the
+# highest contrast on <bg> among those reaching <ratio>; if none does, the
+# better of black and white. Returns 1 if even that misses <ratio>.
+colour-best-on() {
+    local bg=$1 c best=
+    local -F ratio=$2 top=0
+    shift 2
+    for c; do
+        colour-valid "$c" || continue
+        colour-contrast "$c" "$bg"
+        (( REPLY >= ratio && REPLY > top )) && { top=$REPLY; best=$c; }
+    done
+    if [[ -z "$best" ]]; then
+        for c in '#000000' '#ffffff'; do
+            colour-contrast "$c" "$bg"
+            (( REPLY > top )) && { top=$REPLY; best=$c; }
+        done
+    fi
+    REPLY=$best
+    (( top >= ratio ))
+}
+
+# colour-round <float> [digits]: REPLY rounded for display/JSON (default 2).
+colour-round() {
+    printf -v REPLY "%.${2:-2}f" "$1"
+}
