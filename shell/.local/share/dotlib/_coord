@@ -40,7 +40,7 @@
 #
 # Dependencies:
 #   Required:
-#     - _common, _log
+#     - _common, _log, _theme (the strip's colours)
 #   External:
 #     - bspwm (bspc), xprop, jq, alacritty, tmux, flock, rofi (pick)
 #     - notify-send (libnotify >= 0.7.9 for --action) and a notification
@@ -54,6 +54,7 @@ declare -gr COORD_LOADED=1
 
 source "${DOTLIB}/_common" || { echo "[ERROR] _coord requires _common" >&2; return 1; }
 source "${DOTLIB}/_log"    2>/dev/null || true
+source "${DOTLIB}/_theme"  || { echo "[ERROR] _coord requires _theme" >&2; return 1; }
 
 declare -g _COORD_CLASS="coord"
 declare -g _COORD_LAUNCH_TIMEOUT="${COORD_LAUNCH_TIMEOUT:-10}"
@@ -82,12 +83,13 @@ typeset -gA _COORD_ICONS=(
     [ideas]=$'\U000F0335'          # md-lightbulb
 )
 
-# Colours for `bar`. These mirror polybar's [colors] (overlay0, peach, red,
-# crust, lavender) because polybar can't interpolate references inside a
-# command, so the hook is a plain `coord bar`. key=value args still override.
-typeset -gA _COORD_BAR_COLORS=(
-    [dim]='#6c7086' [busy]='#fab387' [waiting]='#f38ba8' [ink]='#11111b' [shown]='#b4befe'
-)
+# Colours for `bar` and `pick`: key=theme role. polybar can't interpolate
+# references inside a command, so the hook is a plain `coord bar`, and `bar`
+# and `pick` fill _COORD_BAR_COLORS from the current theme.zsh each time they
+# run (theme-roles; Catppuccin Mocha when no theme is applied). A new theme
+# shows on the next poke. key=#rrggbb args to `bar` still override.
+typeset -ga _COORD_BAR_ROLES=(dim=dim busy=busy waiting=urgent ink=on_urgent shown=accent)
+typeset -gA _COORD_BAR_COLORS=()
 
 typeset -gA _COORD_DESCRIPTIONS=(
     [toggle]="Show <name>'s window docked on the dock side's edge (launching it if needed), or hide it if it is focused"
@@ -98,7 +100,7 @@ typeset -gA _COORD_DESCRIPTIONS=(
     [launch]="Start <name>'s window hidden, attaching to its tmux session if one exists"
     [list]="List coordinator windows and whether each is hidden or visible"
     [status]="Claude Code hook: read the hook JSON on stdin and, for a session under ${_COORD_ACTORS_DIR}/<name>, record <name> busy, idle, or waiting on a question (AskUserQuestion), permission or elicitation, notifying on waiting and refresh polybar; [event] overrides hook_event_name; always exits 0"
-    [bar]="Print the polybar strip: one clickable icon per coordinator styled not running, idle, busy, waiting or shown; [key=#rrggbb ...] overrides the built-in colours: ${(kj:, :)_COORD_BAR_COLORS}"
+    [bar]="Print the polybar strip: one clickable icon per coordinator styled not running, idle, busy, waiting or shown, coloured from the current theme; [key=#rrggbb ...] overrides a colour (key=role): ${(j:, :)_COORD_BAR_ROLES}"
 )
 
 # ------------------------------
@@ -446,6 +448,7 @@ coord-pick() {
     local -a _rows _active _theme_args
     local -A _running _shown
 
+    theme-roles _COORD_BAR_COLORS "${_COORD_BAR_ROLES[@]}"
     _coord-scan
     _current=$(_coord-current)
     for _name in "${_COORD_NAMES[@]}"; do
@@ -648,8 +651,10 @@ coord-status() {
 # right-click and scroll are the module's own handlers.
 coord-bar() {
     local _arg _name _icon _cell _out=
-    local -A _color=("${(@kv)_COORD_BAR_COLORS}") _running _shown
+    local -A _color _running _shown
 
+    theme-roles _COORD_BAR_COLORS "${_COORD_BAR_ROLES[@]}"
+    _color=("${(@kv)_COORD_BAR_COLORS}")
     for _arg in "$@"; do
         [[ "$_arg" =~ '^([a-z]+)=(#[0-9A-Fa-f]{6,8})$' ]] && (( ${+_color[${match[1]}]} )) \
             && _color[${match[1]}]=${match[2]}
