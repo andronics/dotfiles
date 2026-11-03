@@ -1,7 +1,0 @@
-# --color=16 plus ANSI indices only, so fzf follows the terminal's palette.
-export FZF_DEFAULT_OPTS=" \
---color=16 \
---color=fg:-1,bg:-1,fg+:-1,bg+:0,selected-bg:8 \
---color=hl:1,hl+:1,header:1,info:5,prompt:5 \
---color=pointer:5,spinner:5,marker:4,border:8 \
---multi"

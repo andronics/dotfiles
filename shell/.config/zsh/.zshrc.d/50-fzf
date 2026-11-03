@@ -1,1 +1,12 @@
+# --color=16 plus ANSI indices only, so fzf follows the terminal's palette.
+# Set in every interactive shell, not only login shells: non-login shells (new
+# terminal windows, tmux panes) would otherwise inherit whatever value their
+# parent exported, and a long-lived tmux server can carry a stale one.
+export FZF_DEFAULT_OPTS=" \
+--color=16 \
+--color=fg:-1,bg:-1,fg+:-1,bg+:0,selected-bg:8 \
+--color=hl:1,hl+:1,header:1,info:5,prompt:5 \
+--color=pointer:5,spinner:5,marker:4,border:8 \
+--multi"
+
 alias fzf="fzf --preview='preview {}'"
