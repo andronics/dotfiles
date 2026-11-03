@@ -6,6 +6,10 @@ super + BackSpace + {_, alt}
 super + Escape + {_, alt}
   { bsp hide && audio mute, bsp unhide && audio unmute }
 
+# power - menu (lock, log out, suspend, hibernate, reboot, shut down; all but lock confirm)
+super + shift + Escape
+  power menu
+
 # terminal - default
 super + Return + {_, alt, shift}
   {$TERMINAL, terminal drop scratch, terminal draw}
