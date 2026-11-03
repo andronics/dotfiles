@@ -69,3 +69,12 @@ color = "#FAB387"
 [[colors.indexed_colors]]
 index = 17
 color = "#F5E0DC"
+
+# Local addition, not catppuccin's: the fallback font, here rather than in
+# alacritty.toml so the generated theme (imported after this) can override it.
+[font]
+size = 16.0
+normal = { family = "Source Code Pro for Powerline", style = "Regular" }
+bold = { family = "Source Code Pro for Powerline", style = "Bold" }
+italic = { family = "Source Code Pro for Powerline", style = "Italic" }
+bold_italic = { family = "Source Code Pro for Powerline", style = "Bold Italic" }
