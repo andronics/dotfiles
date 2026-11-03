@@ -1,0 +1,55 @@
+/**
+ * Bar menu: the polybar menu buttons (barmenu, dotlib _barmenu). Opens just
+ * above the bottom bar with its bottom-left corner at the clicked button:
+ * barmenu reads the pointer and passes location, x-offset and width with
+ * -theme-str. The values here are the fallback (bottom-left corner) and what
+ * rofi-preview shows. The bar is 50px high, so a -60px y-offset clears it,
+ * as in bar-popup.rasi.
+ */
+
+@import "../base.rasi"
+
+window {
+    location:            south west;
+    anchor:              south west;
+    x-offset:            8px;
+    y-offset:            -60px;
+    /* _BARMENU_WIDTH in _barmenu clamps against this. */
+    width:               360px;
+    border:              1px solid;
+    border-color:        @border-color;
+    border-radius:       @radius-lg;
+}
+
+mainbox {
+    padding:             8px;
+    spacing:             6px;
+    children:            [ inputbar, message, listview ];
+}
+
+inputbar {
+    border:              0px;
+    border-radius:       @radius;
+    padding:             8px 12px;
+}
+
+entry {
+    placeholder:         "Filter";
+}
+
+message {
+    border:              0px;
+    border-radius:       @radius;
+    padding:             8px 12px;
+}
+
+listview {
+    lines:               8;
+    padding:             0px;
+    spacing:             2px;
+    scrollbar:           false;
+}
+
+element {
+    padding:             6px 12px;
+}
