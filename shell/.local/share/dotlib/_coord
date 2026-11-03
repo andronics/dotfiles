@@ -112,9 +112,13 @@ declare -gi _COORD_WIDTH_STEP=128
 declare -g _COORD_SIDE_FILE="${XDG_STATE_HOME:-$HOME/.local/state}/coord/side"
 declare -g _COORD_SIDE_DEFAULT=right
 declare -g _COORD_LAST_FILE="${XDG_STATE_HOME:-$HOME/.local/state}/coord/last"
-typeset -ga _COORD_NAMES=(brain template folio homelab metalayerlab apps dotfiles ideas)
+# COORD_NAMES, COORD_STATE_DIR and COORD_LOCK_DIR are for tests: .zshenv.d's
+# 05-xdg resets the XDG dirs in every zsh, so moving those alone would still
+# reach the live state and locks.
+typeset -ga _COORD_NAMES=(${=COORD_NAMES:-brain template folio homelab metalayerlab apps dotfiles ideas})
 declare -g _COORD_ACTORS_DIR="${COORD_ACTORS_DIR:-/pool/local/actors}"
-declare -g _COORD_STATE_DIR="${XDG_RUNTIME_DIR:-$HOME/.cache}/coord/state"
+declare -g _COORD_STATE_DIR="${COORD_STATE_DIR:-${XDG_RUNTIME_DIR:-$HOME/.cache}/coord/state}"
+declare -g _COORD_LOCK_DIR="${COORD_LOCK_DIR:-${XDG_RUNTIME_DIR:-$HOME/.cache}}"
 declare -gi _COORD_NOTIFY_BODY_MAX=200
 # Seconds of quiet after a coord window's last event before `guard` re-docks.
 declare -g _COORD_GUARD_SETTLE="${COORD_GUARD_SETTLE:-0.2}"
@@ -248,14 +252,14 @@ _coord-current() {
     done
 }
 
-# Takes ${XDG_RUNTIME_DIR}/coord-<lock>.lock. `dock` serialises the
+# Takes ${_COORD_LOCK_DIR}/coord-<lock>.lock. `dock` serialises the
 # read-modify-write of the width and side files, e.g. a held-down key's
 # repeats. `switch` serialises showing and hiding, so a double-tapped chord or
 # a repeating cycle key finds the window the previous press launched and the
 # coordinator it left shown, instead of launching another or stepping from a
 # stale one. Sets the caller's _fd; the caller closes it.
 _coord-lock() {
-    local _lock="${XDG_RUNTIME_DIR:-${HOME}/.cache}/coord-$1.lock"
+    local _lock="${_COORD_LOCK_DIR}/coord-$1.lock"
     exec {_fd}>"$_lock"
     flock -w "$_COORD_LAUNCH_TIMEOUT" "$_fd" && return 0
     exec {_fd}>&-
@@ -679,13 +683,16 @@ _coord-menu-act() {
 }
 
 # Returns 0 only on an explicit Yes to question $1, as power's: No is
-# selected, so Return on open, Escape, or rofi failing all mean No.
+# selected, so Return on open, Escape, or rofi failing all mean No. A No
+# sets _COORD_DECLINED, so the menu goes back rather than closing.
 _coord-confirm() {
     local _choice
     _coord-theme-args "$_COORD_CONFIRM_THEME"
     _choice=$(print -rl -- Yes No | rofi -dmenu -i -no-custom -format s -selected-row 1 \
-        "${reply[@]}" -p "$1") || return 1
-    [[ "$_choice" == Yes ]]
+        "${reply[@]}" -p "$1")
+    [[ "$_choice" == Yes ]] && return 0
+    _COORD_DECLINED=1
+    return 1
 }
 
 # Exact (=) so a missing session never matches another by prefix.
@@ -808,20 +815,27 @@ _coord-wait-gone() {
     done
 }
 
-# Escape on level one returns 0: closing the menu is not a failure.
+# Escape on level one returns 0: closing the menu is not a failure. No to a
+# stop or restart question goes back to level one.
 coord-menu() {
-    local _name=
+    local _name= _COORD_DECLINED=
+    local -i _rc
     [[ "${1:-}" == (-h|--help) ]] && { print -r -- "usage: coord menu: ${_COORD_DESCRIPTIONS[menu]}"; return 0; }
     while _coord-menu-pick "$_name"; do
-        _name=$REPLY
-        [[ "$_name" == --all ]] && { coord-stop --all; return }
-        _coord-menu-act "$_name" || continue
-        case "$REPLY" in
-            toggle|start) coord-toggle "$_name" ;;
-            stop)         coord-stop "$_name" ;;
-            restart)      coord-restart "$_name" ;;
-        esac
-        return
+        _name=$REPLY _COORD_DECLINED= _rc=0
+        if [[ "$_name" == --all ]]; then
+            _name=
+            coord-stop --all || _rc=$?
+        else
+            _coord-menu-act "$_name" || continue
+            case "$REPLY" in
+                toggle|start) coord-toggle "$_name" || _rc=$? ;;
+                stop)         coord-stop "$_name" || _rc=$? ;;
+                restart)      coord-restart "$_name" || _rc=$? ;;
+            esac
+        fi
+        [[ -n "$_COORD_DECLINED" ]] && continue
+        return $_rc
     done
     return 0
 }
@@ -1082,7 +1096,7 @@ coord-hide() {
 # closed window may be a coordinator. bspc subscribe runs as a coprocess
 # without the guard lock, and is killed on every way out.
 coord-guard() {
-    local _lock="${XDG_RUNTIME_DIR:-${HOME}/.cache}/coord-guard.lock"
+    local _lock="${_COORD_LOCK_DIR}/coord-guard.lock"
     local _gfd _sub _line _event
     local -F _due _wait
     local -i _dragging=0
