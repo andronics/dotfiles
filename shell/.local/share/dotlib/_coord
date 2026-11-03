@@ -815,12 +815,18 @@ _coord-wait-gone() {
     done
 }
 
+# Per-command help: the dispatcher calls these for `coord <command> --help`.
+_coord-menu-help()    { print -r -- "usage: coord menu: ${_COORD_DESCRIPTIONS[menu]}"; }
+_coord-stop-help()    { print -r -- "usage: coord stop {<name>|--all} [--yes]: ${_COORD_DESCRIPTIONS[stop]}"; }
+_coord-stopped-help() { print -r -- "usage: coord stopped <name>...: ${_COORD_DESCRIPTIONS[stopped]}"; }
+_coord-restart-help() { print -r -- "usage: coord restart <name> [--yes]: ${_COORD_DESCRIPTIONS[restart]}"; }
+
 # Escape on level one returns 0: closing the menu is not a failure. No to a
 # stop or restart question goes back to level one.
 coord-menu() {
     local _name= _COORD_DECLINED=
     local -i _rc
-    [[ "${1:-}" == (-h|--help) ]] && { print -r -- "usage: coord menu: ${_COORD_DESCRIPTIONS[menu]}"; return 0; }
+    [[ "${1:-}" == (-h|--help) ]] && { _coord-menu-help; return 0; }
     while _coord-menu-pick "$_name"; do
         _name=$REPLY _COORD_DECLINED= _rc=0
         if [[ "$_name" == --all ]]; then
@@ -850,7 +856,7 @@ coord-stop() {
     local -A _why
     for _arg; do
         case "$_arg" in
-            -h|--help) print -r -- "usage: coord stop {<name>|--all} [--yes]: ${_COORD_DESCRIPTIONS[stop]}"; return 0 ;;
+            -h|--help) _coord-stop-help; return 0 ;;
             -y|--yes) _yes=1 ;;
             --all)    _all=1 ;;
             -*)       log-error "[coord] stop: unknown option '${_arg}'"; return 2 ;;
@@ -916,7 +922,7 @@ coord-stopped() {
     local -a _names
     for _arg; do
         case "$_arg" in
-            -h|--help) print -r -- "usage: coord stopped <name>...: ${_COORD_DESCRIPTIONS[stopped]}"; return 0 ;;
+            -h|--help) _coord-stopped-help; return 0 ;;
             -*)        log-error "[coord] stopped: unknown option '${_arg}'"; return 2 ;;
             *)         _coord-check-name "$_arg" || return 2
                        _names+=("$_arg") ;;
@@ -948,7 +954,7 @@ coord-restart() {
     local _arg _name= _yes= _shown= _node
     for _arg; do
         case "$_arg" in
-            -h|--help) print -r -- "usage: coord restart <name> [--yes]: ${_COORD_DESCRIPTIONS[restart]}"; return 0 ;;
+            -h|--help) _coord-restart-help; return 0 ;;
             -y|--yes) _yes=1 ;;
             -*)       log-error "[coord] restart: unknown option '${_arg}'"; return 2 ;;
             *)        [[ -z "$_name" ]] || { log-error "[coord] restart: expected one name"; return 2; }

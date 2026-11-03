@@ -69,6 +69,7 @@ A `${DOTLIB}/_<noun>` module:
    - `<prefix>-version` — replaces the auto-generated version.
    - `<prefix>-self-test` — invoked when user runs `<cmd> self-test`.
    These three names are excluded from the auto-discovered subcommand list.
+   - `_<prefix>-<sub>-help` (or `<prefix>-<sub>-help`) — help for one subcommand, shown by `<cmd> <sub> --help`, `<cmd> <sub> -h` and `<cmd> help <sub>`. Without one, the dispatcher prints a usage line from the description and the aliases. Either way the subcommand itself is never run for those three forms; `--help` reaches it only when it isn't the first argument (`<cmd> <sub> -- --help`).
 
 ## Dispatcher API (function mode)
 
@@ -85,6 +86,7 @@ A `${DOTLIB}/_<noun>` module:
 Auto-handled — do not define module functions with these names:
 
 - `help`, `--help`, `-h` — show auto-generated help (or `<prefix>-help` if defined).
+- `help <sub>`, `<sub> --help`, `<sub> -h` — show that subcommand's help without running it.
 - `version`, `--version` — show version (or `<prefix>-version` if defined).
 - `commands`, `list-commands` — list subcommands with descriptions.
 - `completion <shell>` — emit bash or zsh completion script. The zsh one defines `_<name>_cmd`; the repo keeps a copy per tool in `shell/.config/zsh/completions`, refreshed by `./dotfiles completions`.
