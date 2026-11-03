@@ -1049,6 +1049,14 @@ _theme-self-test-run() {
         ok "sizes: terminal 16.25, menu 13.75, bar 12.5; gap 5 unscaled" ||
         bad "sizes: ${(kv)THEME_SIZE} gap ${THEME_METRIC[gap]}"
 
+    # Under the default the consumers must look as their static fallbacks do.
+    local cur="$_THEME_STATE/current"
+    grep -q '^    font: *"Source Code Pro for Powerline 14";' "$cur/rofi.rasi" &&
+       grep -q '^    radius: *8px;' "$cur/rofi.rasi" && grep -q '^    border-color: *#45475a;' "$cur/rofi.rasi" &&
+       grep -q '^size = 16.0$' "$cur/alacritty.toml" && grep -q '^black = "#45475a"$' "$cur/alacritty.toml" &&
+        ok "catppuccin-mocha: rofi 14pt, radius 8px, border #45475a; alacritty 16pt, black #45475a" ||
+        bad "catppuccin-mocha rofi.rasi/alacritty.toml differ from the static fallbacks"
+
     [[ -L "$_THEME_STATE/current" && ! -e "$_THEME_STATE/current.tmp" ]] &&
         ok "current is a symlink; no current.tmp left" || bad "current link state"
 

@@ -1,27 +1,16 @@
-general.import = ["~/.config/alacritty/themes/catppuccin-mocha.toml"]
-
-[font]
-size = 16.0
-
-[font.bold]
-family = "Source Code Pro for Powerline"
-style = "Bold"
-
-[font.bold_italic]
-family = "Source Code Pro for Powerline"
-style = "Bold Italic"
+# Later imports override earlier ones and this file overrides them all, so
+# colours and fonts live only in the imports. themes/catppuccin-mocha.toml is
+# the fallback (today's look, font included); the generated theme from
+# `theme apply` overrides it, is skipped while it doesn't exist, and is
+# live-reloaded when `current` moves.
+general.import = [
+    "~/.config/alacritty/themes/catppuccin-mocha.toml",
+    "~/.local/state/theme/current/alacritty.toml",
+]
 
 [font.glyph_offset]
 x = 0
 y = 0
-
-[font.italic]
-family = "Source Code Pro for Powerline"
-style = "Italic"
-
-[font.normal]
-family = "Source Code Pro for Powerline"
-style = "Regular"
 
 [font.offset]
 x = 0
