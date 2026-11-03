@@ -103,7 +103,7 @@ rssh 'command -v pct >/dev/null' || die "cannot reach $NODE or pct missing (is ~
 if rssh "pct status $CTID" >/dev/null 2>&1; then
     die "CT $CTID already exists on $NODE"
 fi
-if rssh "pvesh get /cluster/resources --type vm --output-format json" 2>/dev/null | grep -q "\"vmid\":$CTID[,}]"; then
+if rssh "pvesh get /cluster/resources --type vm --output-format json" 2>/dev/null | grep -q "\"vmid\":${CTID}[,}]"; then
     die "VMID $CTID is already in use elsewhere in the cluster"
 fi
 
