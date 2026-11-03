@@ -1,26 +1,17 @@
 #!/usr/bin/env zsh
+# polybar-reload [bar] - restart the running bars on the current theme, or
+# start [bar] (default $POLYBAR_BAR, else main) when none is running.
+#
+# `theme ensure` comes first: config.ini includes
+# ~/.local/state/theme/current/polybar.ini, and polybar won't start without
+# it. A running bar restarts in place through `theme reload polybar`
+# (polybar-msg cmd restart), which relaunches it if the restart fails.
 
-name=$(basename $0)
+theme ensure || exit 1
 
-# ------------------------------
+if pgrep -x -u $UID polybar >/dev/null; then
+    exec theme reload polybar
+fi
 
-_polybar_reload() {
-
-    PROC="polybar --reload $1"
-
-    # flock -s 200
-
-    pgrep -f "$PROC" | xargs -I{} kill -9 {} 2>/dev/null
-
-    while pgrep -u $UID -f "$PROC" > /dev/null; do sleep 0.5; done
-
-    polybar --reload $1 & </dev/null >/tmp/polybar-$$.log 2>&2 200>&- &
-
-    disown 
-
-}
-
-# ------------------------------
-
-_polybar_reload "$@"
-
+export HOST_MONITOR="${HOST_MONITOR:-$(bspc query -M --names 2>/dev/null | head -1)}"
+polybar -q "${1:-${POLYBAR_BAR:-main}}" </dev/null >/dev/null 2>&1 &!

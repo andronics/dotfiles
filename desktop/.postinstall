@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Sourced by ./dotfiles after stowing the desktop package.
+# polybar's config.ini includes ~/.local/state/theme/current/polybar.ini and
+# won't start without it, so a fresh install renders the default theme now
+# rather than at the first login. zsh's .zshenv sets DOTLIB; not a login
+# shell, which would run .zlogin.d and start the X session's daemons.
+# shellcheck disable=SC2154  # info/ok/warn come from the wrapper
+
+if command -v gomplate >/dev/null && command -v jq >/dev/null; then
+   zsh -c '"${HOME}/.local/bin/theme" ensure' >/dev/null 2>&1 && ok "theme ensured" \
+      || warn "theme ensure failed; run it before starting polybar"
+else
+   warn "gomplate or jq missing: install them, then run 'theme ensure' before starting polybar"
+fi
