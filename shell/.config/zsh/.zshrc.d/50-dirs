@@ -1,7 +1,9 @@
 mkcd() {
+    [[ $1 == (-h|--help) ]] && { print "usage: mkcd <dir>  make <dir> (with parents) and cd into it"; return 0 }
     mkdir -p "$1" && cd "$1"
 }
 
 reds() {
+    [[ $1 == (-h|--help) ]] && { print "usage: reds [dir]  delete empty directories under [dir] (default .)"; return 0 }
     find ${1:-.} -type d -empty -exec rm -d {} +
 }

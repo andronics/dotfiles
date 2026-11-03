@@ -2,6 +2,11 @@
 
 name=$(basename $0)
 
+if [[ $1 == (-h|--help) ]]; then
+    print "usage: $name <file-or-dir-uri>...  open gprename on the folder of the first item (nemo bulk-rename tool)"
+    exit 0
+fi
+
 # ------------------------------
 
 source $(which _log)
