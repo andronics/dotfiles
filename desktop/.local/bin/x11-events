@@ -4,7 +4,7 @@ name=$(basename $0)
 
 # ------------------------------
 
-source "$(which _log)"
+source "${DOTLIB}/_log" || { echo "missing _log" >&2; exit 1; }
 
 # ------------------------------
 
