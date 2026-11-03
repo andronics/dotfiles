@@ -14,9 +14,9 @@ super + shift + Escape
 super + Return + {_, alt, shift}
   {$TERMINAL, terminal drop scratch, terminal draw}
 
-# coordinator - pick from menu
+# launcher - gui
 super + space
-  coord pick
+  rofi -show drun -show-icons -theme launcher
 
 # preselect on {north, south, west, east} postion
 super + {Up, Down, Left, Right}
@@ -46,13 +46,9 @@ super + b + {_, alt}
 super + shift + c
   for win in `bspc query -n -n ".leaf.\!window"`; do bspc node $win -k; done
 
-# coordinator - toggle {brain, template, folio, homelab, metalayerlab, apps, dotfiles, ideas}
-super + c ; {b, t, f, h, m, a, d, i}
-  coord toggle {brain,template,folio,homelab,metalayerlab,apps,dotfiles,ideas}
-
-# launcher - gui
-super + alt + space
-  rofi -show drun -show-icons -theme launcher
+# coordinator - menu: pick one (first letter filters) or Stop all, then show/hide, start, stop, restart
+super + c
+  coord menu
 
 # coordinator - cycle {previous, next}
 super + alt + {Left, Right}

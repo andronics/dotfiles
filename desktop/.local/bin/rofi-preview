@@ -64,15 +64,18 @@ case "$_variant" in
     coord)
         export DOTLIB="${_repo}/shell/.local/share/dotlib"
         source "${DOTLIB}/_coord" || exit 1
+        _coord-colors
         _states=(idle busy waiting off idle off off)
         for _i in {1..${#_COORD_NAMES}}; do
             _shown=
             (( _i == 1 )) && _shown=1
-            _coord-pick-row "${_COORD_NAMES[_i]}" "${_states[_i]:-off}" "$_shown"
+            _coord-menu-row "${_COORD_NAMES[_i]}" "${_states[_i]:-off}" "$_shown"
             _rows+=("$REPLY")
         done
+        _coord-menu-stop-row 3
+        _rows+=("$REPLY")
         # The cursor starts off the shown cell so both the ring and the pill show.
-        _args+=(-markup-rows -format i -p "Coordinator" -selected-row 1 -a 0) ;;
+        _args+=(-markup-rows -format i -matching prefix -p "Coordinator" -selected-row 1 -a 0) ;;
     power|confirm)
         # The real menu and question from _power, minus the acting.
         export DOTLIB="${_repo}/shell/.local/share/dotlib"
@@ -103,7 +106,7 @@ case "$_variant" in
 esac
 
 if _choice=$(print -rn -- "${(pj:\n:)_rows}" | rofi "${_args[@]}"); then
-    [[ "$_variant" == coord && "$_choice" == <-> ]] && _choice="${_choice} (${_COORD_NAMES[_choice + 1]})"
+    [[ "$_variant" == coord && "$_choice" == <-> ]] && _choice="${_choice} (${_COORD_NAMES[_choice + 1]:-Stop all})"
     print -r -- "${_variant}: picked '${_choice}'"
 else
     print -r -- "${_variant}: cancelled"

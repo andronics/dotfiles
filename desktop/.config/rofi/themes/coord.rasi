@@ -1,10 +1,11 @@
 /**
- * Coordinator picker (coord pick, the coord strip's right-click): the
- * launcher's look, sized for eight cells in one row. Each cell is pango
- * markup from _coord: a large Nerd Font glyph coloured as on the strip (dim
- * not running, peach busy, red pill waiting), the name, and a faint state.
- * Shown coordinators are marked active: a lavender ring in the selection's
- * shape with a heavier bottom edge, the strip's underline.
+ * Coordinator menu, first level (coord menu: super + c, the coord strip's
+ * right-click): the launcher's look, sized for eight cells in a row and a
+ * second row holding Stop all. Each cell is pango markup from _coord: a large
+ * Nerd Font glyph coloured as on the strip (dim not running, peach busy, red
+ * pill waiting), the name, and a faint state. Shown coordinators are marked
+ * active: a lavender ring in the selection's shape with a heavier bottom
+ * edge, the strip's underline. The second level is themes/prompt.rasi.
  */
 
 @import "launcher.rasi"
@@ -37,7 +38,7 @@ entry {
 
 listview {
     columns:             8;
-    lines:               1;
+    lines:               2;
 }
 
 element {

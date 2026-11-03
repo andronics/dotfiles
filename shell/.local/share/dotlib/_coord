@@ -4,9 +4,22 @@
 # Code coordinator, summoned one at a time.
 #
 # The switchboard order is _COORD_NAMES (brain, template, folio, homelab,
-# metalayerlab, apps, dotfiles, ideas): `pick` lists it in a rofi menu and `cycle`
-# steps through it, wrapping. sxhkdrc's `super + c` chord can't read it and
-# spells the same names out. `toggle` accepts any valid name.
+# metalayerlab, apps, dotfiles, ideas): `menu` lists it in a rofi menu and `cycle`
+# steps through it, wrapping. `toggle`, `stop` and `restart` accept any valid
+# name.
+#
+# Menu: `menu` (super + c) is two levels. The first lists every coordinator
+# with its state, as the strip shows it, and a "Stop all" cell; the second
+# offers what can be done to the one picked: show or hide it, start it if it
+# is stopped, stop or restart it. Escape there goes back to the first.
+#
+# Stop: `stop` kills the coordinator's tmux session, which closes its window.
+# A coordinator paused properly has written PAUSED resume notes into its
+# Claude memory (COORD_PROJECTS_DIR, default ~/.claude/projects, then
+# -pool-local-actors-<name>/memory/*.md); one without them is asked about
+# first (a Yes/No in rofi/themes/prompt.rasi, as power's), unless --yes.
+# `stop --all` asks once, naming every running one without notes, then stops
+# every running one.
 #
 # Each coordinator window is alacritty with class `coord` and the
 # coordinator's name as instance. bspwmrc's `coord` rule makes it floating,
@@ -53,9 +66,10 @@
 # Dependencies:
 #   Required:
 #     - _common, _log
-#     - _theme (bar and pick only, sourced on first use)
+#     - _theme (bar and menu only, sourced on first use)
 #   External:
-#     - bspwm (bspc), xprop, jq, alacritty, tmux, flock, setsid, rofi (pick)
+#     - bspwm (bspc), xprop, jq, alacritty, tmux, flock, setsid, grep
+#     - rofi (menu, and stop's question)
 #     - notify-send (libnotify >= 0.7.9 for --action) and a notification
 #       daemon whose click runs the default action, e.g. dunst with
 #       mouse_left_click = do_action (status)
@@ -84,8 +98,14 @@ declare -g _COORD_STATE_DIR="${XDG_RUNTIME_DIR:-$HOME/.cache}/coord/state"
 declare -gi _COORD_NOTIFY_BODY_MAX=200
 # Seconds of quiet after a coord window's last event before `guard` re-docks.
 declare -g _COORD_GUARD_SETTLE="${COORD_GUARD_SETTLE:-0.2}"
-# rofi theme for pick: a name resolves to ~/.config/rofi/themes/<name>.rasi.
-declare -g _COORD_PICK_THEME="${COORD_PICK_THEME:-coord}"
+# rofi themes for menu's two levels and stop's question: a name resolves to
+# ~/.config/rofi/themes/<name>.rasi.
+declare -g _COORD_MENU_THEME="${COORD_MENU_THEME:-coord}"
+declare -g _COORD_ACTION_THEME="${COORD_ACTION_THEME:-prompt}"
+declare -g _COORD_CONFIRM_THEME="${COORD_CONFIRM_THEME:-prompt}"
+# Claude Code keeps a session's memory under <projects>/<cwd, / as ->/memory.
+declare -g _COORD_PROJECTS_DIR="${COORD_PROJECTS_DIR:-$HOME/.claude/projects}"
+declare -g _COORD_STOP_ICON=$'\U000F0667'   # md-stop_circle_outline
 
 # Symbols Nerd Font Mono (polybar font-0) Material Design glyphs.
 typeset -gA _COORD_ICONS=(
@@ -99,9 +119,9 @@ typeset -gA _COORD_ICONS=(
     [ideas]=$'\U000F0335'          # md-lightbulb
 )
 
-# Colours for `bar` and `pick`: key=theme role. polybar can't interpolate
+# Colours for `bar` and `menu`: key=theme role. polybar can't interpolate
 # references inside a command, so the hook is a plain `coord bar`, and `bar`
-# and `pick` fill _COORD_BAR_COLORS from the current theme.zsh each time they
+# and `menu` fill _COORD_BAR_COLORS from the current theme.zsh each time they
 # run (theme-roles; Catppuccin Mocha when no theme is applied). A new theme
 # shows on the next poke. key=#rrggbb args to `bar` still override.
 # _theme is sourced then, not here, so `status`, which every hook runs,
@@ -111,8 +131,10 @@ typeset -gA _COORD_BAR_COLORS=()
 
 typeset -gA _COORD_DESCRIPTIONS=(
     [toggle]="Show <name>'s window docked on the dock side's edge (launching it if needed), or hide it if it is focused"
-    [pick]="Choose a coordinator from a rofi menu of ${(j:, :)_COORD_NAMES} and their state, and show it (launching it if needed); the shown one is only focused"
-    [cycle]="Show the {next|prev} coordinator in the order pick lists them, wrapping and launching it if needed; with none shown, re-show the last one shown (or ${_COORD_NAMES[1]})"
+    [menu]="Two-level rofi menu: pick one of ${(j:, :)_COORD_NAMES} (shown with its state; type its first letter to filter) or Stop all, then show/hide, start, stop or restart it; Escape on the second level goes back"
+    [stop]="Stop <name> by killing its tmux session (which closes its window), or with --all every running coordinator; one without PAUSED resume notes in its Claude memory is asked about first, unless --yes"
+    [restart]="Stop <name> as stop does (asking unless --yes or it has PAUSED notes), then start it again: shown if it was shown, else hidden"
+    [cycle]="Show the {next|prev} coordinator in the order menu lists them, wrapping and launching it if needed; with none shown, re-show the last one shown (or ${_COORD_NAMES[1]})"
     [width]="Print the dock panel's visible width (the reserved strip is that plus bspwm's window_gap), or set it with {+N|-N|N} (${_COORD_WIDTH_MIN}-${_COORD_WIDTH_MAX}) or move the inner edge with {left|right} [N] (default ${_COORD_WIDTH_STEP}), resizing a shown coordinator"
     [side]="Print the dock side, or set it with {left|right}, re-docking a shown coordinator"
     [hide]="Hide the shown coordinator, focused or not, and give its strip back; with --toggle and none shown, re-show the last one shown (or ${_COORD_NAMES[1]})"
@@ -508,13 +530,29 @@ _coord-activity() {
     fi
 }
 
-# Sets REPLY to one pick cell as pango markup (rofi -markup-rows), three
+# Sets reply to the -theme arguments for theme $1. A missing theme would make
+# rofi exit with an error, so an unstowed themes/ falls back to the default
+# look instead of a dead menu.
+_coord-theme-args() {
+    local _theme=$1
+    [[ "$_theme" == */* ]] || _theme="${XDG_CONFIG_HOME:-$HOME/.config}/rofi/themes/${_theme}.rasi"
+    reply=()
+    [[ -r "$_theme" ]] && reply=(-theme "$_theme")
+    return 0
+}
+
+# Sets REPLY to one menu cell as pango markup (rofi -markup-rows), three
 # centred lines for rofi/themes/coord.rasi's grid: the strip's glyph, large
 # and coloured as the strip colours it, the name, and a small faint state.
 # rofi takes icons only as image names, so the glyph has to be text, and a
 # row can't hold a newline, so the line breaks are &#10; entities. Shown is
-# only named here: pick marks those cells active and the theme rings them.
-_coord-pick-row() {
+# only named here: menu marks those cells active and the theme rings them.
+#
+# The menu filters with -matching prefix, which rofi applies to the cell's
+# text without its markup at every word start, so the state words avoid the
+# coordinators' initials (b: brain is listed first, so busy is harmless) and
+# a first letter leaves the cursor on that coordinator.
+_coord-menu-row() {
     local _name=$1 _activity=$2 _shown=${3:-} _glyph _label
     # size is in 1024ths of a point: 36pt, about 48px.
     _glyph="<span font_family='Symbols Nerd Font Mono' size='36864'> ${_COORD_ICONS[$_name]:-${_name[1]}} </span>"
@@ -525,19 +563,30 @@ _coord-pick-row() {
                  _label=busy ;;
         waiting) _glyph="<span background='${_COORD_BAR_COLORS[waiting]}' foreground='${_COORD_BAR_COLORS[ink]}'>${_glyph}</span>"
                  _label=waiting ;;
-        *)       _label=idle ;;
+        *)       _label=running ;;
     esac
-    [[ -n "$_shown" ]] && _label+=" · shown"
+    [[ -n "$_shown" ]] && _label+=" · visible"
     REPLY="${_glyph}&#10;${_name}&#10;<span size='small' fgalpha='55%'>${_label}</span>"
 }
 
-# The cursor starts on the shown coordinator (also highlighted as active), or
-# the last one shown. rofi runs outside the lock: it can sit open
-# indefinitely, and the state it lists is only a hint.
-coord-pick() {
-    local _name _current _choice _fd _theme
-    local -i _row=0
-    local -a _rows _active _theme_args
+# Sets REPLY to the menu's last cell, Stop all, in _coord-menu-row's shape,
+# dim when nothing is running. $1 is how many are.
+_coord-menu-stop-row() {
+    local -i _count=$1
+    local _glyph="<span font_family='Symbols Nerd Font Mono' size='36864'> ${_COORD_STOP_ICON} </span>"
+    (( _count )) || _glyph="<span foreground='${_COORD_BAR_COLORS[dim]}'>${_glyph}</span>"
+    REPLY="${_glyph}&#10;Stop all&#10;<span size='small' fgalpha='55%'>$(( _count )) running</span>"
+}
+
+# Level one: sets REPLY to the coordinator picked, or --all for Stop all;
+# returns 1 on Escape. The cursor starts on $1 if given (the one just backed
+# out of), else the shown coordinator (also highlighted as active), else the
+# last one shown. rofi runs outside the lock: it can sit open indefinitely,
+# and the state it lists is only a hint.
+_coord-menu-pick() {
+    local _name _current _choice
+    local -i _row=0 _count=0
+    local -a _rows _active
     local -A _running _shown
 
     _coord-colors
@@ -545,32 +594,221 @@ coord-pick() {
     _current=$(_coord-current)
     for _name in "${_COORD_NAMES[@]}"; do
         _coord-activity "$_name"
-        _coord-pick-row "$_name" "$REPLY" "${_shown[$_name]:-}"
+        [[ "$REPLY" == off ]] || (( _count++ ))
+        _coord-menu-row "$_name" "$REPLY" "${_shown[$_name]:-}"
         _rows+=("$REPLY")
         (( ${+_shown[$_name]} )) && _active+=($(( ${#_rows} - 1 )))
     done
-    _name=${_current:-$(_coord-last-get)}
+    _coord-menu-stop-row "$_count"
+    _rows+=("$REPLY")
+    _name=${1:-${_current:-$(_coord-last-get)}}
     [[ -n "$_name" ]] && _row=$(( ${_COORD_NAMES[(Ie)$_name]} - 1 ))
+    (( _row < 0 )) && _row=0
 
-    # A missing theme would make rofi exit with an error, so an unstowed
-    # themes/ falls back to the default look instead of a dead picker.
-    _theme=$_COORD_PICK_THEME
-    [[ "$_theme" == */* ]] || _theme="${XDG_CONFIG_HOME:-$HOME/.config}/rofi/themes/${_theme}.rasi"
-    [[ -r "$_theme" ]] && _theme_args=(-theme "$_theme")
-
+    _coord-theme-args "$_COORD_MENU_THEME"
     # -format i returns the row index, so the markup never has to be parsed
-    # back out. Escape exits non-zero with no output: nothing to do.
+    # back out. Escape exits non-zero with no output.
     _choice=$(print -rl -- "${_rows[@]}" | rofi -dmenu -i -no-custom -markup-rows -format i \
-        "${_theme_args[@]}" -p "Coordinator" -selected-row "$_row" \
-        ${_active:+-a} ${_active:+${(j:,:)_active}}) || return 0
-    [[ "$_choice" =~ '^[0-9]+$' ]] && (( _choice < ${#_COORD_NAMES} )) || return 0
+        -matching prefix "${reply[@]}" -p "Coordinator" -selected-row "$_row" \
+        ${_active:+-a} ${_active:+${(j:,:)_active}}) || return 1
+    [[ "$_choice" == <-> ]] && (( _choice <= ${#_COORD_NAMES} )) || return 1
+    if (( _choice == ${#_COORD_NAMES} )); then
+        REPLY=--all
+    else
+        REPLY=${_COORD_NAMES[_choice + 1]}
+    fi
+}
 
-    _coord-lock switch || return 1
-    {
-        _coord-show "${_COORD_NAMES[_choice + 1]}"
-    } always {
+# Level two: sets REPLY to what to do to coordinator $1 (toggle, start, stop
+# or restart); returns 1 on Escape. A stopped one can only be started;
+# a running one's first action reads Hide when toggle would hide it, i.e. it
+# is shown and focused.
+_coord-menu-act() {
+    local _name=$1 _node _state _choice
+    local -a _actions _labels
+    local -A _running _shown
+
+    _coord-scan
+    _coord-activity "$_name"
+    case "$REPLY" in
+        off)     _state=stopped ;;
+        waiting) _state="waiting on you" ;;
+        busy)    _state="running, busy" ;;
+        *)       _state=running ;;
+    esac
+    if [[ "$REPLY" == off ]]; then
+        _actions=(start) _labels=(Start)
+    else
+        _actions=(toggle stop restart) _labels=(Show Stop Restart)
+        _node=$(_coord-node "$_name")
+        [[ -n "$_node" ]] && bspc query -N -n "${_node}.focused.!hidden" >/dev/null 2>&1 && _labels[1]=Hide
+    fi
+
+    _coord-theme-args "$_COORD_ACTION_THEME"
+    _choice=$(print -rl -- "${_labels[@]}" | rofi -dmenu -i -no-custom -format i \
+        "${reply[@]}" -p "${_name} (${_state})" -selected-row 0) || return 1
+    [[ "$_choice" == <-> ]] && (( _choice < ${#_actions} )) || return 1
+    REPLY=${_actions[_choice + 1]}
+}
+
+# Returns 0 only on an explicit Yes to question $1, as power's: No is
+# selected, so Return on open, Escape, or rofi failing all mean No.
+_coord-confirm() {
+    local _choice
+    _coord-theme-args "$_COORD_CONFIRM_THEME"
+    _choice=$(print -rl -- Yes No | rofi -dmenu -i -no-custom -format s -selected-row 1 \
+        "${reply[@]}" -p "$1") || return 1
+    [[ "$_choice" == Yes ]]
+}
+
+# Exact (=) so a missing session never matches another by prefix.
+_coord-has-session() {
+    tmux has-session -t "=${1}-coordinator" 2>/dev/null
+}
+
+# Returns 0 if coordinator $1 left PAUSED resume notes in its Claude memory.
+# Claude names a project's directory after its cwd with each / as -.
+_coord-paused() {
+    local _dir="${_COORD_PROJECTS_DIR}/${_COORD_ACTORS_DIR//\//-}-$1/memory"
+    local -a _notes=("$_dir"/*.md(N))
+    (( ${#_notes} )) && grep -lq -- PAUSED "${_notes[@]}" 2>/dev/null
+}
+
+# Kills the tmux sessions of the coordinators named, drops their state, waits
+# up to _COORD_LAUNCH_TIMEOUT for their windows to close (each runs only the
+# tmux client), then gives back any strip a shown one held and refreshes the
+# strip. Returns 1 if none was killed or a window is still open.
+_coord-kill() {
+    local _name _node _instance _left _fd
+    local -i _tries=$(( _COORD_LAUNCH_TIMEOUT * 10 ))
+    local -a _gone
+    for _name; do
+        if tmux kill-session -t "=${_name}-coordinator" 2>/dev/null; then
+            rm -f -- "${_COORD_STATE_DIR}/${_name}" 2>/dev/null
+            _gone+=("$_name")
+        else
+            log-error "[coord] ${_name}: no tmux session to stop"
+        fi
+    done
+    (( ${#_gone} )) || return 1
+
+    while :; do
+        _left=
+        _coord-windows | while read -r _node _instance; do
+            (( ${_gone[(Ie)$_instance]} )) && _left=$_instance
+        done
+        [[ -z "$_left" ]] && break
+        (( _tries-- > 0 )) || break
+        sleep 0.1
+    done
+
+    if _coord-lock switch; then
+        _coord-unpad
         exec {_fd}>&-
-    }
+    fi
+    _coord-poke
+    if [[ -n "$_left" ]]; then
+        log-error "[coord] ${_left}: window still open ${_COORD_LAUNCH_TIMEOUT}s after its session was stopped"
+        return 1
+    fi
+    log-info "[coord] stopped ${(j:, :)_gone}"
+}
+
+# Escape on level one returns 0: closing the menu is not a failure.
+coord-menu() {
+    local _name=
+    [[ "${1:-}" == (-h|--help) ]] && { print -r -- "usage: coord menu: ${_COORD_DESCRIPTIONS[menu]}"; return 0; }
+    while _coord-menu-pick "$_name"; do
+        _name=$REPLY
+        [[ "$_name" == --all ]] && { coord-stop --all; return }
+        _coord-menu-act "$_name" || continue
+        case "$REPLY" in
+            toggle|start) coord-toggle "$_name" ;;
+            stop)         coord-stop "$_name" ;;
+            restart)      coord-restart "$_name" ;;
+        esac
+        return
+    done
+    return 0
+}
+
+# Running means its tmux session exists: that is what is killed. Asking is
+# declined: returns 1 having stopped nothing.
+coord-stop() {
+    local _arg _name _yes= _all= _question
+    local -a _names _targets _unpaused
+    for _arg; do
+        case "$_arg" in
+            -h|--help) print -r -- "usage: coord stop {<name>|--all} [--yes]: ${_COORD_DESCRIPTIONS[stop]}"; return 0 ;;
+            -y|--yes) _yes=1 ;;
+            --all)    _all=1 ;;
+            -*)       log-error "[coord] stop: unknown option '${_arg}'"; return 2 ;;
+            *)        _names+=("$_arg") ;;
+        esac
+    done
+    if [[ -n "$_all" ]]; then
+        (( ! ${#_names} )) || { log-error "[coord] stop: --all takes no name"; return 2; }
+        _names=("${_COORD_NAMES[@]}")
+    else
+        (( ${#_names} == 1 )) || { log-error "[coord] stop: expected one name or --all"; return 2; }
+        _coord-check-name "${_names[1]}" || return 2
+    fi
+
+    for _name in "${_names[@]}"; do
+        _coord-has-session "$_name" || continue
+        _targets+=("$_name")
+        _coord-paused "$_name" || _unpaused+=("$_name")
+    done
+    if (( ! ${#_targets} )); then
+        if [[ -n "$_all" ]]; then
+            log-info "[coord] no coordinator is running"
+        else
+            log-info "[coord] ${_names[1]} is not running"
+        fi
+        return 0
+    fi
+
+    if [[ -z "$_yes" ]] && (( ${#_unpaused} )); then
+        if [[ -n "$_all" ]]; then
+            _question="no pause notes found for ${(j:, :)_unpaused}: stop all anyway?"
+        else
+            _question="${_unpaused[1]}: no pause notes found: stop anyway?"
+        fi
+        _coord-confirm "$_question" || return 1
+    fi
+    _coord-kill "${_targets[@]}"
+}
+
+# Started as it was: shown again if it was shown, else hidden. Not running,
+# it is just started, hidden.
+coord-restart() {
+    local _arg _name= _yes= _shown= _node
+    for _arg; do
+        case "$_arg" in
+            -h|--help) print -r -- "usage: coord restart <name> [--yes]: ${_COORD_DESCRIPTIONS[restart]}"; return 0 ;;
+            -y|--yes) _yes=1 ;;
+            -*)       log-error "[coord] restart: unknown option '${_arg}'"; return 2 ;;
+            *)        [[ -z "$_name" ]] || { log-error "[coord] restart: expected one name"; return 2; }
+                      _name=$_arg ;;
+        esac
+    done
+    [[ -n "$_name" ]] || { log-error "[coord] restart: expected a name"; return 2; }
+    _coord-check-name "$_name" || return 2
+
+    if _coord-has-session "$_name"; then
+        _node=$(_coord-node "$_name")
+        [[ -n "$_node" ]] && bspc query -N -n "${_node}.!hidden" >/dev/null 2>&1 && _shown=1
+        if [[ -z "$_yes" ]] && ! _coord-paused "$_name"; then
+            _coord-confirm "${_name}: no pause notes found: restart anyway?" || return 1
+        fi
+        _coord-kill "$_name" || return 1
+    fi
+
+    if [[ -n "$_shown" ]]; then
+        _coord-summon "$_name"
+    else
+        coord-launch "$_name"
+    fi
 }
 
 # Steps from the shown coordinator. With none shown, both directions re-show
