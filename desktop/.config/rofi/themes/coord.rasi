@@ -9,8 +9,24 @@
 
 @import "launcher.rasi"
 
+/*
+ * rofi sizes every cell from an estimate of eh lines of element-text's
+ * font, not from the markup it draws, so the launcher's eh of 1 cut the
+ * cell after the glyph. Measured with pango at this display's 108 dpi, the
+ * three lines need 98px (glyph 55, name 23, state 20) and a 12pt line is
+ * 23px, so 5 lines (115px) fits them with room for descenders.
+ */
+configuration {
+    eh:                  5;
+}
+
+/*
+ * Cells are (width - 64 padding - 72 spacing) / 7 = 175px, 155px inside the
+ * element's padding and border: room for "metalayerlab" (132px at 12pt) and
+ * "waiting · shown" (135px small).
+ */
 window {
-    width:               1120px;
+    width:               1360px;
 }
 
 entry {
