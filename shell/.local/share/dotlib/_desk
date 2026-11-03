@@ -29,7 +29,9 @@
 # wakes on each _DESK_ROTATE boundary to redraw; otherwise, and whenever the
 # line has gone _DESK_IDLE seconds unprinted, it repeats the line so a
 # vanished reader is noticed. TERM, PIPE and the end of `bspc subscribe` all
-# end it and its subscribe process.
+# end it and its subscribe process. It first closes the pipes it inherited
+# from polybar's other modules (see _desk-close-inherited): holding one froze
+# the bar on its next restart.
 #
 # The monitor is the argument, else $DESK_MONITOR, else $HOST_MONITOR (the
 # bar's monitor in polybar's bars/base, inherited by its scripts), else the
@@ -54,6 +56,7 @@
 declare -gr DESK_LOADED=1
 
 zmodload -F zsh/datetime p:EPOCHREALTIME p:EPOCHSECONDS
+zmodload -F zsh/stat b:zstat
 
 source "${DOTLIB}/_common" || { echo "[ERROR] _desk requires _common" >&2; return 1; }
 source "${DOTLIB}/_log"    2>/dev/null || true
@@ -234,6 +237,25 @@ _desk-is-prune-event() {
     [[ "$1" == (desktop_focus|node_remove|node_transfer)(| *) ]]
 }
 
+# Closes every pipe this shell inherited beyond stdin, stdout and stderr.
+# polybar 3.7 opens a script's pipes without close-on-exec and forks its
+# modules' commands from several threads at once, so `watch`, forked while
+# another module was starting a command, can inherit that command's output
+# pipe. Held here (and by `bspc subscribe`) for the bar's life, that pipe
+# never reaches end-of-file: polybar's reader blocks for good (an IPC hook
+# such as coord's reads to EOF on the main loop; a script that prints no
+# newline blocks its module thread), and the next restart waits on it
+# forever, frozen, deaf to SIGTERM and IPC. Only pipes: the shell's own fds
+# (the script it reads) are files.
+_desk-close-inherited() {
+    local _fd _link
+    for _fd in /proc/$$/fd/<3->(N:t); do
+        zstat -L -A _link +link /proc/$$/fd/$_fd 2>/dev/null || continue
+        [[ "$_link" == pipe:* ]] && exec {_fd}>&-
+    done
+    return 0
+}
+
 # Sets REPLY to the strip and _DESK_ROTATING to whether any cell rotates.
 # Runs in the caller's shell (watch needs _DESK_ROTATING); one tree query.
 # Cell styles stack as in coord-bar: urgent fills the cell, focused adds an
@@ -366,6 +388,8 @@ desk-watch() {
     local _pid _event _last= _prune _wait
     local -i _printed
 
+    # Before the coproc, so subscribe inherits none of them either.
+    _desk-close-inherited
     coproc bspc subscribe "${_DESK_EVENTS[@]}"
     _pid=$!
     # A function's EXIT trap fires on its return; TERM from polybar and PIPE
