@@ -1,36 +1,8 @@
 #!/usr/bin/env zsh
 
-name=$(basename $0)
+# palette <name> - kept for old callers: prints one value from the current
+# theme, the same as `theme get <name>` (a role such as accent or urgent, a
+# base16 slot, or a scheme's colour name such as blue, which only schemes
+# with x-names provide). New code calls `theme get` directly.
 
-# ------------------------------
-
-if ! source "${DOTLIB}/_xdg" 2>/dev/null; then
-    echo "[ERROR] _xdg requires _xdg v2.0 - cannot load" >&2
-    return 1
-fi
-
-
-# Setup XDG directories using extension library
-xdg-config-dir "${name}"
-
-# Backward-compatible aliases
-palette_cache_dir=$(xdg-cache-dir "${name}")
-palette_config_dir=$(xdg-config-dir "${name}")
-palette_data_dir=$(xdg-data-dir "${name}")
-
-# ------------------------------
-
-
-
-# ------------------------------
-
-_palette() {
-    local _filter=$1
-    awk -v f="${_filter}" '$1==f {print $2}' "$(xdg-config-dir "${name}")/palette.conf"
-}
-
-# ------------------------------
-
-_palette "$@"
-
-
+exec theme get "$@"

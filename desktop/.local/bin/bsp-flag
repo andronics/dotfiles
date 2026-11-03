@@ -58,10 +58,10 @@ _bsp_flag_marked() {
 
     [[ ${_state} == "on" ]] && {
         bspc config -n "${_node}" border_width 3
-        bspc config focused_border_color $(palette blue)
+        bspc config focused_border_color "$(theme get accent)"
     } || {
         bspc config -n "${_node}" border_width 1
-        bspc config focused_border_color $(palette red)
+        bspc config focused_border_color "$(theme get urgent)"
     }
 
 }
