@@ -1,4 +1,5 @@
 ports() {
+    [[ $1 == (-h|--help) ]] && { print "usage: ports  list listening TCP ports and open UDP sockets (uses sudo)"; return 0 }
     (
         echo 'PROC PID USER x IPV x x PROTO BIND PORT'
         (

@@ -1,4 +1,5 @@
 file-tracks() {
+    [[ $1 == (-h|--help) ]] && { print "usage: file-tracks [dir]  list size and video/audio track counts of each .mp4 under [dir] (default .)"; return 0 }
     echo "   SIZE | VIDEO | AUDIO | FOLDER"
     echo "----------------------------------------------------------------------------------------"
     while read file; do
@@ -27,9 +28,11 @@ file-tracks() {
 }
 
 rm-tmps() {
+    [[ $1 == (-h|--help) ]] && { print "usage: rm-tmps [dir]  delete *.tmp and *.tmp.* files under [dir] (default .)"; return 0 }
     find ${1:-.} -type f \( -name '*.tmp' -o -name '*.tmp.*' \) -exec rm {} +
 }
 
 file-types() {
+    [[ $1 == (-h|--help) ]] && { print "usage: file-types [dir]  count files by extension under [dir] (default .; uses sudo)"; return 0 }
     sudo find ${1:-.} -type f | sed 's|.*\.||' | sort | uniq -c | sort -
 }
