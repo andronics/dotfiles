@@ -21,3 +21,4 @@ homelab-coordinator()      { _coordinator homelab "$@"; }
 metalayerlab-coordinator() { _coordinator metalayerlab "$@"; }
 apps-coordinator()         { _coordinator apps "$@"; }
 dotfiles-coordinator()     { _coordinator dotfiles "$@"; }
+ideas-coordinator()        { _coordinator ideas "$@"; }

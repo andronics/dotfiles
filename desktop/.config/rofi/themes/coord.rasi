@@ -1,6 +1,6 @@
 /**
  * Coordinator picker (coord pick, the coord strip's right-click): the
- * launcher's look, sized for seven cells in one row. Each cell is pango
+ * launcher's look, sized for eight cells in one row. Each cell is pango
  * markup from _coord: a large Nerd Font glyph coloured as on the strip (dim
  * not running, peach busy, red pill waiting), the name, and a faint state.
  * Shown coordinators are marked active: a lavender ring in the selection's
@@ -21,12 +21,14 @@ configuration {
 }
 
 /*
- * Cells are (width - 64 padding - 72 spacing) / 7 = 175px, 155px inside the
+ * Cells are (width - 64 padding - 84 spacing) / 8 = 175px, the spacing
+ * being seven 12px gaps between eight columns, so 1548px is 64 + 84 + 8 x
+ * 175 and still fits a 2560px screen. Each cell is 155px inside the
  * element's padding and border: room for "metalayerlab" (132px at 12pt) and
  * "waiting · shown" (135px small).
  */
 window {
-    width:               1360px;
+    width:               1548px;
 }
 
 entry {
@@ -34,7 +36,7 @@ entry {
 }
 
 listview {
-    columns:             7;
+    columns:             8;
     lines:               1;
 }
 
