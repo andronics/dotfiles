@@ -12,7 +12,7 @@ super + Return + {_, alt, shift}
 
 # launcher - gui
 super + space
-  rofi -show drun -show-icons
+  rofi -show drun -show-icons -theme launcher
 
 # preselect on {north, south, west, east} postion
 super + {Up, Down, Left, Right}
