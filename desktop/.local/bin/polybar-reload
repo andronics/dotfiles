@@ -4,8 +4,10 @@
 #
 # `theme ensure` comes first: config.ini includes
 # ~/.local/state/theme/current/polybar.ini, and polybar won't start without
-# it. A running bar restarts in place through `theme reload polybar`
-# (polybar-msg cmd restart), which relaunches it if the restart fails.
+# it. Running bars restart in place through `theme reload polybar`
+# (polybar-msg -p <pid> cmd restart): a bar that doesn't take the restart or
+# doesn't answer within a few seconds after it (frozen) is killed with its
+# scripts and relaunched from its own command line and environment.
 
 theme ensure || exit 1
 
