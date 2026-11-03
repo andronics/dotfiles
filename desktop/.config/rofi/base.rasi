@@ -1,10 +1,14 @@
 /**
  * Rofi base theme
  *
- * Palette, aliases, font and element styling shared by every rofi menu.
- * Layout lives in what imports this: config.rasi (plain `rofi`) and the
- * per-job variants in themes/. Colours come from colours.rasi (Catppuccin
- * Mocha), shared with polybar.
+ * Palette, aliases, fonts, radii and element styling shared by every rofi
+ * menu. Layout lives in what imports this: config.rasi (plain `rofi`) and
+ * the per-job variants in themes/.
+ *
+ * Colours, fonts and radii come from the generated theme (`theme apply`),
+ * imported below the static block. Without one, colours.rasi (Catppuccin
+ * Mocha) and the literals here are the fallback, and look the same as the
+ * default theme.
  */
 
 /* Relative imports resolve against this file's directory. */
@@ -29,6 +33,7 @@ configuration {
     accent-color:        @lavender;
     accent-fg-color:     @crust;
     urgent-color:        @red;
+    urgent-fg-color:     @crust;
     active-color:        @green;
     busy-color:          @peach;
 
@@ -38,8 +43,13 @@ configuration {
     /* Same family as Alacritty; Nerd Font glyphs fall back to Symbols Nerd Font Mono. */
     font:                "Source Code Pro for Powerline 14";
     font-bold:           "Source Code Pro for Powerline Bold 14";
+    font-sm:             "Source Code Pro for Powerline 12";
+    font-lg:             "Source Code Pro for Powerline 16";
+    font-xl:             "Source Code Pro for Powerline 22";
 
     radius:              8px;
+    radius-lg:           12px;
+    radius-xl:           16px;
 
     background-color:    transparent;
     text-color:          @fg-color;
@@ -48,6 +58,14 @@ configuration {
     padding:             12px;
     margin:              0px;
 }
+
+/*
+ * The generated theme: the same variables, so it must come after the block
+ * above to win. `?import` skips a missing file (rofi 2.0), which leaves the
+ * static values. rofi expands `~` from $HOME; the path is fixed because rofi
+ * can't read an environment variable in an import.
+ */
+?import "~/.local/state/theme/current/rofi.rasi"
 
 window {
     background-color:    @bg-color;
@@ -115,7 +133,7 @@ element alternate.normal {
 
 element normal.urgent {
     background-color:    @urgent-color;
-    text-color:          @accent-fg-color;
+    text-color:          @urgent-fg-color;
 }
 
 element normal.active {
@@ -133,7 +151,7 @@ element alternate.active {
     text-color:          @active-color;
 }
 
-/* The selection is always a lavender pill; urgent/active keep their fill and gain a lavender ring. */
+/* The selection is always an accent pill; urgent/active keep their fill and gain an accent ring. */
 element selected.normal {
     background-color:    @accent-color;
     text-color:          @accent-fg-color;
@@ -141,7 +159,7 @@ element selected.normal {
 
 element selected.urgent {
     background-color:    @urgent-color;
-    text-color:          @accent-fg-color;
+    text-color:          @urgent-fg-color;
     border:              2px solid;
     border-color:        @accent-color;
 }

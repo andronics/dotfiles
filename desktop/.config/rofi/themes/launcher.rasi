@@ -13,7 +13,7 @@ window {
     location:            center;
     anchor:              center;
     width:               1240px;
-    border-radius:       16px;
+    border-radius:       @radius-xl;
 }
 
 mainbox {
@@ -25,7 +25,7 @@ mainbox {
 inputbar {
     background-color:    @bg-alt-color;
     border:              0px;
-    border-radius:       12px;
+    border-radius:       @radius-lg;
     padding:             16px 20px;
     spacing:             16px;
     children:            [ textbox-search, entry ];
@@ -35,20 +35,20 @@ textbox-search {
     expand:              false;
     str:                 "󰍉";
     text-color:          @accent-color;
-    font:                "Source Code Pro for Powerline 22";
+    font:                @font-xl;
     padding:             0px;
     vertical-align:      0.5;
 }
 
 entry {
-    font:                "Source Code Pro for Powerline 22";
+    font:                @font-xl;
     placeholder:         "Search apps";
     vertical-align:      0.5;
 }
 
 message {
     border:              0px;
-    border-radius:       12px;
+    border-radius:       @radius-lg;
 }
 
 listview {
@@ -66,7 +66,7 @@ element {
     orientation:         vertical;
     padding:             20px 8px 16px 8px;
     spacing:             12px;
-    border-radius:       12px;
+    border-radius:       @radius-lg;
 }
 
 element-icon {
@@ -76,6 +76,6 @@ element-icon {
 }
 
 element-text {
-    font:                "Source Code Pro for Powerline 12";
+    font:                @font-sm;
     horizontal-align:    0.5;
 }
