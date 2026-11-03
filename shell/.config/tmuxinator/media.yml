@@ -1,4 +1,4 @@
-# /home/andronics/.config/tmuxinator/media.yml
+# ~/.config/tmuxinator/media.yml
 
 name: media
 root: /.pool/local/media

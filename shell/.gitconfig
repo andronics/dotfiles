@@ -4,7 +4,7 @@
 
 [core]
 	editor = nano
-	hooksPath = /home/andronics/.git-hooks
+	hooksPath = ~/.git-hooks
 
 [credential]
 	helper = store
