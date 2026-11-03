@@ -67,6 +67,8 @@ typeset -ga _COORD_NAMES=(brain template folio homelab metalayerlab apps dotfile
 declare -g _COORD_ACTORS_DIR="${COORD_ACTORS_DIR:-/pool/local/actors}"
 declare -g _COORD_STATE_DIR="${XDG_RUNTIME_DIR:-$HOME/.cache}/coord/state"
 declare -gi _COORD_NOTIFY_BODY_MAX=200
+# rofi theme for pick: a name resolves to ~/.config/rofi/themes/<name>.rasi.
+declare -g _COORD_PICK_THEME="${COORD_PICK_THEME:-coord}"
 
 # Symbols Nerd Font Mono (polybar font-0) Material Design glyphs.
 typeset -gA _COORD_ICONS=(
@@ -384,31 +386,85 @@ coord-toggle() {
     }
 }
 
+# Fills the caller's _running and _shown (local -A there). Running means the
+# coordinator's window or its tmux session exists; shown, a visible window.
+_coord-scan() {
+    local _name _node _instance
+    for _name in ${(f)"$(tmux list-sessions -F '#S' 2>/dev/null)"}; do
+        [[ "$_name" == *-coordinator ]] && _running[${_name%-coordinator}]=1
+    done
+    _coord-windows | while read -r _node _instance; do
+        _running[$_instance]=1
+        bspc query -N -n "${_node}.!hidden" >/dev/null 2>&1 && _shown[$_instance]=1
+    done
+}
+
+# Sets REPLY to <name>'s activity (off, idle, busy, waiting) from the caller's
+# _running. The state file of one that isn't running is stale and removed.
+_coord-activity() {
+    local _file="${_COORD_STATE_DIR}/$1"
+    REPLY=off
+    if (( ${+_running[$1]} )); then
+        REPLY=
+        [[ -r "$_file" ]] && REPLY=$(<"$_file")
+        [[ "$REPLY" == (busy|waiting) ]] || REPLY=idle
+    else
+        [[ -e "$_file" ]] && rm -f -- "$_file" 2>/dev/null
+    fi
+}
+
+# Sets REPLY to one pick row as pango markup (rofi -markup-rows): the strip's
+# glyph coloured as the strip colours it, the name, and a faint state. rofi
+# takes icons only as image names, so the Nerd Font glyph has to be text.
+# Shown isn't drawn here: pick marks those rows active, which
+# rofi/themes/coord.rasi underlines in lavender like the strip.
+_coord-pick-row() {
+    local _name=$1 _activity=$2 _shown=${3:-} _glyph _label
+    _glyph="<span font_family='Symbols Nerd Font Mono'> ${_COORD_ICONS[$_name]:-${_name[1]}} </span>"
+    case "$_activity" in
+        off)     _glyph="<span foreground='${_COORD_BAR_COLORS[dim]}'>${_glyph}</span>"
+                 _label="not running" ;;
+        busy)    _glyph="<span foreground='${_COORD_BAR_COLORS[busy]}'>${_glyph}</span>"
+                 _label=busy ;;
+        waiting) _glyph="<span background='${_COORD_BAR_COLORS[waiting]}' foreground='${_COORD_BAR_COLORS[ink]}'>${_glyph}</span>"
+                 _label=waiting ;;
+        *)       _label=idle ;;
+    esac
+    [[ -n "$_shown" ]] && _label+=" · shown"
+    printf -v REPLY "%s  %-14s<span fgalpha='55%%'>%s</span>" "$_glyph" "$_name" "$_label"
+}
+
 # The cursor starts on the shown coordinator (also highlighted as active), or
 # the last one shown. rofi runs outside the lock: it can sit open
 # indefinitely, and the state it lists is only a hint.
 coord-pick() {
-    local _node _instance _name _current _choice _fd
+    local _name _current _choice _fd _theme
     local -i _row=0
-    local -a _rows
-    local -A _state
+    local -a _rows _active _theme_args
+    local -A _running _shown
 
-    _coord-windows | while read -r _node _instance; do
-        _state[$_instance]=hidden
-        bspc query -N -n "${_node}.!hidden" >/dev/null 2>&1 && _state[$_instance]=showing
-    done
+    _coord-scan
     _current=$(_coord-current)
     for _name in "${_COORD_NAMES[@]}"; do
-        _rows+=("$(printf '%-14s %s' "$_name" "${_state[$_name]:-not running}")")
+        _coord-activity "$_name"
+        _coord-pick-row "$_name" "$REPLY" "${_shown[$_name]:-}"
+        _rows+=("$REPLY")
+        (( ${+_shown[$_name]} )) && _active+=($(( ${#_rows} - 1 )))
     done
     _name=${_current:-$(_coord-last-get)}
     [[ -n "$_name" ]] && _row=$(( ${_COORD_NAMES[(Ie)$_name]} - 1 ))
 
-    # -format i returns the row index, so the state column never has to be
-    # parsed back out. Escape exits non-zero with no output: nothing to do.
-    _choice=$(print -rl -- "${_rows[@]}" | rofi -dmenu -i -no-custom -format i \
-        -p "Coordinator" -selected-row "$_row" \
-        ${_current:+-a} ${_current:+$_row}) || return 0
+    # A missing theme would make rofi exit with an error, so an unstowed
+    # themes/ falls back to the default look instead of a dead picker.
+    _theme=$_COORD_PICK_THEME
+    [[ "$_theme" == */* ]] || _theme="${XDG_CONFIG_HOME:-$HOME/.config}/rofi/themes/${_theme}.rasi"
+    [[ -r "$_theme" ]] && _theme_args=(-theme "$_theme")
+
+    # -format i returns the row index, so the markup never has to be parsed
+    # back out. Escape exits non-zero with no output: nothing to do.
+    _choice=$(print -rl -- "${_rows[@]}" | rofi -dmenu -i -no-custom -markup-rows -format i \
+        "${_theme_args[@]}" -p "Coordinator" -selected-row "$_row" \
+        ${_active:+-a} ${_active:+${(j:,:)_active}}) || return 0
     [[ "$_choice" =~ '^[0-9]+$' ]] && (( _choice < ${#_COORD_NAMES} )) || return 0
 
     _coord-lock switch || return 1
@@ -588,7 +644,7 @@ coord-status() {
 # Polybar action tags wrap each icon, so a left-click is `toggle <name>`;
 # right-click and scroll are the module's own handlers.
 coord-bar() {
-    local _arg _node _instance _name _state _file _icon _cell _out=
+    local _arg _name _icon _cell _out=
     local -A _color=("${(@kv)_COORD_BAR_COLORS}") _running _shown
 
     for _arg in "$@"; do
@@ -596,27 +652,11 @@ coord-bar() {
             && _color[${match[1]}]=${match[2]}
     done
 
-    for _name in ${(f)"$(tmux list-sessions -F '#S' 2>/dev/null)"}; do
-        [[ "$_name" == *-coordinator ]] && _running[${_name%-coordinator}]=1
-    done
-    _coord-windows | while read -r _node _instance; do
-        _running[$_instance]=1
-        bspc query -N -n "${_node}.!hidden" >/dev/null 2>&1 && _shown[$_instance]=1
-    done
-
+    _coord-scan
     for _name in "${_COORD_NAMES[@]}"; do
-        _file="${_COORD_STATE_DIR}/${_name}"
-        _state=
-        if (( ${+_running[$_name]} )); then
-            [[ -r "$_file" ]] && _state=$(<"$_file")
-            [[ "$_state" == (busy|waiting) ]] || _state=idle
-        else
-            [[ -e "$_file" ]] && rm -f -- "$_file" 2>/dev/null
-            _state=off
-        fi
-
+        _coord-activity "$_name"
         _icon=" ${_COORD_ICONS[$_name]:-${_name[1]}} "
-        case "$_state" in
+        case "$REPLY" in
             off)     _cell="%{F${_color[dim]}}${_icon}%{F-}" ;;
             busy)    _cell="%{F${_color[busy]}}${_icon}%{F-}" ;;
             waiting) _cell="%{B${_color[waiting]}}%{F${_color[ink]}}${_icon}%{F-}%{B-}" ;;
