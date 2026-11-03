@@ -145,7 +145,7 @@ _coord_cmd() {
                     local named=
                     for w in $prev; do [[ $w == -* ]] || named=1; done
                     (( ${prev[(Ie)--yes]} || ${prev[(Ie)-y]} )) \
-                        || sopt+=('--yes:skip the question about missing pause notes')
+                        || sopt+=('--yes:force a stop whose notes are not clean, without asking (the brain coordinator is still asked about)')
                     if [[ $sub == stop ]] && [[ -z $named ]] && (( ! ${prev[(Ie)--all]} )); then
                         sopt+=('--all:every running coordinator')
                     fi
@@ -154,6 +154,15 @@ _coord_cmd() {
                         _coord_cmd_load names
                         _coord_cmd_offer name coordinators 'coordinator' && ret=0
                     fi
+                    ;;
+                stopped)
+                    # One or more names, each once.
+                    _coord_cmd_load names
+                    local -a given=(${(@)words[2,CURRENT-1]}) left=() n
+                    for n in "${(@0)${_cc_groups[name]%$'\0'}}"; do
+                        (( ${given[(Ie)${n%%:*}]} )) || left+=($n)
+                    done
+                    (( ${#left} )) && [[ -n $left[1] ]] && _describe -t coordinators 'coordinator' left && ret=0
                     ;;
                 cycle)
                     (( CURRENT == 2 )) || return 1

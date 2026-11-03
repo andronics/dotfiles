@@ -13,13 +13,24 @@
 # offers what can be done to the one picked: show or hide it, start it if it
 # is stopped, stop or restart it. Escape there goes back to the first.
 #
-# Stop: `stop` kills the coordinator's tmux session, which closes its window.
-# A coordinator paused properly has written PAUSED resume notes into its
-# Claude memory (COORD_PROJECTS_DIR, default ~/.claude/projects, then
-# -pool-local-actors-<name>/memory/*.md); one without them is asked about
-# first (a Yes/No in rofi/themes/prompt.rasi, as power's), unless --yes.
-# `stop --all` asks once, naming every running one without notes, then stops
-# every running one.
+# Stop: whether a coordinator may be stopped, and the stopping itself, are
+# the brain's, not this module's: `stop` and `restart` run the brain's stop
+# script (COORD_STOP_SCRIPT, default /mnt/brain/tools/coordinator-stop.py;
+# the brain's design record 0015) with --by switchboard. It judges the
+# coordinator's resume notes clean or not, kills its tmux session (which
+# closes its window) and logs the stop in its home's stop.log. Notes that
+# aren't clean are asked about first, with the script's reason (a Yes/No in
+# rofi/themes/prompt.rasi, as power's), and Yes reruns it with --force;
+# --yes forces at once. The brain coordinator is always asked about, clean
+# or not, --yes or not: it is ended only by Stephen. What the script won't
+# end (a session outside tmux, or the brain from inside a Claude session) or
+# fails at is shown in a notification. `stop --all` checks each running one
+# with --check, asks once naming those that aren't clean, then stops each.
+# After any stop, whoever asked, the script runs `stopped`, the desktop half:
+# drop the strip's state, wait for the window to close, give the strip back
+# and refresh the bar. It may run with no DISPLAY (a detached child of a
+# Claude session), so with none set, coord windows are found through bspc,
+# whose socket has a default path, rather than xprop.
 #
 # Each coordinator window is alacritty with class `coord` and the
 # coordinator's name as instance. bspwmrc's `coord` rule makes it floating,
@@ -68,8 +79,9 @@
 #     - _common, _log
 #     - _theme (bar and menu only, sourced on first use)
 #   External:
-#     - bspwm (bspc), xprop, jq, alacritty, tmux, flock, setsid, grep
+#     - bspwm (bspc), xprop, jq, alacritty, tmux, flock, setsid
 #     - rofi (menu, and stop's question)
+#     - python3 and the brain's coordinator-stop.py (stop, restart)
 #     - notify-send (libnotify >= 0.7.9 for --action) and a notification
 #       daemon whose click runs the default action, e.g. dunst with
 #       mouse_left_click = do_action (status)
@@ -85,6 +97,14 @@ source "${DOTLIB}/_log"    2>/dev/null || true
 # COORD_CLASS points the module at other windows, e.g. a throwaway class for
 # testing that never matches the live panels.
 declare -g _COORD_CLASS="${COORD_CLASS:-coord}"
+# COORD_TMUX_SOCKET points every tmux call at another server, for testing:
+# a path is -S, a name -L. Unset, the default server.
+typeset -ga _COORD_TMUX=(tmux)
+if [[ "${COORD_TMUX_SOCKET:-}" == */* ]]; then
+    _COORD_TMUX+=(-S "$COORD_TMUX_SOCKET")
+elif [[ -n "${COORD_TMUX_SOCKET:-}" ]]; then
+    _COORD_TMUX+=(-L "$COORD_TMUX_SOCKET")
+fi
 declare -g _COORD_LAUNCH_TIMEOUT="${COORD_LAUNCH_TIMEOUT:-10}"
 declare -g _COORD_WIDTH_FILE="${XDG_STATE_HOME:-$HOME/.local/state}/coord/width"
 declare -gi _COORD_WIDTH_DEFAULT=1280 _COORD_WIDTH_MIN=640 _COORD_WIDTH_MAX=2560
@@ -103,8 +123,8 @@ declare -g _COORD_GUARD_SETTLE="${COORD_GUARD_SETTLE:-0.2}"
 declare -g _COORD_MENU_THEME="${COORD_MENU_THEME:-coord}"
 declare -g _COORD_ACTION_THEME="${COORD_ACTION_THEME:-prompt}"
 declare -g _COORD_CONFIRM_THEME="${COORD_CONFIRM_THEME:-prompt}"
-# Claude Code keeps a session's memory under <projects>/<cwd, / as ->/memory.
-declare -g _COORD_PROJECTS_DIR="${COORD_PROJECTS_DIR:-$HOME/.claude/projects}"
+# The brain's stop script, which judges and ends a coordinator (stop, restart).
+declare -g _COORD_STOP_SCRIPT="${COORD_STOP_SCRIPT:-/mnt/brain/tools/coordinator-stop.py}"
 declare -g _COORD_STOP_ICON=$'\U000F0667'   # md-stop_circle_outline
 
 # Symbols Nerd Font Mono (polybar font-0) Material Design glyphs.
@@ -132,8 +152,9 @@ typeset -gA _COORD_BAR_COLORS=()
 typeset -gA _COORD_DESCRIPTIONS=(
     [toggle]="Show <name>'s window docked on the dock side's edge (launching it if needed), or hide it if it is focused"
     [menu]="Two-level rofi menu: pick one of ${(j:, :)_COORD_NAMES} (shown with its state; type its first letter to filter) or Stop all, then show/hide, start, stop or restart it; Escape on the second level goes back"
-    [stop]="Stop <name> by killing its tmux session (which closes its window), or with --all every running coordinator; one without PAUSED resume notes in its Claude memory is asked about first, unless --yes"
-    [restart]="Stop <name> as stop does (asking unless --yes or it has PAUSED notes), then start it again: shown if it was shown, else hidden"
+    [stop]="Stop <name>, or with --all every running coordinator, through the brain's stop script (${_COORD_STOP_SCRIPT:t}), which ends its tmux session; one whose resume notes aren't clean is asked about first with the script's reason, unless --yes (which forces it); what it won't end, such as a session outside tmux, is shown in a notification; a running brain coordinator is always asked about, even with --yes"
+    [restart]="Stop <name> as stop does, through the brain's stop script (asking unless --yes or its notes are clean, and always for the brain coordinator), then start it again: shown if it was shown, else hidden"
+    [stopped]="The desktop half of a stop, run by the stop script after it ends <name>'s session: drop its strip state, wait for its window to close, give the dock strip back and refresh the bar; works without DISPLAY"
     [cycle]="Show the {next|prev} coordinator in the order menu lists them, wrapping and launching it if needed; with none shown, re-show the last one shown (or ${_COORD_NAMES[1]})"
     [width]="Print the dock panel's visible width (the reserved strip is that plus bspwm's window_gap), or set it with {+N|-N|N} (${_COORD_WIDTH_MIN}-${_COORD_WIDTH_MAX}) or move the inner edge with {left|right} [N] (default ${_COORD_WIDTH_STEP}), resizing a shown coordinator"
     [side]="Print the dock side, or set it with {left|right}, re-docking a shown coordinator"
@@ -160,7 +181,13 @@ _coord-check-name() {
 _coord-windows() {
     local _modifier=${1:-} _node _wm_class
     for _node in ${(f)"$(bspc query -N -n ".window${_modifier}" 2>/dev/null)"}; do
-        _wm_class=$(xprop -id "$_node" WM_CLASS 2>/dev/null) || continue
+        if [[ -n "${DISPLAY:-}" ]]; then
+            _wm_class=$(xprop -id "$_node" WM_CLASS 2>/dev/null) || continue
+        else
+            # bspwm's copy of WM_CLASS, in xprop's shape.
+            _wm_class=$(bspc query -T -n "$_node" 2>/dev/null \
+                | jq -r '.client | "= \"\(.instanceName)\", \"\(.className)\""' 2>/dev/null) || continue
+        fi
         [[ "$_wm_class" =~ "= \"([^\"]*)\", \"${_COORD_CLASS}\"\$" ]] && print -r -- "$_node ${match[1]}"
     done
 }
@@ -470,7 +497,7 @@ coord-launch() {
     setsid -f alacritty \
         --class "${_COORD_CLASS},${_name}" \
         --title "${_COORD_CLASS} - ${_name}" \
-        -e tmux new-session -A -s "${_name}-coordinator" \
+        -e "${_COORD_TMUX[@]}" new-session -A -s "${_name}-coordinator" \
             "zsh -ic '_coordinator ${_name}; exec zsh -i'" \
         </dev/null >/dev/null 2>&1
     # The strip counts a coordinator as running once its window or tmux
@@ -507,7 +534,7 @@ _coord-colors() {
 # coordinator's window or its tmux session exists; shown, a visible window.
 _coord-scan() {
     local _name _node _instance
-    for _name in ${(f)"$(tmux list-sessions -F '#S' 2>/dev/null)"}; do
+    for _name in ${(f)"$("${_COORD_TMUX[@]}" list-sessions -F '#S' 2>/dev/null)"}; do
         [[ "$_name" == *-coordinator ]] && _running[${_name%-coordinator}]=1
     done
     _coord-windows | while read -r _node _instance; do
@@ -663,55 +690,122 @@ _coord-confirm() {
 
 # Exact (=) so a missing session never matches another by prefix.
 _coord-has-session() {
-    tmux has-session -t "=${1}-coordinator" 2>/dev/null
+    "${_COORD_TMUX[@]}" has-session -t "=${1}-coordinator" 2>/dev/null
 }
 
-# Returns 0 if coordinator $1 left PAUSED resume notes in its Claude memory.
-# Claude names a project's directory after its cwd with each / as -.
+# Tells Stephen why a stop didn't happen: the log, and a notification, since
+# the switchboard runs from sxhkd and polybar with no terminal to read.
+_coord-alert() {
+    local _title=$1 _body=$2
+    log-error "[coord] ${_title}: ${_body}"
+    (( ${+commands[notify-send]} )) || return 0
+    # dunstrc sets markup = full.
+    _body=${_body//&/&amp;} _body=${_body//</&lt;} _body=${_body//>/&gt;}
+    notify-send --app-name="$_COORD_CLASS" --hint="string:x-dunst-stack-tag:coord-stop" \
+        "$_title" "$_body" </dev/null >/dev/null 2>&1 &!
+}
+
+# Returns 1, alerting, if the brain's stop script or python3 is missing:
+# stopping is the script's alone, so there is no fallback here.
+_coord-stop-ready() {
+    (( ${+commands[python3]} )) && [[ -r "$_COORD_STOP_SCRIPT" ]] && return 0
+    _coord-alert "coord: can't stop" \
+        "no python3, or no stop script at ${_COORD_STOP_SCRIPT}; by hand: tmux kill-session -t =<name>-coordinator"
+    return 1
+}
+
+# Runs the brain's stop script with $@ and returns its exit code: 0 stopped
+# or not running (with --check, clean), 1 not clean and nothing ended,
+# 2 usage, 3 not its to end, 4 the kill failed. Sets REPLY to what it
+# printed, stdout and stderr together.
+_coord-stop-script() {
+    local -i _rc=0
+    REPLY=$(python3 "$_COORD_STOP_SCRIPT" "$@" </dev/null 2>&1) || _rc=$?
+    return $_rc
+}
+
+# Sets REPLY to the reason in coordinator $2's stop-script output $1: its
+# last line, which is either a stop.log line, whose why="..." is taken, or a
+# plain sentence (--check's "<name>: <why>", the outside-tmux advice, a usage
+# error), less a leading "<name>: ".
+_coord-stop-why() {
+    local -a _lines=(${(f)1})
+    REPLY=${${_lines[-1]:-}#"$2": }
+    [[ "$REPLY" =~ ' why=("(([^"\\]|\\.)*)"|([^ ]*))' ]] || return 0
+    REPLY=${match[2]:-${match[4]}}
+    REPLY=${${REPLY//\\\"/\"}//\\\\/\\}
+}
+
+# Returns 0 if coordinator $1's resume notes are clean, as the brain's stop
+# script judges them (--check); otherwise sets REPLY to why not.
 _coord-paused() {
-    local _dir="${_COORD_PROJECTS_DIR}/${_COORD_ACTORS_DIR//\//-}-$1/memory"
-    local -a _notes=("$_dir"/*.md(N))
-    (( ${#_notes} )) && grep -lq -- PAUSED "${_notes[@]}" 2>/dev/null
+    local -i _rc=0
+    _coord-stop-script "$1" --check --by switchboard || _rc=$?
+    _coord-stop-why "$REPLY" "$1"
+    return $_rc
 }
 
-# Kills the tmux sessions of the coordinators named, drops their state, waits
-# up to _COORD_LAUNCH_TIMEOUT for their windows to close (each runs only the
-# tmux client), then gives back any strip a shown one held and refreshes the
-# strip. Returns 1 if none was killed or a window is still open.
-_coord-kill() {
-    local _name _node _instance _left _fd
-    local -i _tries=$(( _COORD_LAUNCH_TIMEOUT * 10 ))
-    local -a _gone
-    for _name; do
-        if tmux kill-session -t "=${_name}-coordinator" 2>/dev/null; then
-            rm -f -- "${_COORD_STATE_DIR}/${_name}" 2>/dev/null
-            _gone+=("$_name")
-        else
-            log-error "[coord] ${_name}: no tmux session to stop"
-        fi
-    done
-    (( ${#_gone} )) || return 1
+# Stops coordinator $1 through the stop script, forced with reason $2 if one
+# is given. Not clean: with a verb in $3 (stop, restart), asks "<name>: <why>:
+# <verb> anyway?" and Yes forces it; without, alerts. What the script won't
+# end or fails at is alerted. Returns 0 if it stopped or wasn't running.
+_coord-end() {
+    local _name=$1 _reason=${2:-} _verb=${3:-}
+    local -a _args=("$_name" --by switchboard)
+    local -i _rc=0
+    [[ -n "$_reason" ]] && _args+=(--force --reason "$_reason")
+    _coord-stop-script "${_args[@]}" || _rc=$?
+    (( _rc == 0 )) && return 0
+    _coord-stop-why "$REPLY" "$_name"
+    case $_rc in
+        1)
+            if [[ -n "$_verb" && -z "$_reason" ]]; then
+                _coord-confirm "${_name}: ${REPLY}: ${_verb} anyway?" || return 1
+                _coord-end "$_name" "Stephen: Yes to ${_verb} anyway"
+                return
+            fi
+            _coord-alert "${_name}: not stopped" "$REPLY" ;;
+        3) _coord-alert "${_name}: not stopped" "$REPLY" ;;
+        *) _coord-alert "${_name}: stop failed (exit ${_rc})" "$REPLY" ;;
+    esac
+    return 1
+}
 
+# Stops coordinator $2 for `stop` or `restart` ($1), --yes if $3 is set. The
+# brain coordinator is ended only by Stephen, so a running one is always
+# asked about, clean or not, --yes or not (decision 0015 §4, §5).
+_coord-end-asking() {
+    local _verb=$1 _name=$2 _yes=${3:-}
+    if [[ "$_name" == brain ]] && _coord-has-session brain; then
+        if _coord-paused brain; then
+            _coord-confirm "the brain coordinator: ${_verb} it?" || return 1
+            _coord-end brain "" "$_verb"
+        else
+            _coord-confirm "the brain coordinator: ${REPLY}: ${_verb} it anyway?" || return 1
+            _coord-end brain "Stephen: Yes to ${_verb} the brain coordinator anyway"
+        fi
+    elif [[ -n "$_yes" ]]; then
+        _coord-end "$_name" "Stephen: coord ${_verb} --yes"
+    else
+        _coord-end "$_name" "" "$_verb"
+    fi
+}
+
+# Waits up to _COORD_LAUNCH_TIMEOUT for the windows of the coordinators named
+# to close (each runs only the tmux client). Sets REPLY to one still open.
+_coord-wait-gone() {
+    local _node _instance
+    local -a _names=("$@")
+    local -i _tries=$(( _COORD_LAUNCH_TIMEOUT * 10 ))
     while :; do
-        _left=
+        REPLY=
         _coord-windows | while read -r _node _instance; do
-            (( ${_gone[(Ie)$_instance]} )) && _left=$_instance
+            (( ${_names[(Ie)$_instance]} )) && REPLY=$_instance
         done
-        [[ -z "$_left" ]] && break
-        (( _tries-- > 0 )) || break
+        [[ -z "$REPLY" ]] && return 0
+        (( _tries-- > 0 )) || return 1
         sleep 0.1
     done
-
-    if _coord-lock switch; then
-        _coord-unpad
-        exec {_fd}>&-
-    fi
-    _coord-poke
-    if [[ -n "$_left" ]]; then
-        log-error "[coord] ${_left}: window still open ${_COORD_LAUNCH_TIMEOUT}s after its session was stopped"
-        return 1
-    fi
-    log-info "[coord] stopped ${(j:, :)_gone}"
 }
 
 # Escape on level one returns 0: closing the menu is not a failure.
@@ -732,11 +826,14 @@ coord-menu() {
     return 0
 }
 
-# Running means its tmux session exists: that is what is killed. Asking is
+# One name always goes to the script, running in tmux or not: it clears a
+# stale strip cell, and finds a session started outside tmux, which it
+# won't end. --all stops those whose tmux session exists. Asking is
 # declined: returns 1 having stopped nothing.
 coord-stop() {
-    local _arg _name _yes= _all= _question
-    local -a _names _targets _unpaused
+    local _arg _name _yes= _all= _question _reason
+    local -a _names _targets _unclean _failed
+    local -A _why
     for _arg; do
         case "$_arg" in
             -h|--help) print -r -- "usage: coord stop {<name>|--all} [--yes]: ${_COORD_DESCRIPTIONS[stop]}"; return 0 ;;
@@ -746,41 +843,93 @@ coord-stop() {
             *)        _names+=("$_arg") ;;
         esac
     done
-    if [[ -n "$_all" ]]; then
-        (( ! ${#_names} )) || { log-error "[coord] stop: --all takes no name"; return 2; }
-        _names=("${_COORD_NAMES[@]}")
-    else
+    if [[ -z "$_all" ]]; then
         (( ${#_names} == 1 )) || { log-error "[coord] stop: expected one name or --all"; return 2; }
         _coord-check-name "${_names[1]}" || return 2
+        _coord-stop-ready || return 1
+        _coord-end-asking stop "${_names[1]}" "$_yes"
+        return
     fi
+    (( ! ${#_names} )) || { log-error "[coord] stop: --all takes no name"; return 2; }
 
-    for _name in "${_names[@]}"; do
-        _coord-has-session "$_name" || continue
+    # The brain last: it is the one that would notice the others going.
+    for _name in "${(@)_COORD_NAMES:#brain}" brain; do
+        (( ${_COORD_NAMES[(Ie)$_name]} )) && _coord-has-session "$_name" || continue
         _targets+=("$_name")
-        _coord-paused "$_name" || _unpaused+=("$_name")
     done
     if (( ! ${#_targets} )); then
-        if [[ -n "$_all" ]]; then
-            log-info "[coord] no coordinator is running"
-        else
-            log-info "[coord] ${_names[1]} is not running"
-        fi
+        log-info "[coord] no coordinator is running"
         return 0
     fi
+    _coord-stop-ready || return 1
+    for _name in "${_targets[@]}"; do
+        _coord-paused "$_name" && continue
+        _unclean+=("$_name")
+        _why[$_name]=$REPLY
+    done
 
-    if [[ -z "$_yes" ]] && (( ${#_unpaused} )); then
-        if [[ -n "$_all" ]]; then
-            _question="no pause notes found for ${(j:, :)_unpaused}: stop all anyway?"
-        else
-            _question="${_unpaused[1]}: no pause notes found: stop anyway?"
-        fi
-        _coord-confirm "$_question" || return 1
+    if (( ${#_unclean} == 1 )); then
+        _question="${_unclean[1]}: ${_why[${_unclean[1]}]}"
+    elif (( ${#_unclean} )); then
+        _question="notes not clean for ${(j:, :)_unclean}"
     fi
-    _coord-kill "${_targets[@]}"
+    if (( ${_targets[(Ie)brain]} )); then
+        _question="${_question:+${_question}; }the brain coordinator too"
+    elif [[ -n "$_yes" ]]; then
+        _question=
+    fi
+    [[ -z "$_question" ]] || _coord-confirm "${_question}: stop all anyway?" || return 1
+
+    _reason="Stephen: Yes to stop all anyway"
+    [[ -n "$_yes" ]] && _reason="Stephen: coord stop --all --yes"
+    for _name in "${_targets[@]}"; do
+        if (( ${_unclean[(Ie)$_name]} )); then
+            _coord-end "$_name" "$_reason" || _failed+=("$_name")
+        else
+            _coord-end "$_name" || _failed+=("$_name")
+        fi
+    done
+    (( ! ${#_failed} ))
+}
+
+# The desktop half of a stop, run by the brain's stop script once it has
+# ended the sessions (0015 §2 step 5): it drops their state, waits for their
+# windows to close, gives back any strip a shown one held and refreshes the
+# strip. Needs no DISPLAY (see _coord-windows). Returns 1 if a window is
+# still open.
+coord-stopped() {
+    local _arg _fd
+    local -a _names
+    for _arg; do
+        case "$_arg" in
+            -h|--help) print -r -- "usage: coord stopped <name>...: ${_COORD_DESCRIPTIONS[stopped]}"; return 0 ;;
+            -*)        log-error "[coord] stopped: unknown option '${_arg}'"; return 2 ;;
+            *)         _coord-check-name "$_arg" || return 2
+                       _names+=("$_arg") ;;
+        esac
+    done
+    (( ${#_names} )) || { log-error "[coord] stopped: expected a name"; return 2; }
+
+    for _arg in "${_names[@]}"; do
+        rm -f -- "${_COORD_STATE_DIR}/${_arg}" 2>/dev/null
+    done
+    _coord-wait-gone "${_names[@]}"
+    _arg=$REPLY
+    if _coord-lock switch; then
+        _coord-unpad
+        exec {_fd}>&-
+    fi
+    _coord-poke
+    if [[ -n "$_arg" ]]; then
+        log-error "[coord] ${_arg}: window still open ${_COORD_LAUNCH_TIMEOUT}s after its session was stopped"
+        return 1
+    fi
+    return 0
 }
 
 # Started as it was: shown again if it was shown, else hidden. Not running,
-# it is just started, hidden.
+# it is just started, hidden. The stop goes through the script even when no
+# tmux session exists, so one running outside tmux isn't started twice.
 coord-restart() {
     local _arg _name= _yes= _shown= _node
     for _arg; do
@@ -794,15 +943,19 @@ coord-restart() {
     done
     [[ -n "$_name" ]] || { log-error "[coord] restart: expected a name"; return 2; }
     _coord-check-name "$_name" || return 2
+    _coord-stop-ready || return 1
 
     if _coord-has-session "$_name"; then
         _node=$(_coord-node "$_name")
         [[ -n "$_node" ]] && bspc query -N -n "${_node}.!hidden" >/dev/null 2>&1 && _shown=1
-        if [[ -z "$_yes" ]] && ! _coord-paused "$_name"; then
-            _coord-confirm "${_name}: no pause notes found: restart anyway?" || return 1
-        fi
-        _coord-kill "$_name" || return 1
     fi
+    _coord-end-asking restart "$_name" "$_yes" || return 1
+    # The script's `coord stopped` has waited for the window; this covers a
+    # script that couldn't run it, so the old window is never re-shown.
+    _coord-wait-gone "$_name" || {
+        log-error "[coord] ${REPLY}: window still open, not restarting"
+        return 1
+    }
 
     if [[ -n "$_shown" ]]; then
         _coord-summon "$_name"
