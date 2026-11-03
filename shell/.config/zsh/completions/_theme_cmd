@@ -1,0 +1,203 @@
+#compdef theme
+
+# Completion for `theme` (desktop/.local/bin/theme over dotlib _theme).
+#
+# Named _theme_cmd, not the conventional _theme: dotlib already has a file
+# _theme, and its helpers use the _theme- prefix, so a completion function
+# called _theme would share a name with the module and could be shadowed by,
+# or shadow, it if ${DOTLIB} ever ended up on fpath. #compdef binds it to the
+# `theme` command whatever the function is called.
+#
+# Everything offered comes from the module itself, read in a `zsh -f` child
+# so the interactive shell neither pays for loading _theme nor gets its
+# readonly THEME_LOADED: subcommands from the theme-* functions and
+# _THEME_DESCRIPTIONS, schemes from `theme list schemes`, builds from the
+# history, keys from the current theme.zsh (or _THEME_FALLBACK), reload
+# targets from _THEME_RELOADERS. A new scheme or key shows up without editing
+# this file. Errors are swallowed: a broken module just completes nothing.
+
+# Prints "<group>\t<value>\t<description>" lines for one context.
+_theme_cmd_data() {
+    DOTLIB=${DOTLIB:-${XDG_DATA_HOME:-$HOME/.local/share}/dotlib} \
+    command zsh -fc '
+        source "$DOTLIB/_theme" || exit 1
+        _theme-paths
+        local f s line id name cur= marker title map ref k
+        local -a w seen
+        out() { printf "%s\t%s\t%s\n" "$@" }
+        # theme list schemes prints "[*] <id> <variant> <title>", * on the
+        # current one (and no marker column at all when none is applied).
+        schemes() {
+            theme-list schemes | while IFS= read -r line; do
+                marker=${line[1]} w=(${=line#[*]})
+                (( ${#w} )) || continue
+                id=$w[1] title=${(j: :)w[3,-1]}
+                [[ $w[2] == (dark|light) ]] || title=${(j: :)w[2,-1]}
+                [[ $w[2] == (dark|light) ]] && title+=" ($w[2])"
+                [[ $marker == "*" ]] && title+=" - current"
+                out scheme "$id" "${title:-$id}"
+            done
+        }
+        case $1 in
+            commands)
+                for f in ${(ok)functions[(I)theme-*]}; do
+                    s=${f#theme-}
+                    [[ $s == (help|version) ]] && continue
+                    [[ $s == self-test ]] && { out command "$s" "Render every scheme into a scratch state dir and validate"; continue; }
+                    out command "$s" "${_THEME_DESCRIPTIONS[$s]:-}"
+                done
+                ;;
+            schemes) schemes ;;
+            apply)
+                schemes
+                out default default "the default scheme ($_THEME_DEFAULT_SCHEME)"
+                _theme-source-current 2>/dev/null && cur=${THEME_META[id]:-}
+                [[ -r $_THEME_STATE/history ]] || exit 0
+                # Newest first, each build once, pruned ones skipped.
+                for line in "${(@Oa)${(@f)$(<$_THEME_STATE/history)}}"; do
+                    w=("${(@ps:\t:)line}")
+                    id=$w[1] name=$w[2]
+                    (( ${seen[(Ie)$id]} )) && continue
+                    seen+=($id)
+                    _theme-build-ok "$id" || continue
+                    [[ $id == "$cur" ]] && name+=" - current"
+                    out build "$id" "$name"
+                done
+                ;;
+            keys|rolekeys)
+                # theme-roles reads roles, palette, sizes and metrics; get
+                # also fonts and meta.
+                if _theme-source-current 2>/dev/null; then
+                    for map in THEME_ROLE THEME_PALETTE THEME_SIZE THEME_METRIC THEME_FONT THEME_META; do
+                        [[ $1 == rolekeys && $map == (THEME_FONT|THEME_META) ]] && continue
+                        (( ${(P)+map} )) || continue
+                        for k in ${(Pok)map}; do
+                            ref="${map}[$k]"
+                            out "${${map#THEME_}:l}" "$k" "${(P)ref}"
+                        done
+                    done
+                else
+                    for k in ${(ok)_THEME_FALLBACK}; do
+                        out fallback "$k" "${_THEME_FALLBACK[$k]} (no theme applied)"
+                    done
+                fi
+                ;;
+            reload)
+                for k in ${(ok)_THEME_RELOADERS}; do out target "$k" "reload $k"; done
+                ;;
+        esac
+    ' _theme_cmd_data "$@" 2>/dev/null
+}
+
+# Fills the caller's assoc _tc_groups (group -> NUL-joined "value:desc"
+# entries) from _theme_cmd_data.
+_theme_cmd_load() {
+    local line group value desc
+    _tc_groups=()
+    for line in ${(f)"$(_theme_cmd_data "$@")"}; do
+        group=${line%%$'\t'*} line=${line#*$'\t'}
+        value=${line%%$'\t'*} desc=${line#*$'\t'}
+        _tc_groups[$group]+="${value//:/\\:}:${desc}"$'\0'
+    done
+}
+
+# Offers group $1 from _tc_groups with tag $2 and heading $3.
+_theme_cmd_offer() {
+    local -a items=("${(@0)${_tc_groups[$1]%$'\0'}}")
+    (( ${#items} )) && [[ -n $items[1] ]] || return 1
+    _describe -t "$2" "$3" items
+}
+
+_theme_cmd() {
+    local curcontext=$curcontext state state_descr line sub ret=1
+    local -A opt_args _tc_groups
+
+    _arguments -C \
+        '(-v --verbose -q --quiet)'{-v,--verbose}'[verbose output]' \
+        '(-v --verbose -q --quiet)'{-q,--quiet}'[quiet output]' \
+        '--debug[debug output]' \
+        '--dry-run[show what would be done]' \
+        '(- *)'{-h,--help}'[show help]' \
+        '(- *)--version[show version]' \
+        '1: :->command' \
+        '*:: :->args' && return 0
+
+    case $state in
+        command)
+            _theme_cmd_load commands
+            _theme_cmd_offer command commands 'theme command' && ret=0
+            ;;
+        args)
+            sub=$words[1]
+            [[ $sub == ls ]] && sub=list
+            case $sub in
+                apply)
+                    (( CURRENT == 2 )) || return 1
+                    _theme_cmd_load apply
+                    _theme_cmd_offer scheme schemes 'scheme' && ret=0
+                    _theme_cmd_offer default default 'default' && ret=0
+                    _theme_cmd_offer build builds 'build (from history)' && ret=0
+                    ;;
+                check|swatch)
+                    (( CURRENT == 2 )) || return 1
+                    _theme_cmd_load schemes
+                    _theme_cmd_offer scheme schemes 'scheme' && ret=0
+                    ;;
+                get)
+                    (( CURRENT == 2 )) || return 1
+                    _theme_cmd_load keys
+                    local g
+                    for g in role palette size metric font meta fallback; do
+                        _theme_cmd_offer $g $g "$g key" && ret=0
+                    done
+                    ;;
+                roles)
+                    if compset -P '*='; then
+                        _theme_cmd_load rolekeys
+                        local g
+                        for g in role palette size metric fallback; do
+                            _theme_cmd_offer $g $g "$g" && ret=0
+                        done
+                    else
+                        _message -e keys 'key=role (key is any name; complete the role after =)'
+                    fi
+                    ;;
+                list)
+                    (( CURRENT == 2 )) || return 1
+                    local -a what=(
+                        'schemes:schemes that can be applied (default)'
+                        'history:activations, newest last'
+                        'builds:rendered builds kept in the state dir'
+                    )
+                    _describe -t what 'list what' what && ret=0
+                    ;;
+                reload)
+                    _theme_cmd_load reload
+                    local -a targets=("${(@0)${_tc_groups[target]%$'\0'}}") left=() done=("${(@)words[2,CURRENT-1]}")
+                    local t
+                    # Each target once.
+                    for t in $targets; do
+                        (( ${done[(Ie)${t%%:*}]} )) || left+=($t)
+                    done
+                    (( ${#left} )) && [[ -n $left[1] ]] && _describe -t targets 'reload target' left && ret=0
+                    ;;
+                current)
+                    (( CURRENT == 2 )) || return 1
+                    local -a o=('--json:print spec.json')
+                    _describe -t flags 'option' o && ret=0
+                    ;;
+                help)
+                    (( CURRENT == 2 )) || return 1
+                    _theme_cmd_load commands
+                    _theme_cmd_offer command commands 'theme command' && ret=0
+                    ;;
+                *)
+                    _message 'no more arguments'
+                    ;;
+            esac
+            ;;
+    esac
+    return ret
+}
+
+_theme_cmd "$@"
