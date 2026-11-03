@@ -14,6 +14,7 @@ typeset -gA THEME_META=(
     [icons]={{ .spec.icons | strings.ShellQuote }}
     [gtk]={{ .spec.gtk | strings.ShellQuote }}
     [cursor]={{ .spec.cursor.theme | strings.ShellQuote }}
+    [wallpaper]={{ .spec.wallpaper | strings.ShellQuote }}
 )
 typeset -gA THEME_ROLE=(
 {{- range $k, $v := .spec.roles }}

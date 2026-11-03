@@ -27,6 +27,16 @@
 #                                           never current or known-good
 #   history        "<id>\t<name>" per activation, newest last; `undo` pops it
 #   overrides.json knobs merged over prefs.toml (written by a later `set`)
+#   lockscreen.cached  "<wallpaper>\t<mtime>" betterlockscreen's cache was
+#                  last made from; lockscreen.lock and lockscreen.log beside it
+#
+# Wallpaper: every build records one (spec.wallpaper, THEME_META[wallpaper]).
+# A new build keeps the current build's wallpaper, so `apply <scheme>` never
+# changes it; `theme wallpaper <img>` makes a new build from the current
+# spec with only the wallpaper changed, and reloads only the wallpaper and
+# lock screen. With no wallpaper recorded, prefs [wallpaper] default is
+# looked up in [wallpaper] dirs. `undo` and `apply <build-id>` bring back
+# that build's wallpaper with its colours.
 #
 # Contrast guarantees (WCAG 2 ratios against bg unless noted). A colour that
 # misses its floor keeps its OKLCH hue and moves in lightness, away from bg,
@@ -58,12 +68,16 @@
 #                        previews set this, not XDG_STATE_HOME: the zsh
 #                        dispatcher's .zshenv re-exports XDG_STATE_HOME in
 #                        every zsh it starts, so `theme` itself would ignore it
+#   THEME_WALLPAPER_DIRS colon-separated dirs that replace prefs [wallpaper]
+#                        dirs (self-test)
 #
 # Dependencies:
 #   Required:
 #     - _common, _log, _colour
 #   External:
 #     - gomplate (YAML/TOML -> JSON, rendering), jq, GNU mv (-T)
+#     - feh (wallpaper), betterlockscreen (lock cache), file (image check);
+#       each only where its reloader runs, and skipped when missing
 
 [[ -n "${THEME_LOADED:-}" ]] && return 0
 declare -gr THEME_LOADED=1
@@ -74,6 +88,7 @@ source "${DOTLIB}/_colour" || { echo "[ERROR] _theme requires _colour" >&2; retu
 
 zmodload -F zsh/datetime p:EPOCHREALTIME p:EPOCHSECONDS b:strftime
 zmodload -F zsh/system b:zsystem
+zmodload -F zsh/stat b:zstat
 
 declare -gi _THEME_KEEP_BUILDS=20
 declare -g _THEME_DEFAULT_SCHEME=catppuccin-mocha
@@ -129,6 +144,7 @@ typeset -gA _THEME_VALIDATORS=(
     [json]=_theme-validate-json [toml]=_theme-validate-toml
     [rasi]=_theme-validate-rasi [ini]=_theme-validate-polybar
     [conf]=_theme-validate-dunst [xresources]=_theme-validate-xresources
+    [betterlockscreen.sh]=_theme-validate-betterlockscreen
 )
 
 # reload target -> reloader, run after every swap. rofi reads the generated
@@ -141,7 +157,12 @@ typeset -gA _THEME_RELOADERS=(
     [bspwm]=_theme-reload-bspwm
     [dunst]=_theme-reload-dunst
     [xresources]=_theme-reload-xresources
+    [wallpaper]=_theme-reload-wallpaper
+    [lockscreen]=_theme-reload-lockscreen
 )
+
+# Image files `theme wallpaper` and `theme list wallpapers` consider.
+declare -gr _THEME_WALLPAPER_EXT='(png|jpg|jpeg|webp|bmp|gif)'
 
 # The live state dir. The desktop reads it by this literal path (polybar's
 # include-file expands ~ but not ${env:...}; bspwmrc, .zlogin.d/10-x11 and
@@ -158,12 +179,13 @@ typeset -gA _THEME_DESCRIPTIONS=(
     [current]="Show the applied theme's name, source, mode, scale and contrast; --json prints spec.json"
     [get]="Print one value: a role (accent, fg, ...), palette slot or name, size, metric or font"
     [roles]="Print <key>=<role> ... as '<key> <value>' lines, each role (or palette name, size, metric) from the current theme or the built-in fallback; in zsh, theme-roles <assoc> <key>=<role> ... fills an assoc instead"
-    [list]="List [schemes|history|builds] (default schemes)"
+    [list]="List [schemes|wallpapers|history|builds] (default schemes)"
     [check]="Resolve [scheme] (default: the current one) without applying; print roles, contrast and adjustments; non-zero if a guarantee can't be met"
     [swatch]="Print the current theme, or [scheme], as truecolour blocks"
     [ensure]="Make sure a current theme exists: keep it, else re-activate known-good, else render the default"
     [undo]="Re-activate the previous build from history (no re-render)"
-    [reload]="Run the reloaders for [target...] (default all): rofi, alacritty, polybar, bspwm, dunst, xresources"
+    [reload]="Run the reloaders for [target...] (default all): rofi, alacritty, polybar, bspwm, dunst, xresources, wallpaper, lockscreen"
+    [wallpaper]="Set the wallpaper: <image|name|number> [--keep-palette] (recorded in the theme, kept by apply), or restore (login)"
 )
 
 theme-help() {
@@ -181,21 +203,33 @@ Commands:
   roles <key>=<role> ...            Several values as "<key> <value>" lines;
                                     in zsh, theme-roles <assoc> ... fills an
                                     assoc (the polybar strips)
-  list [schemes|history|builds]     What can be applied (default schemes)
+  list [schemes|wallpapers|history|builds]
+                                    What can be applied (default schemes)
   check [scheme]                    Resolve without applying; roles, contrast
                                     ratios and adjustments; exit 1 on failure
   swatch [scheme]                   Truecolour preview in the terminal
   ensure                            Guarantee a current theme (fast no-op
                                     when one exists)
   undo                              Back to the previous build
+  wallpaper <img|name|number> [--keep-palette]
+                                    Set the wallpaper and record it in the
+                                    theme, so apply and login keep it. A path,
+                                    or a name/number from [wallpaper] dirs
+                                    (0004, 4, 0004.png). The colours stay as
+                                    they are (--keep-palette, the only mode
+                                    until palettes from images arrive)
+  wallpaper restore                 Set the recorded wallpaper again and
+                                    refresh the lock screen's cache if it
+                                    changed (.zlogin.d/90-feh)
   reload [target...]                Re-run reloaders (default all; targets:
                                     rofi, alacritty, polybar, bspwm, dunst,
-                                    xresources)
+                                    xresources, wallpaper, lockscreen)
   self-test                         Render every scheme into a scratch state
                                     dir under ~/.cache and validate
 
 Files:
-  ${XDG_CONFIG_HOME}/theme/prefs.toml      scale, font sizes, contrast, accent
+  ${XDG_CONFIG_HOME}/theme/prefs.toml      scale, font sizes, contrast, accent,
+                                           [wallpaper] dirs and default
   ${XDG_CONFIG_HOME}/theme/schemes/*.yaml  base16/base24 schemes
   ${XDG_CONFIG_HOME}/theme/templates/      gomplate templates (.tmpl)
   ${XDG_STATE_HOME}/theme/                 builds, current, known-good,
@@ -612,9 +646,10 @@ _theme-sizes() {
 # Private Helpers: spec, render, validate
 # ------------------------------
 
-# Prints spec.json for build id $1 from source ref $2 (scheme slug).
+# Prints spec.json for build id $1 from source ref $2 (scheme slug), with
+# wallpaper $3 (a path, or empty).
 _theme-spec() {
-    local id=$1 ref=$2 k v
+    local id=$1 ref=$2 wall=${3:-} k v
     local mode=$_THEME_MODE
     {
         print -r -- "id"$'\t'"s"$'\t'"$id"
@@ -645,6 +680,7 @@ _theme-spec() {
         print -r -- "gtk"$'\t'"s"$'\t'"${_THEME_IN[prefs.gtk.$mode]:-}"
         print -r -- "cursor.theme"$'\t'"s"$'\t'"${_THEME_IN[prefs.cursor.theme]:-}"
         print -r -- "cursor.size"$'\t'"n"$'\t'"${_THEME_METRIC[cursor]}"
+        print -r -- "wallpaper"$'\t'"s"$'\t'"$wall"
     } | jq -Rn '
         reduce (inputs | split("\t")) as [$p, $t, $v] ({};
             setpath($p | split(".") | map(tonumber? // .);
@@ -762,6 +798,31 @@ _theme-validate-xresources() {
     done
 }
 
+# betterlockscreen.sh: sourced by bash at the end of betterlockscreenrc.
+# bash -n; every line a comment or key=value; no key twice; *color keys are
+# rrggbbaa without a # (i3lock-color's format; anything else and it draws its
+# own defaults); the ring, inside, verify, wrong and font keys are all set.
+_theme-validate-betterlockscreen() {
+    local f=$1 line key val
+    local -A seen=()
+    local -i n=0
+    if (( $+commands[bash] )); then bash -n "$f" || return 1; fi
+    for line in "${(@f)$(<"$f")}"; do
+        (( n++ ))
+        [[ -z "${line//[[:space:]]/}" || "$line" == '#'* ]] && continue
+        [[ "$line" =~ '^([a-z_]+)=(.+)$' ]] || { print -r -- "line $n: not key=value: $line"; return 1; }
+        key=${match[1]} val=${match[2]}
+        (( ${+seen[$key]} )) && { print -r -- "line $n: duplicate key $key"; return 1; }
+        seen[$key]=1
+        [[ "$key" == *color && ! "$val" =~ '^[0-9a-f]{8}$' ]] &&
+            { print -r -- "line $n: $key is not rrggbbaa: $val"; return 1; }
+    done
+    for key in ringcolor insidecolor ringvercolor insidevercolor ringwrongcolor insidewrongcolor \
+               verifcolor wrongcolor font; do
+        (( ${+seen[$key]} )) || { print -r -- "missing $key"; return 1; }
+    done
+}
+
 # Validates every file in build dir $1. gomplate's own errors never reach
 # here; this catches templates that render but produce something broken.
 _theme-validate() {
@@ -793,18 +854,40 @@ _theme-resolve-scheme() {
     REPLY=$slug
 }
 
-# Builds scheme $1 into builds/<id>; REPLY = id. Nothing is left behind on
+# Builds scheme $1 into builds/<id> with wallpaper $2 (default: the current
+# build's, else the prefs default); REPLY = id. Nothing is left behind on
 # failure.
 _theme-build() {
-    local slug id tmp out
+    local slug id tmp wall=${2:-}
     _theme-resolve-scheme "$1" || return 1
     slug=$REPLY
+    [[ -n "$wall" ]] || { _theme-wallpaper-current; wall=$REPLY; }
     _theme-new-id; id=$REPLY
     tmp="$_THEME_STATE/builds/$id.tmp"
     mkdir -p "$tmp" || return 1
-    if ! _theme-spec "$id" "$slug" > "$tmp/spec.json"; then
+    if ! _theme-spec "$id" "$slug" "$wall" > "$tmp/spec.json"; then
         rm -rf -- "$tmp"; log-error "[theme] could not write spec.json"; return 1
     fi
+    _theme-render "$tmp" "$id"
+}
+
+# Builds a copy of build $1 with only its wallpaper changed to $2: the same
+# spec (colours, sizes, name) under a new id, rendered again. REPLY = id.
+_theme-build-wallpaper() {
+    local from="$_THEME_STATE/builds/$1/spec.json" id tmp
+    _theme-new-id; id=$REPLY
+    tmp="$_THEME_STATE/builds/$id.tmp"
+    mkdir -p "$tmp" || return 1
+    if ! jq --arg id "$id" --arg w "$2" '.id = $id | .wallpaper = $w' "$from" > "$tmp/spec.json"; then
+        rm -rf -- "$tmp"; log-error "[theme] could not write spec.json from build $1"; return 1
+    fi
+    _theme-render "$tmp" "$id"
+}
+
+# Renders every template from $1/spec.json into $1 (builds/<id $2>.tmp),
+# validates, and moves it to builds/<id>; REPLY = id. Discards $1 on failure.
+_theme-render() {
+    local tmp=$1 id=$2 out
     if [[ ! -d "$_THEME_TEMPLATES" ]]; then
         rm -rf -- "$tmp"; log-error "[theme] no templates in $_THEME_TEMPLATES"; return 1
     fi
@@ -879,6 +962,174 @@ _theme-reload-xresources() {
     _theme-live || return 0
     [[ -n "${DISPLAY:-}" ]] && whence xrdb >/dev/null || return 0
     timeout 5 xrdb -nocpp -merge "$_THEME_STATE/current/xresources"
+}
+
+# ------------------------------
+# Private Helpers: wallpaper
+# ------------------------------
+
+# REPLY = the result of jq filter $1 over prefs.toml with overrides.json
+# merged in (one gomplate, one jq). Returns 1 when prefs can't be read.
+_theme-prefs() {
+    local prefs="$_THEME_CONFIG/prefs.toml" ov="$_THEME_STATE/overrides.json" overrides='{}'
+    [[ -r "$prefs" ]] || return 1
+    [[ -r "$ov" ]] && overrides=$(<"$ov")
+    REPLY=$(gomplate -c "p=$prefs" -i '{{ .p | data.ToJSON }}' 2>/dev/null |
+            jq -r --argjson o "$overrides" "(. * \$o) | $1" 2>/dev/null)
+}
+
+# reply = the wallpaper dirs that exist, in lookup order: THEME_WALLPAPER_DIRS
+# (colon-separated) or prefs [wallpaper] dirs, ~ expanded. Absolute but not
+# symlink-resolved, so a stowed dir keeps its ~/.local/share path.
+_theme-wallpaper-dirs() {
+    local d
+    local -a dirs
+    if [[ -n "${THEME_WALLPAPER_DIRS:-}" ]]; then
+        dirs=("${(@s.:.)THEME_WALLPAPER_DIRS}")
+    elif _theme-prefs '(.wallpaper.dirs // [])[]'; then
+        dirs=("${(@f)REPLY}")
+    fi
+    reply=()
+    for d in "${dirs[@]}"; do
+        [[ -n "$d" ]] || continue
+        d=${d/#\~/$HOME}
+        [[ -d "$d" ]] && reply+=("${d:a}")
+    done
+}
+
+# reply = every image in the wallpaper dirs, each dir's sorted by name. A
+# name (file name without extension) already found in an earlier dir is
+# skipped, as `theme wallpaper <name>` would never reach it.
+_theme-wallpaper-list() {
+    setopt localoptions extendedglob
+    local d f
+    local -a dirs seen
+    _theme-wallpaper-dirs; dirs=("${reply[@]}")
+    reply=()
+    for d in "${dirs[@]}"; do
+        for f in "$d"/(#i)*.${~_THEME_WALLPAPER_EXT}(N-.on); do
+            (( ${seen[(Ie)${f:t:r}]} )) && continue
+            seen+=("${f:t:r}")
+            reply+=("$f")
+        done
+    done
+}
+
+# True when $1 is a readable image (file(1)'s MIME type, else the extension).
+_theme-wallpaper-image() {
+    setopt localoptions extendedglob
+    [[ -f "$1" && -r "$1" ]] || return 1
+    if (( $+commands[file] )); then
+        [[ "$(file -b -L --mime-type -- "$1" 2>/dev/null)" == image/* ]]
+    else
+        [[ "${1:e}" == (#i)${~_THEME_WALLPAPER_EXT} ]]
+    fi
+}
+
+# REPLY = the image wallpaper reference $1 names, as an absolute path:
+#   a path (with a / or a leading ~), used as it is;
+#   else a name in the wallpaper dirs: its file name (0004.png), then its
+#   name without extension (0004), then its number (4 finds 0004);
+#   else a file of that name in the current directory.
+# Returns 1, quietly, when there is none or it isn't an image.
+_theme-wallpaper-find() {
+    local ref=$1 f hit=
+    [[ -n "$ref" ]] || return 1
+    if [[ "$ref" == */* || "$ref" == \~* ]]; then
+        hit=${ref/#\~/$HOME}
+    else
+        _theme-wallpaper-list
+        for f in "${reply[@]}"; do [[ "${f:t}" == "$ref" ]] && { hit=$f; break; }; done
+        [[ -z "$hit" ]] && for f in "${reply[@]}"; do [[ "${f:t:r}" == "$ref" ]] && { hit=$f; break; }; done
+        [[ -z "$hit" && "$ref" =~ '^[0-9]+$' ]] && for f in "${reply[@]}"; do
+            [[ "${f:t:r}" =~ '^[0-9]+$' ]] && (( 10#${f:t:r} == 10#$ref )) && { hit=$f; break; }
+        done
+        [[ -z "$hit" && -f "$ref" ]] && hit=$ref
+    fi
+    [[ -n "$hit" ]] && _theme-wallpaper-image "$hit" || return 1
+    REPLY=${hit:a}
+}
+
+# REPLY = prefs [wallpaper] default looked up in the dirs, or "" if missing.
+_theme-wallpaper-default() {
+    local name=0001
+    _theme-prefs '.wallpaper.default // "0001"' && [[ -n "$REPLY" ]] && name=$REPLY
+    _theme-wallpaper-find "$name" || REPLY=
+    return 0
+}
+
+# REPLY = the wallpaper the current build records, while it is still an
+# image; else the default (which may be "").
+_theme-wallpaper-current() {
+    local w=
+    [[ -r "$_THEME_STATE/current/spec.json" ]] &&
+        w=$(jq -r '.wallpaper // ""' "$_THEME_STATE/current/spec.json" 2>/dev/null)
+    if [[ -n "$w" ]] && _theme-wallpaper-image "$w"; then
+        REPLY=$w
+        return 0
+    fi
+    _theme-wallpaper-default
+}
+
+# Sets the current wallpaper on the root window (feh, which also gives
+# picom and the lock screen's wallpaper_cmd the same picture). Live state
+# and an X display only. A recorded wallpaper that has gone falls back to
+# the default; with neither the root window is left alone.
+_theme-reload-wallpaper() {
+    _theme-live || return 0
+    [[ -n "${DISPLAY:-}" ]] && (( $+commands[feh] )) || return 0
+    _theme-wallpaper-current
+    [[ -n "$REPLY" ]] || { log-warning "[theme] no wallpaper recorded and no default found; root window left as it is"; return 0; }
+    timeout 10 feh --no-fehbg --bg-fill "$REPLY"
+}
+
+# REPLY = what lockscreen.cached records for wallpaper $1: its path and
+# mtime, so an image edited in place counts as a change too.
+_theme-lockscreen-key() {
+    local -a st
+    zstat -A st +mtime -- "$1" 2>/dev/null || st=(0)
+    REPLY="$1"$'\t'"${st[1]}"
+}
+
+# betterlockscreen locks with images it cached at `betterlockscreen -u
+# <wallpaper>` (resized, dimmed, blurred per display; seconds of CPU on a
+# 5120px image). Its colours come from betterlockscreenrc and the
+# betterlockscreen.sh it sources at lock time, so only a new wallpaper needs
+# a new cache. When the current wallpaper differs from lockscreen.cached, a
+# detached, niced job refreshes it; the reload returns at once. Live state
+# only; skipped without betterlockscreen.
+_theme-reload-lockscreen() {
+    _theme-live || return 0
+    (( $+commands[betterlockscreen] )) || return 0
+    _theme-wallpaper-current
+    [[ -n "$REPLY" ]] || return 0
+    _theme-lockscreen-key "$REPLY"
+    [[ -r "$_THEME_STATE/lockscreen.cached" && "$(<"$_THEME_STATE/lockscreen.cached")" == "$REPLY" ]] && return 0
+    _theme-lockscreen-refresh </dev/null >|"$_THEME_STATE/lockscreen.log" 2>&1 &!
+    return 0
+}
+
+# The background job: one at a time (lockscreen.lock). It reads the current
+# wallpaper again after the lock and after each refresh, so a quick run of
+# wallpaper changes ends with the cache made from the last one.
+_theme-lockscreen-refresh() {
+    local mark="$_THEME_STATE/lockscreen.cached" key ts wall
+    local -a pre=(nice -n 19)
+    local -i n
+    (( $+commands[ionice] )) && pre+=(ionice -c 3)
+    : >> "$_THEME_STATE/lockscreen.lock"
+    zsystem flock -t 900 "$_THEME_STATE/lockscreen.lock" || return 1
+    for (( n = 0; n < 3; n++ )); do
+        _theme-wallpaper-current
+        [[ -n "$REPLY" ]] || return 0
+        wall=$REPLY
+        _theme-lockscreen-key "$wall"; key=$REPLY
+        [[ -r "$mark" && "$(<"$mark")" == "$key" ]] && return 0
+        strftime -s ts '%F %T' $EPOCHSECONDS
+        print -r -- "$ts ${pre[*]} betterlockscreen -u $wall"
+        "${pre[@]}" betterlockscreen -u "$wall" || { print -r -- "$ts failed"; return 1; }
+        print -r -- "$key" >| "$mark.tmp" && mv -f -- "$mark.tmp" "$mark"
+    done
 }
 
 # alacritty (0.17, config/monitor.rs) watches the canonical path of each
@@ -1033,24 +1284,26 @@ _theme-reload() {
     return $rc
 }
 
-# Activates build $1 (name $2) and reloads. On a failed reload rolls back to
-# the build that was current before, then to known-good. known-good advances
-# only on success.
+# Activates build $1 (name $2) and reloads targets $3... (default all). On a
+# failed reload rolls back to the build that was current before, then to
+# known-good, reloading the same targets. known-good advances only on
+# success.
 _theme-activate() {
     local id=$1 name=$2 prev= kg=
+    shift 2
     _theme-link-id current && prev=$REPLY
     _theme-link-id known-good && kg=$REPLY
     _theme-link current "$id" || return 1
     _theme-history-push "$id" "$name"
-    if _theme-reload; then
+    if _theme-reload "$@"; then
         _theme-link known-good "$id"
         return 0
     fi
     log-error "[theme] reload failed for $name ($id); rolling back"
     _theme-history-pop
-    if [[ -n "$prev" ]] && _theme-link current "$prev" && _theme-reload; then
+    if [[ -n "$prev" ]] && _theme-link current "$prev" && _theme-reload "$@"; then
         log-warning "[theme] restored the previous build $prev"
-    elif [[ -n "$kg" ]] && _theme-build-complete "$kg" && _theme-link current "$kg" && _theme-reload; then
+    elif [[ -n "$kg" ]] && _theme-build-complete "$kg" && _theme-link current "$kg" && _theme-reload "$@"; then
         log-warning "[theme] restored known-good $kg"
     else
         log-error "[theme] rollback failed too; run: theme apply default"
@@ -1083,6 +1336,12 @@ _theme-fg-on() {
 # Public
 # ------------------------------
 
+# REPLY = prefs `default`, else _THEME_DEFAULT_SCHEME.
+_theme-default-scheme() {
+    REPLY=$(gomplate -c "p=$_THEME_CONFIG/prefs.toml" -i '{{ .p.default }}' 2>/dev/null)
+    [[ -n "$REPLY" ]] || REPLY=$_THEME_DEFAULT_SCHEME
+}
+
 theme-apply() {
     [[ "${1:-}" == (-h|--help) ]] && { theme-help; return 0; }
     local target=${1:-} id name t0=$EPOCHREALTIME
@@ -1090,8 +1349,7 @@ theme-apply() {
     _theme-paths
     _theme-lock || return 1
     if [[ "$target" == default ]]; then
-        target=$(gomplate -c "p=$_THEME_CONFIG/prefs.toml" -i '{{ .p.default }}' 2>/dev/null)
-        [[ -n "$target" ]] || target=$_THEME_DEFAULT_SCHEME
+        _theme-default-scheme; target=$REPLY
     fi
     if _theme-build-ok "$target"; then
         _theme-build-fresh "$target" || return 1
@@ -1214,7 +1472,16 @@ theme-list() {
         builds)
             for f in "$_THEME_STATE"/builds/*(N/:t); do print -r -- "$f"; done
             ;;
-        *) log-error "[theme] list: schemes, history or builds"; return 2 ;;
+        wallpapers)
+            # * marks the current one: the recorded wallpaper, else the default.
+            _theme-wallpaper-current; cur=$REPLY
+            _theme-wallpaper-list
+            (( ${#reply} )) || { _theme-wallpaper-dirs; print -r -- "(no images in: ${${reply[*]/#$HOME/~}:-no [wallpaper] dirs})"; return 0; }
+            for f in "${reply[@]}"; do
+                printf '%s %-14s %s\n' "${${(M)f:#${(b)cur}}:+*}${${f:#${(b)cur}}:+ }" "${f:t:r}" "${f/#$HOME/~}"
+            done
+            ;;
+        *) log-error "[theme] list: schemes, wallpapers, history or builds"; return 2 ;;
     esac
 }
 
@@ -1368,6 +1635,79 @@ theme-undo() {
     _theme-activate "$id" "$name" || return 1
     _theme-ms-since $t0
     log-success "[theme] back to $name ($id) in ${REPLY} ms"
+}
+
+# theme wallpaper <image|name|number> [--keep-palette] | restore
+theme-wallpaper() {
+    local ref= a wall cur id name src t0=$EPOCHREALTIME
+    # What the colours do with a new wallpaper. keep is the only mode until
+    # palettes from images (matugen, PR 9); that PR adds the image mode and
+    # makes it the default, leaving --keep-palette to ask for this one.
+    local palette=keep
+    for a; do
+        case "$a" in
+            -h|--help) theme-help; return 0 ;;
+            --keep-palette) palette=keep ;;
+            -*) log-error "[theme] wallpaper: unknown option '$a'"; return 2 ;;
+            *)  [[ -z "$ref" ]] || { log-error "[theme] usage: theme wallpaper <image|name|number> [--keep-palette] | restore"; return 2; }
+                ref=$a ;;
+        esac
+    done
+    [[ -n "$ref" ]] || { log-error "[theme] usage: theme wallpaper <image|name|number> [--keep-palette] | restore"; return 2; }
+    _theme-paths
+    [[ "$ref" == restore ]] && { _theme-wallpaper-restore; return; }
+
+    # Found and checked before anything is locked or written.
+    if ! _theme-wallpaper-find "$ref"; then
+        log-error "[theme] no wallpaper '$ref': give an image path, or a name or number from: theme list wallpapers"
+        return 1
+    fi
+    wall=$REPLY
+    _theme-lock || return 1
+    if _theme-link-complete current; then
+        id=$REPLY
+        cur=$(jq -r '.wallpaper // ""' "$_THEME_STATE/builds/$id/spec.json")
+        name=$(jq -r .name "$_THEME_STATE/builds/$id/spec.json")
+        if [[ "$cur" == "$wall" ]]; then
+            _theme-reload wallpaper || return 1
+            log-success "[theme] wallpaper is already ${wall/#$HOME/~}"
+            return 0
+        fi
+        # Same colours, so only the wallpaper and the lock screen reload.
+        _theme-build-wallpaper "$id" "$wall" || return 1
+        id=$REPLY
+        _theme-activate "$id" "$name" wallpaper lockscreen || return 1
+    else
+        # No complete current build: render its theme (or the default) with
+        # the wallpaper, and reload everything as apply would.
+        if _theme-link-id current; then
+            src=$(jq -r '.source.ref // .name' "$_THEME_STATE/current/spec.json")
+        else
+            _theme-default-scheme; src=$REPLY
+        fi
+        _theme-build "$src" "$wall" || return 1
+        id=$REPLY
+        name=$(jq -r .name "$_THEME_STATE/builds/$id/spec.json")
+        _theme-activate "$id" "$name" || return 1
+    fi
+    _theme-prune
+    _theme-ms-since $t0
+    log-success "[theme] wallpaper ${wall/#$HOME/~} ($name, $id) in ${REPLY} ms"
+}
+
+# Sets the recorded wallpaper again and refreshes the lock screen's cache if
+# it was made from another one. Read-only on the theme (no lock, no build),
+# so it is safe in the background at login.
+_theme-wallpaper-restore() {
+    _theme-wallpaper-current
+    [[ -n "$REPLY" ]] || { log-error "[theme] no wallpaper recorded and no default ([wallpaper] default) in the dirs"; return 1; }
+    local wall=$REPLY
+    if ! _theme-live; then
+        log-info "[theme] $_THEME_STATE isn't the live state; wallpaper ${wall/#$HOME/~} not set"
+        return 0
+    fi
+    _theme-reload wallpaper lockscreen || return 1
+    log-success "[theme] wallpaper ${wall/#$HOME/~}"
 }
 
 # Renders every scheme into a scratch state dir under ~/.cache and checks the
