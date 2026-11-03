@@ -1,0 +1,39 @@
+#compdef barmenu
+
+# Completion for `barmenu` (desktop/.local/bin/barmenu over dotlib _barmenu).
+#
+# Named _barmenu_cmd, not _barmenu: dotlib already has a file _barmenu (see
+# _theme_cmd). Menus and their descriptions come from the module's
+# _BARMENU_MENUS / _BARMENU_DESCRIPTIONS, read in a `zsh -f` child so the
+# interactive shell doesn't load it; a new menu shows up without editing this
+# file. `run` completes a command line. Errors are swallowed.
+
+_barmenu_cmd() {
+    local -a items
+    local line
+
+    if (( CURRENT == 2 )); then
+        for line in ${(f)"$(
+            DOTLIB=${DOTLIB:-${XDG_DATA_HOME:-$HOME/.local/share}/dotlib} \
+            command zsh -fc '
+                source "$DOTLIB/_barmenu" || exit 1
+                local m
+                for m in ${(ok)_BARMENU_MENUS} run; do
+                    print -r -- "${m}:${_BARMENU_DESCRIPTIONS[$m]:-}"
+                done
+            ' 2>/dev/null
+        )"}; do
+            items+=("$line")
+        done
+        items+=('help:show help')
+        _describe -t commands 'barmenu menu' items
+    elif [[ $words[2] == run ]]; then
+        shift 2 words
+        (( CURRENT -= 2 ))
+        _normal
+    else
+        _message 'no more arguments'
+    fi
+}
+
+_barmenu_cmd "$@"
