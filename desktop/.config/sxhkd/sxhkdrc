@@ -70,8 +70,8 @@ super + e + {_, alt}
 super + f + {_, alt}
   bspc node --state {floating, fullscreen}
 
-# window gap
-super + g
+# window gap - 15 / 30 / 65
+super + g + {_, alt, shift}
   bspc config -d focused window_gap {15,30,65}
 
 # node - hidden
