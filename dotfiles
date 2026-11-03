@@ -65,6 +65,8 @@ _dotfiles_install() {
          continue
       }
 
+      [[ ${_pkg} == docs ]] && continue   # design records, not a stow package
+
       _dotfiles_pre_install
 
       [[ -f "${_pkg}/.install" && -x "${_pkg}/.install" ]] && {
@@ -165,6 +167,8 @@ _dotfiles_uninstall() {
          warn "package '${_pkg}' prefixed with a period... ignoring"
          continue
       }
+
+      [[ ${_pkg} == docs ]] && continue   # design records, not a stow package
 
       _dotfiles_pre_uninstall
          
