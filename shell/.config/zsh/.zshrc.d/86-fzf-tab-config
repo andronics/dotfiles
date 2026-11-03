@@ -6,6 +6,8 @@ zstyle ':fzf-tab:*' switch-group ',' '.'        # cycle groups with , and .
 zstyle ':fzf-tab:*' continuous-trigger '/'      # in path completion, / drills in
 zstyle ':completion:*:descriptions' format '[%d]'
 zstyle ':fzf-tab:*' fzf-min-height 15
+# fzf-tab ignores FZF_DEFAULT_OPTS unless told otherwise, which leaves it on fzf's 256-colour defaults.
+zstyle ':fzf-tab:*' use-fzf-default-opts yes
 
 # --- previews ---
 # directory navigation
