@@ -92,7 +92,7 @@ case "$_variant" in
         _menu=${_variant#barmenu-}
         [[ "$_menu" == bar-menu ]] && _menu=layout
         _BARMENU_THEME=$REPLY
-        _barmenu-choose "$_menu" -mesg "${_menu} (preview: nothing runs)" \
+        _barmenu-choose "$_menu" -mesg "Preview: nothing runs" \
             && print -r -- "${_variant}: would run '${REPLY}'" || print -r -- "${_variant}: cancelled"
         exit 0 ;;
     prompt)

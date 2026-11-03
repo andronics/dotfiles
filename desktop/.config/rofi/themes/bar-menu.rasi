@@ -50,6 +50,17 @@ listview {
     scrollbar:           false;
 }
 
+/*
+ * Rows carry their glyph in the text (pango), so there is no icon column:
+ * base.rasi's element-icon would reserve its 1.25em plus padding on every
+ * row, even one without an icon.
+ */
 element {
     padding:             6px 12px;
+    children:            [ element-text ];
+}
+
+/* base.rasi pads the textbox 4px inside the message; the message has its own. */
+textbox {
+    padding:             0px;
 }

@@ -196,8 +196,13 @@ _barmenu-rows() {
     for _m _glyph _label _cmd in "${_BARMENU_ROWS[@]}"; do
         [[ "$_m" == "$_menu" ]] || continue
         _barmenu-escape "$_label"
-        # A blank glyph keeps the labels in one column.
-        reply+=("<span font_family='Symbols Nerd Font Mono'>${_glyph:- }</span>  ${REPLY}")
+        # The glyph is part of the text (the theme has no icon column), so a
+        # row without one starts at the element's padding.
+        if [[ -n "$_glyph" ]]; then
+            reply+=("<span font_family='Symbols Nerd Font Mono'>${_glyph}</span> ${REPLY}")
+        else
+            reply+=("$REPLY")
+        fi
         _BARMENU_COMMANDS+=("$_cmd")
     done
     (( ${#reply} ))
