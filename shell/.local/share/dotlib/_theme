@@ -48,7 +48,8 @@
 #   fg_dim                  4.5
 #   dim                     3.0, and below fg_dim's ratio
 #   accent urgent busy ok warn info   3.0
-#   on_accent / on_urgent   4.5 on accent / urgent
+#   on_accent / on_urgent   4.5 on accent / urgent; on_ok / on_warn the
+#                           same on ok / warn (GTK's success and warning fills)
 #   busy, urgent, accent    pairwise ΔE_OK >= 0.08 (the strip states)
 #   bg_alt vs bg            ΔL_OK >= 0.03 (two-tone bar segments)
 #
@@ -121,7 +122,7 @@ declare -g _THEME_DEFAULT_SCHEME=catppuccin-mocha
 
 typeset -ga _THEME_ROLES=(
     bg bg_alt surface border fg fg_dim dim accent focused on_accent
-    urgent on_urgent busy ok warn info cursor selection
+    urgent on_urgent busy ok on_ok warn on_warn info cursor selection
 )
 
 # Default slot per role. x-roles in a scheme replaces any of these; accent
@@ -158,7 +159,8 @@ typeset -gA _THEME_FALLBACK=(
     [bg]='#1e1e2e' [bg_alt]='#313244' [surface]='#313244' [border]='#313244'
     [fg]='#cdd6f4' [fg_dim]='#a6adc8' [dim]='#6c7086' [accent]='#b4befe'
     [focused]='#b4befe' [on_accent]='#11111b' [urgent]='#f38ba8'
-    [on_urgent]='#11111b' [busy]='#fab387' [ok]='#a6e3a1' [warn]='#f9e2af'
+    [on_urgent]='#11111b' [busy]='#fab387' [ok]='#a6e3a1' [on_ok]='#11111b'
+    [warn]='#f9e2af' [on_warn]='#11111b'
     [info]='#94e2d5' [cursor]='#f5e0dc' [selection]='#313244'
     [cell_gap]=8
 )
@@ -1027,7 +1029,7 @@ _theme-resolve() {
     fi
 
     _THEME_ROLE[focused]=${_THEME_ROLE[accent]}
-    for role in accent urgent; do
+    for role in accent urgent ok warn; do
         colour-best-on "${_THEME_ROLE[$role]}" $_THEME_MIN_ON \
             "${_THEME_PAL[base11]}" "${_THEME_ROLE[bg]}" "${_THEME_ROLE[fg]}" || fail=1
         _THEME_ROLE[on_$role]=$REPLY
@@ -1058,7 +1060,7 @@ _theme-contrast-table() {
     local pair a b
     local -A on=(on_accent accent on_urgent urgent)
     for pair in fg/bg fg/bg_alt fg_dim/bg dim/bg accent/bg urgent/bg busy/bg ok/bg warn/bg info/bg \
-                on_accent/accent on_urgent/urgent; do
+                on_accent/accent on_urgent/urgent on_ok/ok on_warn/warn; do
         a=${pair%/*}; b=${pair#*/}
         colour-contrast "${_THEME_ROLE[$a]}" "${_THEME_ROLE[$b]}"
         colour-round $REPLY; _THEME_CONTRAST[$pair]=$REPLY
