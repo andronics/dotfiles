@@ -4,6 +4,7 @@
 default  = "catppuccin-mocha"   # applied on a fresh install or when state is missing
 contrast = "aaa"                # aa | aaa: body-text minimum (4.5 / 7.0); aaa falls back to aa only when unreachable
 accent   = "scheme"             # scheme (its x-accent slot) | base00..base17 | a palette name | "#rrggbb"
+mode     = "dark"               # dark | light: what wallpapers and colours generate (`theme mode` overrides it)
 
 # Point sizes: each base is multiplied by scale. Gaps are not scaled.
 [fonts]
@@ -41,6 +42,15 @@ light = "Papirus-Light"
 [cursor]
 theme = "Adwaita"
 size = 24
+
+# Palettes from a wallpaper or a colour (`theme wallpaper`, `theme apply
+# colour:#hex`). variant is matugen's scheme type: tonal-spot (calm, the
+# Material default), content and fidelity (closest to the picture),
+# vibrant, expressive, rainbow, fruit-salad, neutral, monochrome. contrast
+# is matugen's own knob, -1..1; the contrast floors above apply on top.
+[matugen]
+variant = "scheme-tonal-spot"
+contrast = 0.0
 
 [gtk]
 dark = "adw-gtk3-dark"

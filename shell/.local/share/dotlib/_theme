@@ -5,8 +5,9 @@
 # result in atomically.
 #
 # Pipeline (`apply`):
-#   source   a named scheme: base16/base24 YAML in ${THEME_CONFIG}/schemes
-#            (image and colour sources arrive with matugen)
+#   source   a named scheme: base16/base24 YAML in ${THEME_CONFIG}/schemes;
+#            or an image or a single colour, run through matugen and
+#            adapted into the same scheme shape (see "Generated sources")
 #   resolve  prefs.toml, with ${state}/overrides.json merged over it, plus the
 #            palette -> roles (bg, fg, accent, urgent, busy, dim, ...), the
 #            contrast floors below, sizes from fonts.scale, metrics
@@ -90,12 +91,17 @@
 #                        every zsh it starts, so `theme` itself would ignore it
 #   THEME_WALLPAPER_DIRS colon-separated dirs that replace prefs [wallpaper]
 #                        dirs (self-test)
+#   THEME_CACHE_DIR      thumbnails and matugen output (default
+#                        ${XDG_CACHE_HOME}/theme)
+#   THEME_MATUGEN        the matugen command (default matugen on PATH)
 #
 # Dependencies:
 #   Required:
 #     - _common, _log, _colour
 #   External:
 #     - gomplate (YAML/TOML -> JSON, rendering), jq, GNU mv (-T)
+#     - matugen 4.x (image and colour sources only), sha256sum; magick
+#       (ImageMagick) for thumbnails, else matugen reads the full image
 #     - feh (wallpaper), betterlockscreen (lock cache), file (image check);
 #       each only where its reloader runs, and skipped when missing
 
@@ -275,19 +281,29 @@ Commands:
                                     assoc (the polybar strips)
   list [schemes|wallpapers|history|builds]
                                     What can be applied (default schemes)
-  check [scheme]                    Resolve without applying; roles, contrast
-                                    ratios and adjustments; exit 1 on failure
-  swatch [scheme]                   Truecolour preview in the terminal
+  check [source] [--mode m] [--variant v] [--contrast c]
+                                    Resolve without applying; roles, contrast
+                                    ratios, adjustments and hue anchoring;
+                                    exit 1 on failure
+  swatch [source]                   Truecolour preview in the terminal
   ensure                            Guarantee a current theme (fast no-op
                                     when one exists)
   undo                              Back to the previous build
+  mode [dark|light|toggle]          Show or set the mode. A scheme switches
+                                    to its x-pair twin; a wallpaper or colour
+                                    is generated again in the new mode.
+                                    Recorded in overrides.json (prefs mode)
+  next|previous|random [wallpapers|schemes] [--keep-palette]
+                                    Walk the wallpapers (default), each with
+                                    its own colours, or the schemes of the
+                                    current mode; next and previous wrap
   wallpaper <img|name|number> [--keep-palette]
                                     Set the wallpaper and record it in the
                                     theme, so apply and login keep it. A path,
                                     or a name/number from [wallpaper] dirs
-                                    (0004, 4, 0004.png). The colours stay as
-                                    they are (--keep-palette, the only mode
-                                    until palettes from images arrive)
+                                    (0004, 4, 0004.png). The colours are
+                                    generated from it, unless --keep-palette
+                                    keeps the current ones
   wallpaper restore                 Set the recorded wallpaper again and
                                     refresh the lock screen's cache if it
                                     changed (.zlogin.d/90-feh)
@@ -299,11 +315,14 @@ Commands:
 
 Files:
   ${XDG_CONFIG_HOME}/theme/prefs.toml      scale, font sizes, contrast, accent,
-                                           [wallpaper] dirs and default
+                                           mode, [matugen], [wallpaper]
   ${XDG_CONFIG_HOME}/theme/schemes/*.yaml  base16/base24 schemes
   ${XDG_CONFIG_HOME}/theme/templates/      gomplate templates (.tmpl)
   ${XDG_STATE_HOME}/theme/                 builds, current, known-good,
                                            history, overrides.json
+  ${XDG_CACHE_HOME}/theme/                 thumbs/<sha256>.png (512px) and
+                                           sources/ (matugen output), safe
+                                           to delete
 EOF
 }
 
@@ -456,6 +475,272 @@ _theme-load() {
     for line in "${(@f)out}"; do
         _THEME_IN[${line%%$'\t'*}]=${line#*$'\t'}
     done
+}
+
+# ------------------------------
+# Private Helpers: sources (scheme, image, colour)
+# ------------------------------
+
+# Sets _THEME_SRC_KIND (scheme|image|colour) and _THEME_SRC_REF (the scheme
+# name or path, the image's absolute path, or #rrggbb) for source ref $1:
+#   colour:<hex>, color:<hex>, #<hex>   a colour
+#   image:<image|name|number>          an image, looked up as `theme
+#                                      wallpaper` does
+#   a path to an image (with a / or ~) an image
+#   anything else                      a scheme
+_theme-source-parse() {
+    local ref=$1 hex=
+    typeset -g _THEME_SRC_KIND=scheme _THEME_SRC_REF=$1
+    case "$ref" in
+        (colour|color):*) hex=${ref#*:} ;;
+        '#'*)             hex=$ref ;;
+    esac
+    if [[ -n "$hex" ]]; then
+        hex="#${${hex#\#}:l}"
+        colour-valid "$hex" || { log-error "[theme] '$ref' is not a colour: give #rrggbb"; return 1; }
+        _THEME_SRC_KIND=colour _THEME_SRC_REF=$hex
+        return 0
+    fi
+    if [[ "$ref" == image:* ]]; then
+        _theme-wallpaper-find "${ref#image:}" ||
+            { log-error "[theme] no image '${ref#image:}': give a path, or a name or number from: theme list wallpapers"; return 1; }
+        _THEME_SRC_KIND=image _THEME_SRC_REF=$REPLY
+        return 0
+    fi
+    if [[ ( "$ref" == */* || "$ref" == \~* ) && "$ref" != *.y(a|)ml ]] && _theme-wallpaper-find "$ref"; then
+        _THEME_SRC_KIND=image _THEME_SRC_REF=$REPLY
+    fi
+    return 0
+}
+
+# REPLY = the source ref that rebuilds the theme in spec file $1 (scheme
+# slug, image:<path>, colour:<hex>); reply = its mode, variant and contrast
+# (empty for a scheme).
+_theme-spec-source() {
+    local -a f
+    f=("${(@ps:\t:)$(jq -r '[.source.kind // "scheme", .source.ref // .name, .source.mode // "",
+                              .source.variant // "", (.source.contrast // "" | tostring)] | @tsv' "$1")}") || return 1
+    case "${f[1]}" in
+        scheme) REPLY=${f[2]} ;;
+        *)      REPLY="${f[1]}:${f[2]}" ;;
+    esac
+    reply=("${f[3]}" "${f[4]}" "${f[5]}")
+}
+
+_theme-cache-dir() {
+    REPLY=${THEME_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/theme}
+}
+
+# Sets _THEME_SRC_MODE, _THEME_SRC_VARIANT (scheme-*) and
+# _THEME_SRC_CONTRAST for a generated source: --mode/--variant/--contrast
+# (_THEME_OPT_*, local to the command), else prefs mode and [matugen]
+# variant/contrast with overrides.json merged, else dark, tonal-spot, 0.
+_theme-matugen-knobs() {
+    local mode variant contrast
+    local -a p
+    _theme-prefs '[(.mode // ""), (.matugen.variant // ""), (.matugen.contrast // "" | tostring)] | @tsv' &&
+        p=("${(@ps:\t:)REPLY}")
+    mode=${_THEME_OPT_MODE:-${p[1]:-dark}}
+    variant=${_THEME_OPT_VARIANT:-${p[2]:-scheme-tonal-spot}}
+    contrast=${_THEME_OPT_CONTRAST:-${p[3]:-0}}
+    [[ "$mode" == (dark|light) ]] || { log-error "[theme] mode must be dark or light, not '$mode'"; return 1; }
+    variant=${variant#scheme-}
+    (( ${_THEME_MATUGEN_VARIANTS[(Ie)$variant]} )) ||
+        { log-error "[theme] unknown matugen variant '$variant' (${(j:, :)_THEME_MATUGEN_VARIANTS})"; return 1; }
+    [[ "$contrast" =~ '^-?([0-9]+(\.[0-9]*)?|\.[0-9]+)$' ]] && (( contrast >= -1 && contrast <= 1 )) ||
+        { log-error "[theme] matugen contrast must be a number from -1 to 1, not '$contrast'"; return 1; }
+    _theme-num $contrast
+    typeset -g _THEME_SRC_MODE=$mode _THEME_SRC_VARIANT=scheme-$variant _THEME_SRC_CONTRAST=$REPLY
+}
+
+# REPLY = a 512px thumbnail of image $1 (sha256 $2) in thumbs/, made once;
+# the image itself where ImageMagick is missing or fails (matugen scales
+# it down anyway, just more slowly).
+_theme-thumb() {
+    local img=$1 sha=$2 dir
+    _theme-cache-dir; dir="$REPLY/thumbs"
+    REPLY="$dir/$sha.png"
+    [[ -s "$REPLY" ]] && return 0
+    if (( $+commands[magick] )) && mkdir -p "$dir" &&
+       magick "${img}[0]" -sample '1024x1024>' -resize '512x512>' -strip "$dir/.$sha.$$.png" 2>/dev/null &&
+       mv -f -- "$dir/.$sha.$$.png" "$REPLY"; then
+        return 0
+    fi
+    rm -f -- "$dir/.$sha.$$.png"
+    log-warning "[theme] couldn't make a thumbnail of ${img:t} (ImageMagick missing?); matugen reads the full image"
+    REPLY=$img
+}
+
+# Runs matugen ($@ = its source arguments) and writes the trimmed result to
+# $out: {source, colors: {<role>: {dark, light}}}, lowercase #rrggbb.
+# Returns 1 with a message when matugen is missing or fails.
+_theme-matugen-run() {
+    local out=$1 dir cfg json err bin=${THEME_MATUGEN:-matugen}
+    shift
+    if ! whence -p -- "$bin" >/dev/null; then
+        log-error "[theme] matugen isn't installed (sudo pacman -S matugen): image and colour sources need it"
+        return 1
+    fi
+    dir=${out:h}
+    mkdir -p "$dir" || return 1
+    # An empty config, so the user's own ~/.config/matugen (templates, custom
+    # colours, caching) never changes or slows these runs.
+    cfg="${dir:h}/matugen.toml"
+    [[ -s "$cfg" ]] || print -rl -- '[config]' '[templates]' > "$cfg"
+    err="$dir/.err.$$"
+    if ! json=$(timeout 30 "$bin" -c "$cfg" "$@" -t "$_THEME_SRC_VARIANT" --contrast "$_THEME_SRC_CONTRAST" \
+                    --json hex --dry-run -q --include-image-in-json false 2>"$err" </dev/null); then
+        log-error "[theme] matugen failed: ${$(<"$err")//$'\n'/ }"
+        rm -f -- "$err"; return 1
+    fi
+    rm -f -- "$err"
+    if ! print -r -- "$json" | jq -e '
+            def hex: .color | .[0:7] | ascii_downcase;
+            {source: (.colors.source_color.dark | hex),
+             colors: (.colors | with_entries(.value |= {dark: (.dark | hex), light: (.light | hex)}))}
+            | select(.colors.primary and .colors.surface and .colors.on_surface and .colors.error)' \
+            > "$out.tmp.$$" 2>/dev/null; then
+        rm -f -- "$out.tmp.$$"
+        log-error "[theme] matugen's JSON lacks colors.primary/surface/on_surface/error (${${(f)"$("$bin" --version 2>/dev/null)"}[1]}; 4.x expected)"
+        return 1
+    fi
+    mv -f -- "$out.tmp.$$" "$out"
+}
+
+# REPLY = the cached matugen output for the current _THEME_SRC_* source,
+# made on a miss. An image is keyed by its content (sha256), so a renamed or
+# re-saved copy still hits, and an image edited in place misses.
+_theme-matugen-source() {
+    local dir sha raw
+    _theme-cache-dir; dir="$REPLY/sources"
+    case "$_THEME_SRC_KIND" in
+        image)
+            sha=$(sha256sum -- "$_THEME_SRC_REF" 2>/dev/null) && sha=${sha%% *} && [[ -n "$sha" ]] ||
+                { log-error "[theme] cannot read $_THEME_SRC_REF"; return 1; }
+            raw="$dir/$sha-${_THEME_SRC_VARIANT#scheme-}-$_THEME_SRC_CONTRAST.json"
+            [[ -s "$raw" ]] && { REPLY=$raw; return 0; }
+            _theme-thumb "$_THEME_SRC_REF" "$sha"
+            _theme-matugen-run "$raw" image "$REPLY" --source-color-index 0 || return 1
+            ;;
+        colour)
+            raw="$dir/colour-${_THEME_SRC_REF#\#}-${_THEME_SRC_VARIANT#scheme-}-$_THEME_SRC_CONTRAST.json"
+            [[ -s "$raw" ]] && { REPLY=$raw; return 0; }
+            _theme-matugen-run "$raw" color hex "$_THEME_SRC_REF" || return 1
+            ;;
+    esac
+    REPLY=$raw
+}
+
+# The generated source's scheme: matugen output $1 in _THEME_SRC_MODE,
+# adapted into the base24 + x-* shape a scheme YAML has (see the header),
+# written beside it as <raw>.<mode>.scheme.json; REPLY = its path. Made on
+# every load: it's cheap, and an adapter change takes effect at once.
+_theme-adapt() {
+    local raw=$1 mode=$_THEME_SRC_MODE line k v src out name title hue n
+    local -A m=() anchors=() slot=() hues
+    local -a lines
+    lines=("${(@f)$(jq -r --arg m "$mode" '"source\t\(.source)", (.colors | to_entries[] | "\(.key)\t\(.value[$m])")' "$raw")}") ||
+        { log-error "[theme] cannot read $raw"; return 1; }
+    for line in "${lines[@]}"; do m[${line%%$'\t'*}]=${line#*$'\t'}; done
+    for k in surface surface_container_low surface_container_lowest surface_container_high surface_container_highest \
+             on_surface on_surface_variant outline outline_variant primary error tertiary secondary_container; do
+        colour-valid "${m[$k]:-}" || { log-error "[theme] matugen output lacks $k"; return 1; }
+    done
+    src=${m[source]}
+    colour-valid "$src" || src=${m[primary]}
+    if [[ "$mode" == light ]]; then anchors=("${(@kv)_THEME_ANCHOR_LIGHT}")
+    else anchors=("${(@kv)_THEME_ANCHOR_DARK}"); fi
+
+    # The six terminal hues and their bright twins, each kept near its
+    # anchor and readable on bg; bright is a step further from bg.
+    hues=(red 08 yellow 0A green 0B cyan 0C blue 0D magenta 0E)
+    typeset -A bright=(red 12 yellow 13 green 14 cyan 15 blue 16 magenta 17)
+    for hue n in "${(@kv)hues}"; do
+        colour-to-oklch "${anchors[$hue]}"
+        _theme-harmonise "${anchors[$hue]}" "$src" $(( reply[3] - _THEME_ANSI_SPREAD )) $(( reply[3] + _THEME_ANSI_SPREAD ))
+        colour-ensure-contrast "$REPLY" "${m[surface]}" $_THEME_MIN_ANSI
+        slot[base$n]=$REPLY
+        if [[ "$mode" == light ]]; then colour-darken "$REPLY" 0.06; else colour-lighten "$REPLY" 0.06; fi
+        colour-ensure-contrast "$REPLY" "${m[surface]}" $_THEME_MIN_ANSI
+        slot[base${bright[$hue]}]=$REPLY
+    done
+    # busy: orange, kept off error's salmon.
+    _theme-harmonise "${anchors[orange]}" "$src" ${=_THEME_BUSY_GEN}
+    colour-ensure-contrast "$REPLY" "${m[surface]}" $_THEME_MIN_ANSI
+    slot[base09]=$REPLY
+
+    slot+=(
+        [base00]=${m[surface]} [base01]=${m[surface_container_high]} [base02]=${m[surface_container_highest]}
+        [base03]=${m[outline_variant]} [base04]=${m[on_surface_variant]} [base05]=${m[on_surface]}
+        [base06]=${m[on_primary_container]:-${m[on_surface]}} [base07]=${m[primary_fixed_dim]:-${m[primary]}}
+        [base0F]=${m[tertiary]} [base10]=${m[surface_container_low]} [base11]=${m[surface_container_lowest]}
+    )
+
+    # A red picture's primary is error's salmon; the resolver would turn it
+    # by an arbitrary angle. Material's tertiary is the palette's own
+    # second accent, so it goes first (and is turned less, if at all).
+    local accent=${m[primary]} note=
+    colour-delta-e "${m[primary]}" "${m[error]}"; local -F dp=$REPLY
+    colour-delta-e "${m[tertiary]}" "${m[error]}"
+    if (( dp < _THEME_MIN_DELTA_E && REPLY > dp )); then
+        accent=${m[tertiary]}
+        printf -v note 'accent: primary %s is too close to error %s (ΔE %.3f); using tertiary %s' \
+            "${m[primary]}" "${m[error]}" $dp "${m[tertiary]}"
+    fi
+
+    case "$_THEME_SRC_KIND" in
+        image)  name="image:${_THEME_SRC_REF:t:r}" title=${_THEME_SRC_REF:t} ;;
+        colour) name="colour:$_THEME_SRC_REF" title=$_THEME_SRC_REF ;;
+    esac
+    title+=", ${${_THEME_SRC_VARIANT#scheme-}//-/ }, $mode${${_THEME_SRC_CONTRAST:#0}:+, contrast $_THEME_SRC_CONTRAST}"
+    out="${raw%.json}.$mode.scheme.json"
+    {
+        print -r -- "system"$'\t'"base24"
+        print -r -- "name"$'\t'"$title"
+        print -r -- "slug"$'\t'"$name"
+        print -r -- "variant"$'\t'"$mode"
+        for k v in "${(@kv)slot}"; do print -r -- "palette.$k"$'\t'"$v"; done
+        print -r -- "x-accent"$'\t'"$accent"
+        [[ -n "$note" ]] && print -r -- "x-notes.0"$'\t'"$note"
+        print -r -- "x-source"$'\t'"$src"
+        for k v in bg_alt surface_container_high surface surface_container_highest border outline_variant \
+                   fg on_surface fg_dim on_surface_variant dim outline urgent error info tertiary \
+                   cursor primary selection secondary_container; do
+            print -r -- "x-roles.$k"$'\t'"${m[$v]}"
+        done
+        # Terminal black/white as Catppuccin's: a visible black, two greys.
+        print -r -- "x-ansi.0"$'\t'"${m[outline_variant]}"
+        print -r -- "x-ansi.7"$'\t'"${m[on_surface_variant]}"
+        print -r -- "x-ansi.8"$'\t'"${m[outline]}"
+        print -r -- "x-ansi.15"$'\t'"${m[on_surface]}"
+        for k v in "${(@kv)m}"; do
+            [[ "$k" == source ]] && continue
+            print -r -- "x-names.m3-${k//_/-}"$'\t'"$v"
+        done
+    } | jq -Rn 'reduce (inputs | split("\t")) as [$p, $v] ({}; setpath($p | split("."); $v))' > "$out.tmp.$$" &&
+        mv -f -- "$out.tmp.$$" "$out" || { rm -f -- "$out.tmp.$$"; log-error "[theme] cannot write $out"; return 1; }
+    REPLY=$out
+}
+
+# Loads source ref $1 into _THEME_IN (prefs merged), setting _THEME_SRC_*;
+# REPLY = the theme's name (scheme slug, image:<name>, colour:<hex>).
+_theme-load-source() {
+    local file
+    typeset -g _THEME_SRC_MODE= _THEME_SRC_VARIANT= _THEME_SRC_CONTRAST=
+    _theme-source-parse "$1" || return 1
+    if [[ "$_THEME_SRC_KIND" == scheme ]]; then
+        _theme-scheme-file "$1" || return 1
+        file=$REPLY
+        _theme-load "$file" || return 1
+        REPLY=${_THEME_IN[scheme.slug]:-${file:t:r}}
+        _THEME_SRC_REF=$REPLY
+        return 0
+    fi
+    _theme-matugen-knobs || return 1
+    _theme-matugen-source || return 1
+    _theme-adapt "$REPLY" || return 1
+    _theme-load "$REPLY" || return 1
+    REPLY=${_THEME_IN[scheme.slug]}
 }
 
 # ------------------------------
@@ -654,6 +939,8 @@ _theme-resolve() {
         _THEME_ROLE[$role]=$REPLY
     done
 
+    for k in ${(on)${(k)_THEME_IN[(I)scheme.x-notes.*]}}; do _THEME_NOTES+=("${_THEME_IN[$k]}"); done
+
     accent=${_THEME_IN[prefs.accent]:-scheme}
     [[ "$accent" == scheme ]] && accent=${_THEME_IN[scheme.x-accent]:-base0D}
     _theme-ref "$accent" || return 1
@@ -819,8 +1106,9 @@ _theme-sizes() {
 # Private Helpers: spec, render, validate
 # ------------------------------
 
-# Prints spec.json for build id $1 from source ref $2 (scheme slug), with
-# wallpaper $3 (a path, or empty).
+# Prints spec.json for build id $1 named $2 (the scheme slug, image:<name>
+# or colour:<hex>), with wallpaper $3 (a path, or empty). The source comes
+# from _THEME_SRC_* (_theme-load-source).
 _theme-spec() {
     local id=$1 ref=$2 wall=${3:-} k v
     local mode=$_THEME_MODE
@@ -828,8 +1116,14 @@ _theme-spec() {
         print -r -- "id"$'\t'"s"$'\t'"$id"
         print -r -- "name"$'\t'"s"$'\t'"$ref"
         print -r -- "title"$'\t'"s"$'\t'"${_THEME_IN[scheme.name]:-$ref}"
-        print -r -- "source.kind"$'\t'"s"$'\t'"scheme"
-        print -r -- "source.ref"$'\t'"s"$'\t'"$ref"
+        print -r -- "source.kind"$'\t'"s"$'\t'"${_THEME_SRC_KIND:-scheme}"
+        print -r -- "source.ref"$'\t'"s"$'\t'"${_THEME_SRC_REF:-$ref}"
+        if [[ "${_THEME_SRC_KIND:-scheme}" != scheme ]]; then
+            print -r -- "source.mode"$'\t'"s"$'\t'"$_THEME_SRC_MODE"
+            print -r -- "source.variant"$'\t'"s"$'\t'"$_THEME_SRC_VARIANT"
+            print -r -- "source.contrast"$'\t'"n"$'\t'"$_THEME_SRC_CONTRAST"
+            print -r -- "source.colour"$'\t'"s"$'\t'"${_THEME_IN[scheme.x-source]:-}"
+        fi
         print -r -- "mode"$'\t'"s"$'\t'"$mode"
         print -r -- "pair"$'\t'"s"$'\t'"${_THEME_IN[scheme.x-pair]:-}"
         for k v in "${(@kv)_THEME_PAL}"; do
@@ -1016,25 +1310,24 @@ _theme-validate() {
     done
 }
 
-# Resolves scheme $1 (name or path) into _THEME_* without writing anything.
-# REPLY = the scheme slug.
-_theme-resolve-scheme() {
-    local file slug
-    _theme-scheme-file "$1" || return 1
-    file=$REPLY
-    _theme-load "$file" || return 1
-    slug=${_THEME_IN[scheme.slug]:-${file:t:r}}
-    _theme-resolve || { log-error "[theme] $slug: ${(j:; :)_THEME_NOTES}"; return 1; }
-    REPLY=$slug
+# Resolves source $1 (see _theme-source-parse) into _THEME_* without writing
+# a build. REPLY = the theme's name.
+_theme-resolve-source() {
+    local name
+    _theme-load-source "$1" || return 1
+    name=$REPLY
+    _theme-resolve || { log-error "[theme] $name: ${(j:; :)_THEME_NOTES}"; return 1; }
+    REPLY=$name
 }
 
-# Builds scheme $1 into builds/<id> with wallpaper $2 (default: the current
-# build's, else the prefs default); REPLY = id. Nothing is left behind on
-# failure.
+# Builds source $1 into builds/<id> with wallpaper $2 (default: an image
+# source's own image when $3 is 1, else the current build's, else the prefs
+# default); REPLY = id. Nothing is left behind on failure.
 _theme-build() {
     local slug id tmp wall=${2:-}
-    _theme-resolve-scheme "$1" || return 1
+    _theme-resolve-source "$1" || return 1
     slug=$REPLY
+    [[ -z "$wall" && "${3:-}" == 1 && "$_THEME_SRC_KIND" == image ]] && wall=$_THEME_SRC_REF
     [[ -n "$wall" ]] || { _theme-wallpaper-current; wall=$REPLY; }
     _theme-new-id; id=$REPLY
     tmp="$_THEME_STATE/builds/$id.tmp"
@@ -1516,10 +1809,34 @@ _theme-default-scheme() {
     [[ -n "$REPLY" ]] || REPLY=$_THEME_DEFAULT_SCHEME
 }
 
+# Parses --mode, --variant and --contrast (also --opt=value) out of $@ into
+# _THEME_OPT_MODE/_VARIANT/_CONTRAST, which the caller declares local;
+# reply = the other arguments. Returns 2 on an unknown option.
+_theme-opts() {
+    local a
+    reply=()
+    while (( $# )); do
+        a=$1; shift
+        case "$a" in
+            --mode|--variant|--contrast)
+                (( $# )) || { log-error "[theme] $a needs a value"; return 2; }
+                : ${(P)${:-_THEME_OPT_${(U)a#--}}::=$1}; shift ;;
+            --mode=*|--variant=*|--contrast=*)
+                : ${(P)${:-_THEME_OPT_${(U)${a%%=*}#--}}::=${a#*=}} ;;
+            --) reply+=("$@"); break ;;
+            -?*) [[ "$a" =~ '^-[0-9.]' ]] && { reply+=("$a"); continue; }
+                 log-error "[theme] unknown option '$a'"; return 2 ;;
+            *)  reply+=("$a") ;;
+        esac
+    done
+}
+
 theme-apply() {
     [[ "${1:-}" == (-h|--help) ]] && { theme-help; return 0; }
-    local target=${1:-} id name t0=$EPOCHREALTIME
-    [[ -n "$target" ]] || { log-error "[theme] usage: theme apply <scheme|build-id|default>"; return 2; }
+    local _THEME_OPT_MODE= _THEME_OPT_VARIANT= _THEME_OPT_CONTRAST=
+    _theme-opts "$@" || return 2
+    local target=${reply[1]:-} id name t0=$EPOCHREALTIME
+    (( ${#reply} == 1 )) || { log-error "[theme] usage: theme apply <scheme|colour:#hex|image:<img>|build-id|default> [--mode m] [--variant v] [--contrast c]"; return 2; }
     _theme-paths
     _theme-lock || return 1
     if [[ "$target" == default ]]; then
@@ -1530,9 +1847,10 @@ theme-apply() {
         id=$REPLY
         name=$(jq -r .name "$_THEME_STATE/builds/$id/spec.json")
     else
-        _theme-build "$target" || return 1
+        # An image source is also the wallpaper.
+        _theme-build "$target" "" 1 || return 1
         id=$REPLY
-        name=${_THEME_IN[scheme.slug]:-${target:t:r}}
+        name=$(jq -r .name "$_THEME_STATE/builds/$id/spec.json")
     fi
     _theme-activate "$id" "$name" || return 1
     _theme-prune
@@ -1662,21 +1980,31 @@ theme-list() {
 
 theme-check() {
     [[ "${1:-}" == (-h|--help) ]] && { theme-help; return 0; }
-    local ref=${1:-} role pair rc=0 t0=$EPOCHREALTIME
+    local _THEME_OPT_MODE= _THEME_OPT_VARIANT= _THEME_OPT_CONTRAST=
+    _theme-opts "$@" || return 2
+    local ref=${reply[1]:-} name role pair rc=0 t0=$EPOCHREALTIME
     _theme-paths
     if [[ -z "$ref" ]]; then
-        if _theme-source-current; then ref=${THEME_META[name]}
-        else ref=$_THEME_DEFAULT_SCHEME; fi
+        if _theme-link-id current; then
+            _theme-spec-source "$_THEME_STATE/current/spec.json"
+            ref=$REPLY
+            : ${_THEME_OPT_MODE:=${reply[1]}} ${_THEME_OPT_VARIANT:=${reply[2]}} ${_THEME_OPT_CONTRAST:=${reply[3]}}
+        else
+            ref=$_THEME_DEFAULT_SCHEME
+        fi
     fi
-    _theme-scheme-file "$ref" || return 1
-    _theme-load "$REPLY" || return 1
+    _theme-load-source "$ref" || return 1
+    name=$REPLY
     _theme-resolve || rc=1
     _theme-ms-since $t0
-    print -r -- "$ref: mode ${_THEME_MODE}, contrast ${_THEME_LEVEL}${${_THEME_DEGRADED:#0}:+ (DEGRADED from ${_THEME_IN[prefs.contrast]})}, resolved in ${REPLY} ms"
+    print -r -- "$name: mode ${_THEME_MODE}, contrast ${_THEME_LEVEL}${${_THEME_DEGRADED:#0}:+ (DEGRADED from ${_THEME_IN[prefs.contrast]})}, resolved in ${REPLY} ms"
+    [[ "$_THEME_SRC_KIND" == scheme ]] ||
+        print -r -- "  source:   $_THEME_SRC_KIND ${_THEME_SRC_REF/#$HOME/~} (${_THEME_SRC_VARIANT}, contrast $_THEME_SRC_CONTRAST; source colour ${_THEME_IN[scheme.x-source]:-?})"
+    print -r -- "  anchored: ${${(j:, :)_THEME_ANCHORED}:-none}"
     for role in "${_THEME_ROLES[@]}"; do
-        printf '  %-10s %s %s%s\n' "$role" "${_THEME_ROLE[$role]}" \
+        printf '  %-10s %s %s%s%s\n' "$role" "${_THEME_ROLE[$role]}" \
             "$([[ -t 1 ]] && _theme-swatch-block "${_THEME_ROLE[$role]}" '    ')" \
-            "${${(M)_THEME_ADJUSTED:#$role}:+  adjusted}"
+            "${${(M)_THEME_ADJUSTED:#$role}:+  adjusted}" "${${(M)_THEME_ANCHORED:#$role}:+  anchored}"
     done
     print -r -- "  ratios:"
     for pair in ${(ko)_THEME_CONTRAST}; do
@@ -1693,8 +2021,9 @@ theme-swatch() {
     local -a ansi
     _theme-paths
     if [[ -n "$ref" ]]; then
-        _theme-scheme-file "$ref" || return 1
-        _theme-load "$REPLY" && _theme-resolve || return 1
+        _theme-load-source "$ref" || return 1
+        ref=$REPLY
+        _theme-resolve || return 1
         roles=("${(@kv)_THEME_ROLE}"); ansi=("${_THEME_ANSI[@]}")
     elif _theme-source-current; then
         ref=${THEME_META[name]}
@@ -1744,12 +2073,16 @@ _theme-link-complete() {
 # as they are now). Returns 1, leaving everything as it was, when the source
 # can't be rendered (its scheme file gone, say).
 _theme-build-fresh() {
-    local id=$1 ref
+    local id=$1 ref wall
     _theme-build-complete "$id" && { REPLY=$id; return 0; }
     _theme-build-ok "$id" || { log-error "[theme] no build $id"; return 1; }
-    ref=$(jq -r '.source.ref // .name' "$_THEME_STATE/builds/$id/spec.json")
+    _theme-spec-source "$_THEME_STATE/builds/$id/spec.json" || return 1
+    ref=$REPLY
+    local _THEME_OPT_MODE=${reply[1]} _THEME_OPT_VARIANT=${reply[2]} _THEME_OPT_CONTRAST=${reply[3]}
+    wall=$(jq -r '.wallpaper // ""' "$_THEME_STATE/builds/$id/spec.json")
+    [[ -n "$wall" ]] && _theme-wallpaper-image "$wall" || wall=
     log-warning "[theme] build $id lacks an output (made before a template existed); re-rendering $ref"
-    _theme-build "$ref" && return 0
+    _theme-build "$ref" "$wall" && return 0
     log-error "[theme] cannot re-render $id from '$ref'; nothing changed"
     return 1
 }
