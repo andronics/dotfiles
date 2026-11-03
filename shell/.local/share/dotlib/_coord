@@ -23,6 +23,18 @@
 # detaches it, and a session started from another terminal is attached rather
 # than duplicated.
 #
+# Status: `status` is fed by Claude Code hooks in the user's Claude settings
+# (~/.claude/settings.json, not this repo), which fire in every Claude session
+# on the machine with the hook's JSON on stdin; the hook command only calls it
+# when $PWD is under the actors dir, so other sessions pay a bare `case`. A
+# session whose cwd is /pool/local/actors/<name>(/...) (COORD_ACTORS_DIR) for a
+# name in _COORD_NAMES moves <name> between idle, busy and waiting in
+# ${XDG_RUNTIME_DIR}/coord/state/<name>; any other session is a silent no-op.
+# Entering waiting raises a dunst notification whose default action shows the
+# coordinator. Every state change, show and hide pokes the polybar `coord`
+# module (custom/ipc), whose hook runs `bar` to draw one icon per coordinator
+# styled by its state.
+#
 # Usage:
 #   source "${DOTLIB}/_coord"
 #
@@ -31,6 +43,10 @@
 #     - _common, _log
 #   External:
 #     - bspwm (bspc), xprop, jq, alacritty, tmux, flock, rofi (pick)
+#     - notify-send (libnotify >= 0.7.9 for --action) and a notification
+#       daemon whose click runs the default action, e.g. dunst with
+#       mouse_left_click = do_action (status)
+#     - polybar-msg (show, hide, launch, status; optional)
 #     - _coordinator from shell/.config/zsh/.zshrc.d/55-coordinators
 
 [[ -n "${COORD_LOADED:-}" ]] && return 0
@@ -48,6 +64,25 @@ declare -g _COORD_SIDE_FILE="${XDG_STATE_HOME:-$HOME/.local/state}/coord/side"
 declare -g _COORD_SIDE_DEFAULT=right
 declare -g _COORD_LAST_FILE="${XDG_STATE_HOME:-$HOME/.local/state}/coord/last"
 typeset -ga _COORD_NAMES=(brain template folio homelab metalayerlab apps dotfiles)
+declare -g _COORD_ACTORS_DIR="${COORD_ACTORS_DIR:-/pool/local/actors}"
+declare -g _COORD_STATE_DIR="${XDG_RUNTIME_DIR:-$HOME/.cache}/coord/state"
+declare -gi _COORD_NOTIFY_BODY_MAX=200
+
+# Symbols Nerd Font Mono (polybar font-0) Material Design glyphs.
+typeset -gA _COORD_ICONS=(
+    [brain]=$'\U000F09D1'          # md-brain
+    [template]=$'\U000F1517'       # md-file_document_multiple
+    [folio]=$'\U000F00D6'          # md-briefcase
+    [homelab]=$'\U000F048D'        # md-server_network
+    [metalayerlab]=$'\U000F0F58'   # md-layers_triple
+    [apps]=$'\U000F003B'           # md-apps
+    [dotfiles]=$'\U000F0493'       # md-cog
+)
+
+# Fallbacks for `bar`; polybar's hook passes its own [colors] as key=value.
+typeset -gA _COORD_BAR_COLORS=(
+    [dim]='#6c7086' [busy]='#fab387' [waiting]='#f38ba8' [ink]='#11111b' [shown]='#b4befe'
+)
 
 typeset -gA _COORD_DESCRIPTIONS=(
     [toggle]="Show <name>'s window docked on the dock side's edge (launching it if needed), or hide it if it is focused"
@@ -57,6 +92,8 @@ typeset -gA _COORD_DESCRIPTIONS=(
     [side]="Print the dock side, or set it with {left|right}, re-docking a shown coordinator"
     [launch]="Start <name>'s window hidden, attaching to its tmux session if one exists"
     [list]="List coordinator windows and whether each is hidden or visible"
+    [status]="Claude Code hook: read the hook JSON on stdin and, for a session under ${_COORD_ACTORS_DIR}/<name>, record <name> busy, waiting or idle (notifying on waiting) and refresh polybar; [event] overrides hook_event_name; always exits 0"
+    [bar]="Print the polybar strip: one clickable icon per coordinator styled not running, idle, busy, waiting or shown; [key=#rrggbb ...] sets ${(kj:, :)_COORD_BAR_COLORS}"
 )
 
 # ------------------------------
@@ -148,6 +185,44 @@ _coord-lock() {
     exec {_fd}>&-
     log-error "[coord] $1 lock busy"
     return 1
+}
+
+# Refreshes the polybar `coord` module. Backgrounded with its output
+# discarded: polybar may not be running, and a hook must never wait on it.
+_coord-poke() {
+    (( ${+commands[polybar-msg]} )) || return 0
+    polybar-msg action coord hook 0 </dev/null >/dev/null 2>&1 &!
+}
+
+# Shows <name> under the switch lock.
+_coord-summon() {
+    local _fd
+    _coord-lock switch || return 1
+    {
+        _coord-show "$1"
+    } always {
+        exec {_fd}>&-
+    }
+}
+
+# Pops a notification that <name> is waiting, unless it is the shown and
+# focused window. notify-send blocks until the notification is clicked or
+# closed, so the wait runs detached and the hook returns at once; clicking it
+# shows <name> (never hides it, as toggle would).
+_coord-notify() {
+    local _name=$1 _body=$2 _node
+    (( ${+commands[notify-send]} )) || return 0
+    _node=$(_coord-node "$_name")
+    [[ -n "$_node" ]] && bspc query -N -n "${_node}.focused.!hidden" >/dev/null 2>&1 && return 0
+
+    (( ${#_body} > _COORD_NOTIFY_BODY_MAX )) && _body="${_body[1,_COORD_NOTIFY_BODY_MAX - 1]}…"
+    # dunstrc sets markup = full.
+    _body=${_body//&/&amp;} _body=${_body//</&lt;} _body=${_body//>/&gt;}
+    {
+        [[ "$(notify-send --app-name="$_COORD_CLASS" --action=default=Show \
+            --hint="string:x-dunst-stack-tag:coord-${_name}" \
+            "${_name} needs you" "$_body")" == default ]] && _coord-summon "$_name"
+    } </dev/null >/dev/null 2>&1 &!
 }
 
 # Docks the node to the <side> edge of <monitor> (default: the focused one,
@@ -263,6 +338,7 @@ _coord-show() {
     _coord-unpad
 
     mkdir -p "${_COORD_LAST_FILE:h}" && print -r -- "$_name" >| "$_COORD_LAST_FILE"
+    _coord-poke
     return 0
 }
 
@@ -282,6 +358,9 @@ coord-launch() {
         -e tmux new-session -A -s "${_name}-coordinator" \
             "zsh -ic '_coordinator ${_name}; exec zsh -i'" \
         </dev/null >/dev/null 2>&1
+    # The strip counts a coordinator as running once its window or tmux
+    # session exists, which is after setsid returns.
+    { _coord-wait "$_name" && _coord-poke } </dev/null >/dev/null 2>&1 &!
 }
 
 coord-toggle() {
@@ -294,6 +373,7 @@ coord-toggle() {
         if [[ -n "$_node" ]] && bspc query -N -n "${_node}.focused.!hidden" >/dev/null 2>&1; then
             bspc node "$_node" --flag hidden=on
             _coord-unpad
+            _coord-poke
             return
         fi
         _coord-show "$_name" "$_node"
@@ -430,4 +510,107 @@ coord-list() {
         bspc query -N -n "${_node}.hidden" >/dev/null 2>&1 && _state=hidden
         printf '%-14s %-8s %s\n' "$_instance" "$_state" "$_node"
     done
+}
+
+# Runs in every Claude Code session's hooks, so it never prints to stdout and
+# always returns 0. Sessions outside the actors dir are rejected on a plain
+# substring test before jq is spawned. Only a change of state is written
+# (atomically, by rename) or pokes polybar, so the per-tool events cost a
+# read when nothing changes. Event to state:
+#   UserPromptSubmit, PostToolUse, PostToolUseFailure  busy (a granted
+#                                                      permission clears waiting)
+#   Notification (needs-input types)                   waiting
+#   Stop, StopFailure, SessionStart                    idle
+#   SessionEnd                                         state removed
+coord-status() {
+    local _json _cwd _event _type _message _name _rest _state _old _file _tmp
+    [[ -t 0 ]] && return 0
+    read -r -d '' _json || :
+    [[ "$_json" == *"\"cwd\""*"\"${_COORD_ACTORS_DIR}/"* ]] || return 0
+    (( ${+commands[jq]} )) || return 0
+
+    {
+        read -r _cwd
+        read -r _event
+        read -r _type
+        read -r -d '' _message
+    } < <(jq -r '.cwd // "", .hook_event_name // "", .notification_type // "", (.message // "" | gsub("\\s+"; " "))' <<< "$_json" 2>/dev/null)
+    _event=${1:-$_event} _message=${_message%$'\n'}
+
+    _rest=${_cwd#${_COORD_ACTORS_DIR}/}
+    [[ "$_rest" != "$_cwd" ]] || return 0
+    _name=${_rest%%/*}
+    (( ${_COORD_NAMES[(Ie)$_name]} )) || return 0
+
+    case "$_event" in
+        UserPromptSubmit|PostToolUse|PostToolUseFailure) _state=busy ;;
+        Notification)
+            [[ "$_type" == (|permission_prompt|idle_prompt|elicitation_dialog|elicitation_url_dialog|agent_needs_input) ]] || return 0
+            _state=waiting ;;
+        Stop|StopFailure|SessionStart) _state=idle ;;
+        SessionEnd) _state= ;;
+        *) return 0 ;;
+    esac
+
+    _file="${_COORD_STATE_DIR}/${_name}"
+    [[ -r "$_file" ]] && _old=$(<"$_file")
+    [[ "$_state" == "$_old" ]] && return 0
+
+    if [[ -z "$_state" ]]; then
+        rm -f -- "$_file" 2>/dev/null
+    else
+        _tmp="${_file}.$$"
+        { mkdir -p -- "$_COORD_STATE_DIR" && print -r -- "$_state" >| "$_tmp" && mv -f -- "$_tmp" "$_file" } 2>/dev/null \
+            || { rm -f -- "$_tmp" 2>/dev/null; return 0 }
+        [[ "$_state" == waiting ]] && _coord-notify "$_name" "${_message:-Waiting for input}" 2>/dev/null
+    fi
+    _coord-poke
+    return 0
+}
+
+# Styles stack: the activity state colours the icon (not running dim, idle the
+# module's foreground, busy, or waiting as a filled pill), and shown adds an
+# underline. Running means the coordinator's window or its tmux session
+# exists; the state file of one that isn't running is stale and removed.
+# Polybar action tags wrap each icon, so a left-click is `toggle <name>`;
+# right-click and scroll are the module's own handlers.
+coord-bar() {
+    local _arg _node _instance _name _state _file _icon _cell _out=
+    local -A _color=("${(@kv)_COORD_BAR_COLORS}") _running _shown
+
+    for _arg in "$@"; do
+        [[ "$_arg" =~ '^([a-z]+)=(#[0-9A-Fa-f]{6,8})$' ]] && (( ${+_color[${match[1]}]} )) \
+            && _color[${match[1]}]=${match[2]}
+    done
+
+    for _name in ${(f)"$(tmux list-sessions -F '#S' 2>/dev/null)"}; do
+        [[ "$_name" == *-coordinator ]] && _running[${_name%-coordinator}]=1
+    done
+    _coord-windows | while read -r _node _instance; do
+        _running[$_instance]=1
+        bspc query -N -n "${_node}.!hidden" >/dev/null 2>&1 && _shown[$_instance]=1
+    done
+
+    for _name in "${_COORD_NAMES[@]}"; do
+        _file="${_COORD_STATE_DIR}/${_name}"
+        _state=
+        if (( ${+_running[$_name]} )); then
+            [[ -r "$_file" ]] && _state=$(<"$_file")
+            [[ "$_state" == (busy|waiting) ]] || _state=idle
+        else
+            [[ -e "$_file" ]] && rm -f -- "$_file" 2>/dev/null
+            _state=off
+        fi
+
+        _icon=" ${_COORD_ICONS[$_name]:-${_name[1]}} "
+        case "$_state" in
+            off)     _cell="%{F${_color[dim]}}${_icon}%{F-}" ;;
+            busy)    _cell="%{F${_color[busy]}}${_icon}%{F-}" ;;
+            waiting) _cell="%{B${_color[waiting]}}%{F${_color[ink]}}${_icon}%{F-}%{B-}" ;;
+            *)       _cell=$_icon ;;
+        esac
+        (( ${+_shown[$_name]} )) && _cell="%{u${_color[shown]}}%{+u}${_cell}%{-u}"
+        _out+="%{A1:coord toggle ${_name}:}${_cell}%{A}"
+    done
+    print -r -- "$_out"
 }
