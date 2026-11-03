@@ -2945,6 +2945,123 @@ _theme-self-test-run() {
     local -a counts=(${=$(<"$scratch/desktop-counts")})
     (( pass += counts[1], failed += counts[2] )) || true
 
+    # GTK: gtk.css (libadwaita named colours) and xsettingsd.conf from the
+    # roles and prefs, by mode; a theme that isn't installed is left out.
+    local gtk_dark= gtk_light= ic_dark= ic_light=
+    _theme-installed themes adw-gtk3-dark && gtk_dark='Net/ThemeName "adw-gtk3-dark"'
+    _theme-installed themes adw-gtk3 && gtk_light='Net/ThemeName "adw-gtk3"'
+    _theme-installed icons Papirus-Dark && ic_dark='Net/IconThemeName "Papirus-Dark"'
+    _theme-installed icons Papirus-Light && ic_light='Net/IconThemeName "Papirus-Light"'
+    grep -qx '@define-color window_bg_color #1e1e2e;' "$cur/gtk.css" &&
+       grep -qx '@define-color accent_bg_color #b4befe;' "$cur/gtk.css" &&
+       grep -qx '@define-color accent_fg_color #11111b;' "$cur/gtk.css" &&
+       grep -qx '@define-color destructive_bg_color #f38ba8;' "$cur/gtk.css" &&
+       grep -qx '@define-color headerbar_bg_color #313244;' "$cur/gtk.css" &&
+       grep -qx 'Gtk/FontName "Roboto Mono for Powerline 12.5"' "$cur/xsettingsd.conf" &&
+       grep -qx 'Gtk/CursorThemeName "Adwaita"' "$cur/xsettingsd.conf" && grep -qx 'Gtk/CursorThemeSize 30' "$cur/xsettingsd.conf" &&
+       { [[ -z "$gtk_dark" ]] || grep -qxF "$gtk_dark" "$cur/xsettingsd.conf"; } &&
+       { [[ -z "$ic_dark" ]] || grep -qxF "$ic_dark" "$cur/xsettingsd.conf"; } &&
+        ok "catppuccin-mocha gtk.css: window #1e1e2e, accent #b4befe on #11111b, destructive #f38ba8, headerbar #313244; xsettingsd.conf: ${gtk_dark:+adw-gtk3-dark, }${ic_dark:+Papirus-Dark, }Roboto Mono 12.5, Adwaita 30" ||
+        bad "catppuccin-mocha gtk.css/xsettingsd.conf: $(grep -v '^#' "$cur/xsettingsd.conf" | tr '\n' ' ')"
+    theme-apply catppuccin-latte 2>/dev/null
+    grep -qx '@define-color window_bg_color #eff1f5;' "$cur/gtk.css" &&
+       { [[ -z "$gtk_light" ]] || grep -qxF "$gtk_light" "$cur/xsettingsd.conf"; } &&
+       { [[ -z "$ic_light" ]] || grep -qxF "$ic_light" "$cur/xsettingsd.conf"; } &&
+        ok "catppuccin-latte: gtk.css window #eff1f5; xsettingsd.conf ${gtk_light:-(adw-gtk3 not installed)}, ${ic_light:-(Papirus-Light not installed)}" ||
+        bad "catppuccin-latte gtk.css/xsettingsd.conf: $(grep -v '^#' "$cur/xsettingsd.conf" | tr '\n' ' ')"
+    mkdir -p "$scratch/nodata"
+    XDG_DATA_HOME="$scratch/nodata" XDG_DATA_DIRS="$scratch/nodata" HOME="$scratch/nodata" theme-apply catppuccin-mocha 2>/dev/null
+    ! grep -q '^Net/' "$cur/xsettingsd.conf" && grep -q '^# Net/ThemeName: "adw-gtk3-dark" is not installed' "$cur/xsettingsd.conf" &&
+       grep -qx 'Gtk/CursorThemeSize 30' "$cur/xsettingsd.conf" &&
+        ok "xsettingsd.conf leaves out a GTK or icon theme that isn't installed (settings.ini's stays)" ||
+        bad "xsettingsd.conf with nothing installed: $(grep -v '^# Gen' "$cur/xsettingsd.conf" | tr '\n' ' ')"
+    theme-apply catppuccin-mocha 2>/dev/null
+    print -rl -- '@define-color window_bg_color var(--x);' '@define-color window_bg_color #000000;' > "$scratch/bad1.css"
+    sed '/accent_bg_color/d' "$cur/gtk.css" > "$scratch/bad2.css"
+    print -rl -- 'Gtk/FontName Roboto 10' 'Gtk/CursorThemeName "Adwaita"' 'Gtk/CursorThemeSize 30' > "$scratch/bad1.xsettingsd"
+    print -rl -- 'Gtk/FontName "a"' 'Gtk/FontName "b"' 'Gtk/CursorThemeName "Adwaita"' 'Gtk/CursorThemeSize 30' > "$scratch/bad2.xsettingsd"
+    ! _theme-validate-gtk-css "$scratch/bad1.css" >/dev/null && ! _theme-validate-gtk-css "$scratch/bad2.css" >/dev/null &&
+       ! _theme-validate-xsettingsd "$scratch/bad1.xsettingsd" >/dev/null && ! _theme-validate-xsettingsd "$scratch/bad2.xsettingsd" >/dev/null &&
+       _theme-validate-gtk-css "$cur/gtk.css" && _theme-validate-xsettingsd "$cur/xsettingsd.conf" &&
+        ok "validators: var() in gtk.css, a missing accent_bg_color, an unquoted xsettingsd string and a duplicate setting fail; Mocha's pass" ||
+        bad "gtk.css/xsettingsd.conf validators"
+
+    # The GTK reloaders: skipped for a scratch state; forced live, the links,
+    # the Net/ThemeName toggle around the HUP, and gsettings only where a key
+    # differs. Every command stubbed, in a subshell, which applies themes and
+    # so takes the lock.
+    _theme-unlock
+    (
+        local calls="$scratch/gtk-calls" cfg="$scratch/gtk-config" out
+        local -A gs=()
+        pass=0 failed=0
+        trap 'print -r -- "$pass $failed" >| "$scratch/gtk-counts"' EXIT
+        pgrep() { return 0; }
+        timeout() { shift; "$@"; }
+        pkill() { print -r -- "pkill $* -> $(readlink "$_THEME_STATE/$_THEME_XSETTINGSD_LINK") $(grep '^Net/ThemeName' "$_THEME_STATE/$_THEME_XSETTINGSD_LINK")" >> "$calls"; }
+        dump_xsettings() { [[ -n "${_st_live:-}" ]] && print -r -- "Net/ThemeName \"$_st_live\""; }
+        gsettings() {
+            case $1 in
+                writable) print true ;;
+                get) print -r -- "${gs[$3]:-''}" ;;
+                set) print -r -- "gsettings set $3 $4" >> "$calls"; gs[$3]=$4 ;;
+            esac
+        }
+        DISPLAY=:theme-self-test XDG_CONFIG_HOME=$cfg _THEME_XSETTINGSD_TOGGLE_WAIT=0
+        mkdir -p "$cfg/gtk-3.0" "$cfg/gtk-4.0"
+        : > "$cfg/gtk-3.0/gtk.css"
+        # The forced-live dunst reload above made it.
+        rm -f -- "$_THEME_STATE/$_THEME_XSETTINGSD_LINK"
+        _theme-reload xsettingsd gsettings
+        [[ ! -e "$calls" && ! -e "$cfg/gtk-3.0/theme.css" && ! -e "$_THEME_STATE/$_THEME_XSETTINGSD_LINK" ]] &&
+            ok "xsettingsd and gsettings reloads skipped for a scratch state dir" ||
+            bad "a scratch state reached xsettingsd/gsettings: $(cat "$calls" 2>/dev/null) $(ls -d "$cfg/gtk-3.0/theme.css" "$_THEME_STATE/$_THEME_XSETTINGSD_LINK" 2>/dev/null)"
+        for c in pgrep pkill timeout dump_xsettings gsettings; do
+            [[ "$(whence -w $c)" == "$c: function" ]] || { bad "stub for $c not in place; GTK reloaders not exercised"; exit; }
+        done
+        _theme-live() { return 0; }
+        local tn=$(grep '^Net/ThemeName' "$cur/xsettingsd.conf")
+        _theme-reload-xsettingsd
+        out=$(<"$calls")
+        if [[ -n "$tn" ]]; then
+            [[ "$out" == "pkill -HUP -x -u $UID xsettingsd -> xsettingsd.toggle.conf Net/ThemeName \"adw-gtk3\""$'\n'"pkill -HUP -x -u $UID xsettingsd -> current/xsettingsd.conf $tn" ]]
+        else
+            [[ "$out" == "pkill -HUP -x -u $UID xsettingsd -> current/xsettingsd.conf " ]]
+        fi && [[ "$(readlink "$cfg/gtk-3.0/theme.css")" == "$_THEME_STATE/current/gtk.css" && ! -e "$cfg/gtk-4.0/theme.css" &&
+                  ! -e "$_THEME_STATE/xsettingsd.toggle.conf" ]] &&
+            ok "xsettingsd reload: gtk-3.0/theme.css -> current/gtk.css (not gtk-4.0, no gtk.css there); ${tn:+same theme name: HUP on adw-gtk3, then on current/xsettingsd.conf}" ||
+            bad "xsettingsd reload: ${(f)out}; theme.css -> $(readlink "$cfg/gtk-3.0/theme.css")"
+        : >| "$calls"
+        if [[ -n "$tn" ]]; then
+            _st_live=adw-gtk3 _theme-reload-xsettingsd
+            [[ "$(<"$calls")" == "pkill -HUP -x -u $UID xsettingsd -> current/xsettingsd.conf $tn" ]] &&
+                ok "xsettingsd reload after a mode change (live adw-gtk3): one HUP, no toggle" ||
+                bad "xsettingsd reload after a mode change: $(<"$calls")"
+            : >| "$calls"
+        fi
+        _theme-reload-gsettings
+        out=$(<"$calls")
+        [[ "$out" == *"gsettings set color-scheme 'prefer-dark'"* && "$out" == *"gsettings set font-name 'Roboto Mono for Powerline 12.5'"* &&
+           "$out" == *"gsettings set cursor-theme 'Adwaita'"* && "$out" == *"gsettings set cursor-size 30"* ]] &&
+           { [[ -z "$gtk_dark" ]] || [[ "$out" == *"gsettings set gtk-theme 'adw-gtk3-dark'"* ]]; } &&
+           { [[ -z "$ic_dark" ]] || [[ "$out" == *"gsettings set icon-theme 'Papirus-Dark'"* ]]; } &&
+            ok "gsettings reload: color-scheme prefer-dark, font, cursor${gtk_dark:+, gtk-theme}${ic_dark:+, icon-theme}" ||
+            bad "gsettings reload: ${(f)out}"
+        : >| "$calls"
+        _theme-reload-gsettings
+        [[ ! -s "$calls" ]] && ok "gsettings reload again: nothing written (every key already matches)" ||
+            bad "gsettings rewrote: $(<"$calls")"
+        # Applied as a scratch state again, so no other reloader runs live.
+        _theme-live() { return 1; }; theme-apply catppuccin-latte >/dev/null 2>&1; _theme-live() { return 0; }
+        : >| "$calls"
+        _theme-reload-gsettings
+        [[ "$(<"$calls")" == *"gsettings set color-scheme 'default'"* ]] && ok "gsettings under catppuccin-latte: color-scheme default" ||
+            bad "gsettings under latte: $(<"$calls")"
+        _theme-live() { return 1; }; theme-apply catppuccin-mocha >/dev/null 2>&1
+    )
+    local -a gcounts=(${=$(<"$scratch/gtk-counts")})
+    (( pass += gcounts[1], failed += gcounts[2] )) || true
+
     # The dunst and xresources validators catch what their apps would
     # silently ignore.
     print -rl -- '[global]' '    font = x 12' '[urgency_critical]' '    frame_color = #f38ba8' > "$scratch/bad.conf"
