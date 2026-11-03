@@ -19,7 +19,7 @@ zstyle ':fzf-tab:complete:z:*' fzf-preview \
 # file viewers / editors → preview file contents
 for cmd in cat less more head tail bat vim nvim nano code subl; do
     zstyle ":fzf-tab:complete:${cmd}:*" fzf-preview \
-        '(bat --color=always --style=numbers --line-range=:200 $realpath 2>/dev/null \
+        '(bat --color=always --theme=ansi --style=numbers --line-range=:200 $realpath 2>/dev/null \
           || eza --tree --level=2 --color=always --icons $realpath 2>/dev/null \
           || head -200 $realpath)'
 done
