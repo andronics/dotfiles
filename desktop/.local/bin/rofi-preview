@@ -46,7 +46,8 @@ case "$_variant" in
             _coord-pick-row "${_COORD_NAMES[_i]}" "${_states[_i]:-off}" "$_shown"
             _rows+=("$REPLY")
         done
-        _args+=(-markup-rows -format i -p "Coordinator" -selected-row 0 -a 0) ;;
+        # The cursor starts off the shown cell so both the ring and the pill show.
+        _args+=(-markup-rows -format i -p "Coordinator" -selected-row 1 -a 0) ;;
     power)
         _rows=(
             "Lock"$'\0icon\x1f'"system-lock-screen"

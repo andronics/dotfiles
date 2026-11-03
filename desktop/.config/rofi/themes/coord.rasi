@@ -1,26 +1,37 @@
 /**
- * Coordinator picker (coord pick, the coord strip's right-click). Rows are
- * pango markup from _coord: the coordinator's Nerd Font glyph coloured as on
- * the strip (dim not running, peach busy, red pill waiting) and its state.
- * Shown coordinators are marked active and drawn here as the strip draws
- * them, with a lavender underline.
+ * Coordinator picker (coord pick, the coord strip's right-click): the
+ * launcher's look, sized for seven cells in one row. Each cell is pango
+ * markup from _coord: a large Nerd Font glyph coloured as on the strip (dim
+ * not running, peach busy, red pill waiting), the name, and a faint state.
+ * Shown coordinators are marked active: a lavender ring in the selection's
+ * shape with a heavier bottom edge, the strip's underline.
  */
 
-@import "bar-popup.rasi"
+@import "launcher.rasi"
 
 window {
-    width:               420px;
+    width:               1120px;
+}
+
+entry {
+    placeholder:         "Search coordinators";
 }
 
 listview {
-    lines:               7;
-    fixed-height:        true;
+    columns:             7;
+    lines:               1;
 }
 
 element {
     children:            [ element-text ];
-    border:              0px 0px 2px 0px;
+    padding:             16px 8px 14px 8px;
+    border:              2px 2px 4px 2px;
     border-color:        transparent;
+}
+
+element-text {
+    font:                "Source Code Pro for Powerline 12";
+    horizontal-align:    0.5;
 }
 
 element normal.active,
