@@ -9,7 +9,7 @@ file:///mnt mnt
 file:///mnt/org org
 file:///pool pool
 file:///mnt/res res
-file:///mnt/docker/svcs svcs
+file:///pool/distributed/iac/workstation/compose compose
 file:///mnt/transfer transfer
 file:///mnt/media/tv tv
 file:///mnt/vms vms
