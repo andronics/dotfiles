@@ -990,42 +990,52 @@ EOF
 # ------------------------------
 
 config-self-test() {
-    # Load _test from same directory
-    local test_dir="${${(%):-%x}:A:h}"
-    if ! source "$test_dir/_test" 2>/dev/null; then
-        echo "[ERROR] config-self-test requires _test framework (expected at $test_dir/_test)" >&2
-        return 1
+    echo "=== _config v${CONFIG_VERSION} self-test ==="
+    echo ""
+
+    local tests_passed=0
+    local tests_failed=0
+
+    echo -n "Test 1: Module loaded... "
+    if [[ -n "$CONFIG_VERSION" && "$CONFIG_LOADED" == "1" ]]; then
+        echo "PASS"
+        tests_passed=$((tests_passed + 1))
+    else
+        echo "FAIL"
+        tests_failed=$((tests_failed + 1))
     fi
 
-    echo "=== Testing config v$CONFIG_VERSION ==="
-    test-reset
+    config-set "selftest.key1" "value1"
+    echo -n "Test 2: Set and get... "
+    if [[ "$(config-get "selftest.key1")" == "value1" ]]; then
+        echo "PASS"
+        tests_passed=$((tests_passed + 1))
+    else
+        echo "FAIL"
+        tests_failed=$((tests_failed + 1))
+    fi
 
-    echo "## Basic Tests"
-    test-assert-not-empty "$CONFIG_VERSION" "version should be set"
-    test-assert-equals "$CONFIG_VERSION" "1.0.0" "version should be 1.0.0"
-    test-assert-equals "$CONFIG_LOADED" "1" "loaded flag should be set"
+    echo -n "Test 3: Has... "
+    if config-has "selftest.key1" && ! config-has "selftest.missing"; then
+        echo "PASS"
+        tests_passed=$((tests_passed + 1))
+    else
+        echo "FAIL"
+        tests_failed=$((tests_failed + 1))
+    fi
+
+    echo -n "Test 4: Delete... "
+    if config-delete "selftest.key1" && ! config-has "selftest.key1"; then
+        echo "PASS"
+        tests_passed=$((tests_passed + 1))
+    else
+        echo "FAIL"
+        tests_failed=$((tests_failed + 1))
+    fi
 
     echo ""
-    echo "## Core Operations"
-
-    config-set "test.key1" "value1"
-    result=$(config-get "test.key1")
-    test-assert-equals "$result" "value1" "should set and get value"
-
-    config-has "test.key1"
-    test-assert-true "should detect existing key" test $? -eq 0
-
-    config-has "nonexistent.key"
-    test-assert-false "should detect missing key" test $? -eq 0
-
-    config-delete "test.key1"
-    config-has "test.key1"
-    test-assert-false "should delete key" test $? -eq 0
-
-    echo ""
-
-    test-summary
-    return $?
+    echo "Results: $tests_passed passed, $tests_failed failed"
+    [[ $tests_failed -eq 0 ]]
 }
 
 # ------------------------------
