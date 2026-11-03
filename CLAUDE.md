@@ -67,7 +67,7 @@ Wired automatically by `shell/.postinstall`. Patterns declared in `.gitattribute
 | `dotfiles` wrapper | `bash -n dotfiles` |
 | `.zXXX.d/*` | `zsh -n <file>`; `time zsh -ic exit` (regression check) |
 | desktop boot | login on a 2nd TTY; `pgrep -c dunst sxhkd picom polybar` should each be `1` |
-| theme | `palette base` returns hex; visually scan polybar / rofi / dunst / alacritty |
+| theme | `theme get bg` returns hex; `theme check` passes; visually scan polybar / rofi / dunst / alacritty |
 | git-crypt | `git check-attr filter -- foo.env` returns `git-crypt`; `.git/config` has `filter.git-crypt.{clean,smudge}` pointing at the real script path |
 
 ## House style
