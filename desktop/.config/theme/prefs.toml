@@ -51,5 +51,6 @@ light = "adw-gtk3"
 # (D12; a dir that doesn't exist is skipped). default is used while no
 # wallpaper is recorded (a fresh state). `theme list wallpapers` shows them.
 [wallpaper]
-dirs = ["~/.local/share/backgrounds", "~/Pictures/wallpapers"]
+# The second dir is untracked and holds personal wallpapers.
+dirs = ["~/.local/share/backgrounds", "~/.local/share/wallpapers"]
 default = "0001"
