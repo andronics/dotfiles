@@ -1,14 +1,17 @@
 {{- /*
-  Linked as ~/.config/gtk-3.0/theme.css and ~/.config/gtk-4.0/theme.css by
-  `theme ensure` (and the xsettingsd reloader); each gtk.css beside them
-  starts with @import url("theme.css"). A relative url resolves against the
-  importing file's own path, not the stow link's target, so the import stays
-  free of a hardcoded home; GTK expands no ~.
+  Read two ways. GTK 3 (and plain GTK 4): copied into a GTK theme slot
+  (~/.local/share/themes/theme-live-{a,b}) over adw-gtk3[-dark], the theme
+  xsettingsd names, so a running app re-reads it on each switch.
+  libadwaita, which ignores the GTK theme: linked as ~/.config/gtk-4.0/theme.css
+  by `theme ensure`, imported by the gtk.css beside it (@import
+  url("theme.css"), relative, so it resolves beside that file; GTK expands
+  no ~).
 
   Only @define-color, which GTK 3 and 4 both read: adw-gtk3 (GTK 3 and plain
   GTK 4 apps) and libadwaita define their colours, and their GTK 4 CSS
-  variables (--window-bg-color: @window_bg_color), from these names, and the
-  user stylesheet outranks the theme's. No var() or :root, which GTK 3
+  variables (--window-bg-color: @window_bg_color), from these names: later
+  in the slot than the base theme, and in the user stylesheet, which
+  outranks libadwaita's. No var() or :root, which GTK 3
   rejects. Derived names (theme_*_color, borders, insensitive_*) follow from
   these in the theme itself, as does libadwaita's --accent-color.
 

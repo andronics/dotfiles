@@ -1,8 +1,7 @@
-/* The generated theme's colours (libadwaita named colours, for adw-gtk3 and
-   libadwaita): theme.css is a link `theme ensure` keeps on
-   ~/.local/state/theme/current/gtk.css. Relative, so it resolves beside this
-   file. @import must come before any rule. */
-@import url("theme.css");
+/* No theme colours here: GTK 3 reads this file once, when an app starts, so
+   colours imported here would stay in a running app and outrank every later
+   theme. They come with the GTK theme instead, which xsettingsd names and
+   GTK re-reads on each `theme apply` (see _THEME_GTK_SLOTS in dotlib/_theme). */
 
 .deadd-noti-center {
     font-family: Roboto Mono Medium;
@@ -12,4 +11,3 @@ image.deadd-noti-center.notification.image {
   margin-bottom: 1em;
   margin-top: 1em;
 }
-

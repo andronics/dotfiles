@@ -30,8 +30,14 @@
 #   overrides.json knobs merged over prefs.toml (written by a later `set`)
 #   lockscreen.cached  "<wallpaper>\t<mtime>" betterlockscreen's cache was
 #                  last made from; lockscreen.lock and lockscreen.log beside it
-#   xsettingsd.conf -> current/xsettingsd.conf, what xsettingsd is started
-#                  on (see _theme-reload-xsettingsd)
+#   xsettingsd.conf  what xsettingsd is started on: current/xsettingsd.conf
+#                  with Net/ThemeName on a GTK theme slot (see
+#                  _theme-xsettingsd-serve)
+#   gtk.served     sha256 of the gtk.css libadwaita apps last re-read (see
+#                  _theme-gtk4-nudge)
+#
+# Outside the state: ${XDG_DATA_HOME}/themes/{theme-live-a,theme-live-b},
+# the GTK theme slots (_THEME_GTK_SLOTS).
 #
 # Wallpaper: every build records one (spec.wallpaper, THEME_META[wallpaper]).
 # A new build keeps the current build's wallpaper, so `apply <scheme>` never
@@ -209,16 +215,25 @@ declare -g _THEME_POLYBAR_STATE='~/.local/state/theme'
 # current build. dunst reads dunstrc.d/*.conf after the dunstrc beside it.
 declare -g _THEME_DUNST_DROPIN='dunst/dunstrc.d/90-theme.conf'
 
-# GTK: each gtk.css (stowed) starts with @import url("theme.css"), and
-# `theme ensure` links theme.css beside it to current/gtk.css. xsettingsd
-# (.zlogin.d/20-xsettingsd) is started on the state link xsettingsd.conf,
-# which points at current/xsettingsd.conf, except for the moment the
-# xsettingsd reloader points it at a copy with another theme name.
+# GTK: a GTK app reads the user stylesheet (gtk-3.0/gtk.css, gtk-4.0/gtk.css)
+# once, when it starts, so colours put there never change in a running app.
+# GTK 3 (and plain GTK 4) re-read the GTK *theme* whenever Net/ThemeName
+# changes, so the colours live in a generated theme instead: two slots in
+# ${XDG_DATA_HOME}/themes, each the mode's base theme (adw-gtk3[-dark]) with
+# a build's gtk.css over it. Each new build is written into the slot not in
+# use and xsettingsd is pointed at it, so the name always changes and every
+# running app loads the new colours. xsettingsd (.zlogin.d/20-xsettingsd)
+# is started on the state's xsettingsd.conf, which _theme-xsettingsd-serve
+# writes. libadwaita ignores the GTK theme: its colours come from
+# gtk-4.0/gtk.css importing theme.css, which `theme ensure` links to
+# current/gtk.css (in each gtk dir whose gtk.css imports it); see
+# _theme-gtk4-nudge for how running libadwaita apps re-read it.
 typeset -ga _THEME_GTK_DIRS=(gtk-3.0 gtk-4.0)
-declare -g _THEME_XSETTINGSD_LINK=xsettingsd.conf
-# How long GTK apps get to see the toggled theme name before it goes back;
-# both changes inside one event-loop pass would look like no change.
-declare -g _THEME_XSETTINGSD_TOGGLE_WAIT=${THEME_XSETTINGSD_TOGGLE_WAIT:-0.5}
+typeset -ga _THEME_GTK_SLOTS=(theme-live-a theme-live-b)
+declare -g _THEME_XSETTINGSD_CONF=xsettingsd.conf
+# How long the high-contrast nudge stays on before it goes back; both
+# changes inside one event-loop pass would look like no change.
+declare -g _THEME_GTK_NUDGE_WAIT=${THEME_GTK_NUDGE_WAIT:-0.5}
 
 # Hue anchoring: the OKLCH hue window (degrees, lo hi, wrapping past 360)
 # each state colour must sit in to read as red, orange/amber or green. A
@@ -1466,11 +1481,12 @@ _theme-link-to() {
     ln -sfn -- "$2" "$1.tmp" && mv -Tf -- "$1.tmp" "$1"
 }
 
-# Points the dunst drop-in at current/dunst.conf, and gtk-3.0/theme.css and
-# gtk-4.0/theme.css at current/gtk.css, so every swap reaches them. Each only
-# where its app is configured (~/.config/dunst, a gtk.css to import it) and
-# for the live state; these are real directories, never stowed. Also the
-# state's xsettingsd.conf link, back on current/xsettingsd.conf.
+# Points the dunst drop-in at current/dunst.conf, and theme.css in each gtk
+# dir whose gtk.css imports it at current/gtk.css, so every swap reaches
+# them; a theme.css of ours beside a gtk.css that no longer imports it goes.
+# Each only where its app is configured (~/.config/dunst) and for the live
+# state; these are real directories, never stowed. Also writes the GTK theme
+# slot and the xsettingsd.conf xsettingsd serves.
 _theme-link-dropins() {
     _theme-live || return 0
     local cfg=${XDG_CONFIG_HOME:-$HOME/.config} d rc=0
@@ -1480,9 +1496,13 @@ _theme-link-dropins() {
     fi
     for d in "${_THEME_GTK_DIRS[@]}"; do
         [[ -e "$cfg/$d/gtk.css" ]] || continue
-        _theme-link-to "$cfg/$d/theme.css" "$_THEME_STATE/current/gtk.css" || rc=1
+        if grep -q 'url("theme\.css")' "$cfg/$d/gtk.css" 2>/dev/null; then
+            _theme-link-to "$cfg/$d/theme.css" "$_THEME_STATE/current/gtk.css" || rc=1
+        elif [[ -L "$cfg/$d/theme.css" && "$(readlink -- "$cfg/$d/theme.css")" == "$_THEME_STATE/current/gtk.css" ]]; then
+            rm -f -- "$cfg/$d/theme.css"
+        fi
     done
-    [[ -d "$_THEME_STATE" ]] && { _theme-link-to "$_THEME_STATE/$_THEME_XSETTINGSD_LINK" current/xsettingsd.conf || rc=1; }
+    [[ -d "$_THEME_STATE" ]] && { _theme-xsettingsd-serve || rc=1; }
     return $rc
 }
 
@@ -1524,16 +1544,90 @@ _theme-reload-xresources() {
 }
 
 # True when theme $2 of kind $1 (themes: a GTK 3 theme; icons: an icon
-# theme) is installed in an XDG data dir or the legacy ~/.themes, ~/.icons.
-# The same lookup as xsettingsd.conf.tmpl's.
+# theme) is installed in an XDG data dir or the legacy ~/.themes, ~/.icons;
+# REPLY = its directory, the first found, as GTK looks. The same lookup as
+# xsettingsd.conf.tmpl's.
 _theme-installed() {
     local kind=$1 name=$2 d file
+    REPLY=
     [[ -n "$name" ]] || return 1
     [[ "$kind" == themes ]] && file=gtk-3.0/gtk.css || file=index.theme
-    for d in "${XDG_DATA_HOME:-$HOME/.local/share}" ${(s.:.)${XDG_DATA_DIRS:-/usr/local/share:/usr/share}}; do
-        [[ -r "$d/$kind/$name/$file" ]] && return 0
+    for d in "${XDG_DATA_HOME:-$HOME/.local/share}/$kind" "$HOME/.$kind" ${^${(s.:.)${XDG_DATA_DIRS:-/usr/local/share:/usr/share}}}/$kind; do
+        [[ -r "$d/$name/$file" ]] && { REPLY=$d/$name; return 0; }
     done
-    [[ -r "$HOME/.$kind/$name/$file" ]]
+    return 1
+}
+
+# The gtk.css of slot $1's gtk-$2.0: base theme dir $3's, then the build's
+# colours (colours.css beside it) over it. An absolute file URI for the
+# base, so its own relative imports and assets resolve in its directory.
+_theme-gtk-slot-css() {
+    local uri=${${3//\%/%25}// /%20}
+    print -rl -- "/* Written by \`theme\`: GTK theme slot $1 (see _THEME_GTK_SLOTS). Do not edit. */" \
+        "@import url(\"file://$uri/gtk-$2.0/gtk.css\");" '@import url("colours.css");'
+}
+
+# True when GTK theme slot $1 holds base theme dir $2 and build dir $3's
+# colours.
+_theme-gtk-slot-holds() {
+    local dir=${XDG_DATA_HOME:-$HOME/.local/share}/themes/$1/gtk-3.0
+    cmp -s -- "$3/gtk.css" "$dir/colours.css" &&
+        [[ -r "$dir/gtk.css" && "$(<"$dir/gtk.css")" == "$(_theme-gtk-slot-css "$1" 3 "$2")" ]]
+}
+
+# Writes GTK theme slot $1: base theme dir $2 with build dir $3's gtk.css
+# over it, for GTK 3 and (where the base has one) GTK 4. Every file by
+# rename, so an app loading the slot never reads half of one.
+_theme-gtk-slot-write() {
+    local slot=$1 base=$2 build=$3 v d
+    local dir=${XDG_DATA_HOME:-$HOME/.local/share}/themes/$slot
+    for v in 3 4; do
+        d=$dir/gtk-$v.0
+        if [[ ! -r "$base/gtk-$v.0/gtk.css" ]]; then
+            rm -rf -- "$d"; continue
+        fi
+        mkdir -p -- "$d" &&
+            cp -f -- "$build/gtk.css" "$d/colours.css.tmp" && mv -f -- "$d/colours.css.tmp" "$d/colours.css" &&
+            _theme-gtk-slot-css "$slot" $v "$base" > "$d/gtk.css.tmp" && mv -f -- "$d/gtk.css.tmp" "$d/gtk.css" || return 1
+    done
+    print -rl -- '[Desktop Entry]' 'Type=X-GNOME-Metatheme' "Name=$slot" \
+        "Comment=Written by theme: ${base:t} with build ${build:t}'s colours" \
+        '[X-GNOME-Metatheme]' "GtkTheme=$slot" > "$dir/index.theme.tmp" &&
+        mv -f -- "$dir/index.theme.tmp" "$dir/index.theme"
+}
+
+# Writes the state's xsettingsd.conf, what xsettingsd serves:
+# current/xsettingsd.conf with Net/ThemeName (the base theme, adw-gtk3 or
+# adw-gtk3-dark) replaced by the GTK theme slot holding that base and the
+# current build's colours. The slot served now is kept when it already
+# holds them (a repeat reload changes nothing); otherwise the other slot is
+# written and named, so the name changes and running GTK 3 apps load it.
+# Without a Net/ThemeName (base not installed) the conf is served as built.
+# Only ever written by rename; it replaces the link earlier versions kept.
+_theme-xsettingsd-serve() {
+    local conf=$_THEME_STATE/current/xsettingsd.conf out=$_THEME_STATE/$_THEME_XSETTINGSD_CONF
+    local build base served= slot new
+    [[ -r "$conf" ]] || return 0
+    build=${conf:A:h}
+    new=$(<"$conf")
+    if _theme-xsettingsd-get Net/ThemeName "$conf" && (( ! ${_THEME_GTK_SLOTS[(Ie)$REPLY]} )) &&
+       _theme-installed themes "$REPLY"; then
+        base=$REPLY
+        [[ -f "$out" && ! -L "$out" ]] && _theme-xsettingsd-get Net/ThemeName "$out" && served=$REPLY
+        if (( ${_THEME_GTK_SLOTS[(Ie)$served]} )) && _theme-gtk-slot-holds "$served" "$base" "$build"; then
+            slot=$served
+        else
+            slot=${_THEME_GTK_SLOTS[1]}
+            [[ "$served" == "$slot" ]] && slot=${_THEME_GTK_SLOTS[2]}
+            _theme-gtk-slot-write "$slot" "$base" "$build" || { log-error "[theme] couldn't write GTK theme slot $slot"; return 1; }
+        fi
+        local -a lines=("${(@f)new}")
+        local i=${lines[(i)Net/ThemeName *]}
+        lines[i,i]=("# GTK theme slot $slot: ${base:t} with this build's gtk.css" "Net/ThemeName \"$slot\"")
+        new=${(F)lines}
+    fi
+    [[ -f "$out" && ! -L "$out" && "$(<"$out")" == "$new" ]] && return 0
+    print -r -- "$new" > "$out.tmp" && mv -Tf -- "$out.tmp" "$out"
 }
 
 # REPLY = the value of setting $1 in xsettingsd.conf $2, unquoted.
@@ -1544,36 +1638,49 @@ _theme-xsettingsd-get() {
 }
 
 # xsettingsd re-reads its config on SIGHUP and announces what changed. GTK 3
-# applies a new font, icon or cursor theme at once, but re-reads gtk.css (so
-# the new colours) only when Net/ThemeName changes. When the name stays the
-# same (dark to dark), the link goes to a copy with the name's other variant
-# (adw-gtk3-dark <-> adw-gtk3: the colours come from gtk.css either way, so
-# the flash is slight), HUP, a pause, then back and HUP again. A mode change
-# changes the name, so one HUP does. Live state and a running xsettingsd only;
-# the login hook starts it. A failed signal only warns: rolling the theme
-# back wouldn't reach xsettingsd either.
+# applies a new font, icon or cursor theme at once, and re-reads the GTK
+# theme when Net/ThemeName changes, which _theme-xsettingsd-serve makes it
+# do for every new build (a slot swap). Live state and a running xsettingsd
+# only; the login hook starts it. A failed signal only warns: rolling the
+# theme back wouldn't reach xsettingsd either.
 _theme-reload-xsettingsd() {
     _theme-live || return 0
-    _theme-link-dropins || log-warning "[theme] couldn't link the GTK and xsettingsd files"
+    [[ -r "$_THEME_STATE/current/xsettingsd.conf" ]] || { log-error "[theme] no $_THEME_STATE/current/xsettingsd.conf"; return 1; }
+    _theme-link-dropins || { log-error "[theme] couldn't write the GTK theme slot or xsettingsd.conf"; return 1; }
     pgrep -x -u $UID xsettingsd >/dev/null || return 0
-    local conf="$_THEME_STATE/current/xsettingsd.conf" link="$_THEME_STATE/$_THEME_XSETTINGSD_LINK"
-    local tmp="$_THEME_STATE/xsettingsd.toggle.conf" name live= other
-    [[ -r "$conf" ]] || { log-error "[theme] no $conf"; return 1; }
-    if _theme-xsettingsd-get Net/ThemeName "$conf"; then
-        name=$REPLY
-        [[ -n "${DISPLAY:-}" ]] && whence dump_xsettings >/dev/null &&
-            live=$(timeout 2 dump_xsettings 2>/dev/null | sed -n 's/^Net\/ThemeName "\(.*\)"$/\1/p')
-        if [[ -z "$live" || "$live" == "$name" ]]; then
-            [[ "$name" == *-dark ]] && other=${name%-dark} || other=$name-dark
-            sed "s|^Net/ThemeName .*|Net/ThemeName \"$other\"|" "$conf" > "$tmp" &&
-                _theme-link-to "$link" "${tmp:t}" &&
-                pkill -HUP -x -u $UID xsettingsd && sleep $_THEME_XSETTINGSD_TOGGLE_WAIT
-        fi
-    fi
-    _theme-link-to "$link" current/xsettingsd.conf || return 1
-    rm -f -- "$tmp"
     pkill -HUP -x -u $UID xsettingsd || log-warning "[theme] couldn't signal xsettingsd"
     return 0
+}
+
+# libadwaita apps ignore the GTK theme; their colours come from gtk-4.0/gtk.css
+# (theme.css -> current/gtk.css), which GTK 4 reads at start and again only
+# when the colour-scheme or contrast preference changes. libadwaita takes
+# both from the settings portal, which xdg-desktop-portal-gtk serves from
+# org.gnome.desktop.interface color-scheme and org.gnome.desktop.a11y.interface
+# high-contrast. A mode change already re-reads it (the gsettings reloader
+# writes color-scheme); for new colours in the same mode, high-contrast is
+# flipped for _THEME_GTK_NUDGE_WAIT and back, a brief high-contrast flash.
+# Only when gtk-4.0/gtk.css imports theme.css and current/gtk.css differs
+# from the one last served (gtk.served). $1: 1 when color-scheme was just
+# written. A failed write only warns.
+_theme-gtk4-nudge() {
+    local scheme_changed=$1 mark=$_THEME_STATE/gtk.served sum a11y=org.gnome.desktop.a11y.interface hc other
+    [[ -e "${XDG_CONFIG_HOME:-$HOME/.config}/gtk-4.0/theme.css" ]] || return 0
+    sum=$(sha256sum < "$_THEME_STATE/current/gtk.css") || return 0
+    sum=${sum%% *}
+    [[ -r "$mark" && "$(<"$mark")" == "$sum" ]] && return 0
+    if (( ! scheme_changed )) && gsettings writable $a11y high-contrast >/dev/null 2>&1; then
+        hc=$(gsettings get $a11y high-contrast 2>/dev/null)
+        [[ "$hc" == true ]] && other=false || { hc=false; other=true; }
+        if gsettings set $a11y high-contrast $other 2>/dev/null; then
+            sleep $_THEME_GTK_NUDGE_WAIT
+            gsettings set $a11y high-contrast $hc 2>/dev/null ||
+                log-warning "[theme] couldn't set $a11y high-contrast back to $hc; run: gsettings set $a11y high-contrast $hc"
+        else
+            log-warning "[theme] gsettings set $a11y high-contrast failed; running libadwaita apps keep their colours"
+        fi
+    fi
+    print -r -- "$sum" >| "$mark"
 }
 
 # GNOME's interface settings, read by libadwaita (color-scheme, through the
@@ -1597,13 +1704,16 @@ _theme-reload-gsettings() {
     [[ -n "${want[color-scheme]}" ]] || want[color-scheme]=default
     _theme-installed themes "${vals[2]}" && want[gtk-theme]=${vals[2]}
     _theme-installed icons "${vals[3]}" && want[icon-theme]=${vals[3]}
+    local scheme_changed=0
     for k in ${(ok)want}; do
         v=${want[$k]}
         [[ "$k" == cursor-size ]] || v="'$v'"
         cur=$(gsettings get $schema $k 2>/dev/null)
         [[ "$cur" == "$v" ]] && continue
         gsettings set $schema $k "$v" 2>/dev/null || log-warning "[theme] gsettings set $schema $k $v failed"
+        [[ "$k" == color-scheme ]] && scheme_changed=1
     done
+    _theme-gtk4-nudge $scheme_changed
     return 0
 }
 
@@ -2790,8 +2900,11 @@ theme-self-test() {
     done
     # THEME_CONFIG_DIR is pinned to this config: the reloader tests point
     # XDG_CONFIG_HOME at a scratch dir, which would otherwise move the
-    # schemes and templates out from under them.
+    # schemes and templates out from under them. XDG_DATA_HOME is scratch
+    # too: a forced-live reloader writes the GTK theme slots there.
+    mkdir -p "$scratch/data" || return 1
     ( XDG_STATE_HOME="$scratch/state" THEME_STATE_DIR="$scratch/state/theme" THEME_CACHE_DIR="$scratch/cache" \
+      XDG_DATA_HOME="$scratch/data" \
       THEME_CONFIG_DIR="$_THEME_CONFIG" \
       THEME_SELFTEST_REAL_MATUGEN="$(whence -p matugen)" THEME_SELFTEST_FIXTURE="$fixture" \
       THEME_WALLPAPER_DIRS="$scratch/walls:$scratch/pics:$scratch/missing" _theme-self-test-run "$scratch" )
@@ -2986,20 +3099,22 @@ _theme-self-test-run() {
         ok "validators: var() in gtk.css, a missing accent_bg_color, an unquoted xsettingsd string and a duplicate setting fail; Mocha's pass" ||
         bad "gtk.css/xsettingsd.conf validators"
 
-    # The GTK reloaders: skipped for a scratch state; forced live, the links,
-    # the Net/ThemeName toggle around the HUP, and gsettings only where a key
-    # differs. Every command stubbed, in a subshell, which applies themes and
-    # so takes the lock.
+    # The GTK reloaders: skipped for a scratch state. Forced live: each new
+    # build goes into the GTK theme slot not served and xsettingsd.conf names
+    # it (one HUP); a repeat reload keeps the slot; theme.css only beside a
+    # gtk.css that imports it; gsettings only where a key differs, and the
+    # high-contrast nudge only for new colours in the same mode. Every
+    # command stubbed, in a subshell, which applies themes and so takes the
+    # lock.
     _theme-unlock
     (
-        local calls="$scratch/gtk-calls" cfg="$scratch/gtk-config" out
+        local calls="$scratch/gtk-calls" cfg="$scratch/gtk-config" out conf served slots base dark_base= light_base=
         local -A gs=()
         pass=0 failed=0
         trap 'print -r -- "$pass $failed" >| "$scratch/gtk-counts"' EXIT
         pgrep() { return 0; }
         timeout() { shift; "$@"; }
-        pkill() { print -r -- "pkill $* -> $(readlink "$_THEME_STATE/$_THEME_XSETTINGSD_LINK") $(grep '^Net/ThemeName' "$_THEME_STATE/$_THEME_XSETTINGSD_LINK")" >> "$calls"; }
-        dump_xsettings() { [[ -n "${_st_live:-}" ]] && print -r -- "Net/ThemeName \"$_st_live\""; }
+        pkill() { print -r -- "pkill $* -> $(grep '^Net/ThemeName' "$_THEME_STATE/$_THEME_XSETTINGSD_CONF")" >> "$calls"; }
         gsettings() {
             case $1 in
                 writable) print true ;;
@@ -3007,56 +3122,114 @@ _theme-self-test-run() {
                 set) print -r -- "gsettings set $3 $4" >> "$calls"; gs[$3]=$4 ;;
             esac
         }
-        DISPLAY=:theme-self-test XDG_CONFIG_HOME=$cfg _THEME_XSETTINGSD_TOGGLE_WAIT=0
+        DISPLAY=:theme-self-test XDG_CONFIG_HOME=$cfg _THEME_GTK_NUDGE_WAIT=0
+        conf=$_THEME_STATE/$_THEME_XSETTINGSD_CONF slots=$XDG_DATA_HOME/themes
+        _theme-installed themes adw-gtk3-dark && dark_base=$REPLY
+        _theme-installed themes adw-gtk3 && light_base=$REPLY
+        # gtk-3.0 as stowed now (no import) with a theme.css left by the old
+        # scheme; gtk-4.0 imports theme.css.
         mkdir -p "$cfg/gtk-3.0" "$cfg/gtk-4.0"
         : > "$cfg/gtk-3.0/gtk.css"
-        # The forced-live dunst reload above made it.
-        rm -f -- "$_THEME_STATE/$_THEME_XSETTINGSD_LINK"
+        print -r -- '@import url("theme.css");' > "$cfg/gtk-4.0/gtk.css"
+        ln -sfn -- "$_THEME_STATE/current/gtk.css" "$cfg/gtk-3.0/theme.css"
+        # The forced-live dunst reload above made them.
+        rm -rf -- "$conf" "$slots"
         _theme-reload xsettingsd gsettings
-        [[ ! -e "$calls" && ! -e "$cfg/gtk-3.0/theme.css" && ! -e "$_THEME_STATE/$_THEME_XSETTINGSD_LINK" ]] &&
-            ok "xsettingsd and gsettings reloads skipped for a scratch state dir" ||
-            bad "a scratch state reached xsettingsd/gsettings: $(cat "$calls" 2>/dev/null) $(ls -d "$cfg/gtk-3.0/theme.css" "$_THEME_STATE/$_THEME_XSETTINGSD_LINK" 2>/dev/null)"
-        for c in pgrep pkill timeout dump_xsettings gsettings; do
+        [[ ! -e "$calls" && ! -e "$cfg/gtk-4.0/theme.css" && -L "$cfg/gtk-3.0/theme.css" && ! -e "$conf" && ! -e "$slots" ]] &&
+            ok "xsettingsd and gsettings reloads skipped for a scratch state dir (no slot, conf or link written)" ||
+            bad "a scratch state reached xsettingsd/gsettings: $(cat "$calls" 2>/dev/null) $(ls -d "$cfg/gtk-4.0/theme.css" "$conf" "$slots" 2>/dev/null)"
+        for c in pgrep pkill timeout gsettings; do
             [[ "$(whence -w $c)" == "$c: function" ]] || { bad "stub for $c not in place; GTK reloaders not exercised"; exit; }
         done
         _theme-live() { return 0; }
         local tn=$(grep '^Net/ThemeName' "$cur/xsettingsd.conf")
+        # The served conf is current/xsettingsd.conf with only the theme name
+        # (and a comment) changed.
+        _served-as() {
+            [[ -f "$conf" && ! -L "$conf" ]] && _theme-validate-xsettingsd "$conf" >/dev/null &&
+                [[ "$(grep -v '^#' "$conf" | grep -v '^Net/ThemeName')" == "$(grep -v '^#' "$cur/xsettingsd.conf" | grep -v '^Net/ThemeName')" ]] || return 1
+            if [[ -n "$tn" ]]; then
+                [[ "$(grep '^Net/ThemeName' "$conf")" == "Net/ThemeName \"$1\"" ]] &&
+                    cmp -s "$cur/gtk.css" "$slots/$1/gtk-3.0/colours.css" && cmp -s "$cur/gtk.css" "$slots/$1/gtk-4.0/colours.css" &&
+                    grep -qxF "@import url(\"file://$2/gtk-3.0/gtk.css\");" "$slots/$1/gtk-3.0/gtk.css" &&
+                    grep -qxF "@import url(\"file://$2/gtk-4.0/gtk.css\");" "$slots/$1/gtk-4.0/gtk.css" &&
+                    grep -qx "GtkTheme=$1" "$slots/$1/index.theme"
+            else
+                ! grep -q '^Net/ThemeName' "$conf"
+            fi
+        }
         _theme-reload-xsettingsd
-        out=$(<"$calls")
-        if [[ -n "$tn" ]]; then
-            [[ "$out" == "pkill -HUP -x -u $UID xsettingsd -> xsettingsd.toggle.conf Net/ThemeName \"adw-gtk3\""$'\n'"pkill -HUP -x -u $UID xsettingsd -> current/xsettingsd.conf $tn" ]]
-        else
-            [[ "$out" == "pkill -HUP -x -u $UID xsettingsd -> current/xsettingsd.conf " ]]
-        fi && [[ "$(readlink "$cfg/gtk-3.0/theme.css")" == "$_THEME_STATE/current/gtk.css" && ! -e "$cfg/gtk-4.0/theme.css" &&
-                  ! -e "$_THEME_STATE/xsettingsd.toggle.conf" ]] &&
-            ok "xsettingsd reload: gtk-3.0/theme.css -> current/gtk.css (not gtk-4.0, no gtk.css there); ${tn:+same theme name: HUP on adw-gtk3, then on current/xsettingsd.conf}" ||
-            bad "xsettingsd reload: ${(f)out}; theme.css -> $(readlink "$cfg/gtk-3.0/theme.css")"
+        [[ "$(<"$calls")" == "pkill -HUP -x -u $UID xsettingsd -> ${tn:+Net/ThemeName \"theme-live-a\"}" ]] && _served-as theme-live-a "$dark_base" &&
+           [[ "$(readlink "$cfg/gtk-4.0/theme.css")" == "$_THEME_STATE/current/gtk.css" && ! -e "$cfg/gtk-3.0/theme.css" && ! -e "$cfg/gtk-3.0/theme.css.tmp" ]] &&
+            ok "xsettingsd reload: ${tn:+slot theme-live-a = adw-gtk3-dark + Mocha's gtk.css, named in xsettingsd.conf, }one HUP; gtk-4.0/theme.css -> current/gtk.css, gtk-3.0's (no import) removed" ||
+            bad "xsettingsd reload: ${(f)$(<"$calls")}; $(grep -v '^#' "$conf" 2>/dev/null | tr '\n' ' '); gtk-3.0/theme.css $(readlink "$cfg/gtk-3.0/theme.css"), gtk-4.0/theme.css $(readlink "$cfg/gtk-4.0/theme.css")"
         : >| "$calls"
-        if [[ -n "$tn" ]]; then
-            _st_live=adw-gtk3 _theme-reload-xsettingsd
-            [[ "$(<"$calls")" == "pkill -HUP -x -u $UID xsettingsd -> current/xsettingsd.conf $tn" ]] &&
-                ok "xsettingsd reload after a mode change (live adw-gtk3): one HUP, no toggle" ||
-                bad "xsettingsd reload after a mode change: $(<"$calls")"
-            : >| "$calls"
-        fi
+        served=$(zstat +inode -- "$conf" "$slots"/*/gtk-3.0/colours.css(N) 2>/dev/null)
+        _theme-reload-xsettingsd
+        [[ "$(<"$calls")" == "pkill -HUP -x -u $UID xsettingsd -> ${tn:+Net/ThemeName \"theme-live-a\"}" && ! -e "$slots/theme-live-b" &&
+           "$(zstat +inode -- "$conf" "$slots"/*/gtk-3.0/colours.css(N) 2>/dev/null)" == "$served" ]] && _served-as theme-live-a "$dark_base" &&
+            ok "xsettingsd reload again: same slot, nothing rewritten" ||
+            bad "xsettingsd reload again: ${(f)$(<"$calls")}; slots $(ls "$slots" 2>/dev/null | tr '\n' ' ')"
+        : >| "$calls"
         _theme-reload-gsettings
         out=$(<"$calls")
         [[ "$out" == *"gsettings set color-scheme 'prefer-dark'"* && "$out" == *"gsettings set font-name 'Roboto Mono for Powerline 12.5'"* &&
-           "$out" == *"gsettings set cursor-theme 'Adwaita'"* && "$out" == *"gsettings set cursor-size 30"* ]] &&
+           "$out" == *"gsettings set cursor-theme 'Adwaita'"* && "$out" == *"gsettings set cursor-size 30"* &&
+           "$out" != *high-contrast* && "$(<"$_THEME_STATE/gtk.served")" == "${$(sha256sum < "$cur/gtk.css")%% *}" ]] &&
            { [[ -z "$gtk_dark" ]] || [[ "$out" == *"gsettings set gtk-theme 'adw-gtk3-dark'"* ]]; } &&
            { [[ -z "$ic_dark" ]] || [[ "$out" == *"gsettings set icon-theme 'Papirus-Dark'"* ]]; } &&
-            ok "gsettings reload: color-scheme prefer-dark, font, cursor${gtk_dark:+, gtk-theme}${ic_dark:+, icon-theme}" ||
+            ok "gsettings reload: color-scheme prefer-dark (libadwaita re-reads gtk.css, no nudge), font, cursor${gtk_dark:+, gtk-theme}${ic_dark:+, icon-theme}; gtk.served recorded" ||
             bad "gsettings reload: ${(f)out}"
         : >| "$calls"
         _theme-reload-gsettings
-        [[ ! -s "$calls" ]] && ok "gsettings reload again: nothing written (every key already matches)" ||
+        [[ ! -s "$calls" ]] && ok "gsettings reload again: nothing written (every key matches, colours already served)" ||
             bad "gsettings rewrote: $(<"$calls")"
-        # Applied as a scratch state again, so no other reloader runs live.
-        _theme-live() { return 1; }; theme-apply catppuccin-latte >/dev/null 2>&1; _theme-live() { return 0; }
+        # Applied as a scratch state, so no other reloader runs live.
+        _theme-live() { return 1; }; theme-apply dracula >/dev/null 2>&1; _theme-live() { return 0; }
+        : >| "$calls"
+        _theme-reload-xsettingsd
+        [[ "$(<"$calls")" == "pkill -HUP -x -u $UID xsettingsd -> ${tn:+Net/ThemeName \"theme-live-b\"}" ]] && _served-as theme-live-b "$dark_base" &&
+           { [[ -z "$tn" ]] || ! cmp -s "$cur/gtk.css" "$slots/theme-live-a/gtk-3.0/colours.css"; } &&
+            ok "xsettingsd reload under dracula: ${tn:+the other slot, theme-live-b, with dracula's gtk.css (a keeps Mocha's), }one HUP" ||
+            bad "xsettingsd reload under dracula: ${(f)$(<"$calls")}; $(grep '^Net/ThemeName' "$conf")"
         : >| "$calls"
         _theme-reload-gsettings
-        [[ "$(<"$calls")" == *"gsettings set color-scheme 'default'"* ]] && ok "gsettings under catppuccin-latte: color-scheme default" ||
-            bad "gsettings under latte: $(<"$calls")"
+        [[ "$(<"$calls")" == "gsettings set high-contrast true"$'\n'"gsettings set high-contrast false" ]] &&
+            ok "gsettings reload under dracula (same mode, new colours): high-contrast on and back, nothing else" ||
+            bad "gsettings under dracula: ${(f)$(<"$calls")}"
+        _theme-live() { return 1; }; theme-apply catppuccin-latte >/dev/null 2>&1; _theme-live() { return 0; }
+        : >| "$calls"
+        _theme-reload-xsettingsd
+        _theme-reload-gsettings
+        out=$(<"$calls")
+        [[ "$out" == *"gsettings set color-scheme 'default'"* && "$out" != *high-contrast* ]] &&
+           { [[ -z "$light_base" ]] || _served-as theme-live-a "$light_base"; } &&
+            ok "under catppuccin-latte: ${light_base:+slot theme-live-a now adw-gtk3 + Latte's gtk.css; }color-scheme default, no nudge" ||
+            bad "under latte: ${(f)out}; $(grep '^Net/ThemeName' "$conf")"
+        # An xsettingsd.conf left as a link (the old scheme) is replaced by a
+        # file; with the base theme not installed, the conf is served as built.
+        ln -sfn current/xsettingsd.conf "$conf"
+        _theme-reload-xsettingsd
+        [[ -f "$conf" && ! -L "$conf" ]] && { [[ -z "$light_base" ]] || _served-as theme-live-a "$light_base"; } &&
+            ok "xsettingsd.conf left as a link to current/ is replaced by a served file" ||
+            bad "xsettingsd.conf link not replaced: $(ls -l "$conf")"
+        _theme-live() { return 1; }
+        XDG_DATA_HOME="$scratch/nodata" XDG_DATA_DIRS="$scratch/nodata" HOME="$scratch/nodata" theme-apply catppuccin-mocha >/dev/null 2>&1
+        _theme-live() { return 0; }
+        tn=
+        XDG_DATA_HOME="$scratch/nodata" XDG_DATA_DIRS="$scratch/nodata" HOME="$scratch/nodata" _theme-reload-xsettingsd
+        [[ "$(grep -v '^# Gen' "$conf")" == "$(grep -v '^# Gen' "$cur/xsettingsd.conf")" ]] &&
+            ok "base GTK theme not installed: xsettingsd.conf served as built, no slot named" ||
+            bad "xsettingsd.conf with no base theme: $(grep -v '^#' "$conf" | tr '\n' ' ')"
+        # No gtk-4.0 import: no theme.css there, so no nudge and no mark.
+        : > "$cfg/gtk-4.0/gtk.css"
+        rm -f -- "$_THEME_STATE/gtk.served"
+        _theme-live() { return 1; }; theme-apply dracula >/dev/null 2>&1; _theme-live() { return 0; }
+        : >| "$calls"
+        _theme-link-dropins; _theme-reload-gsettings
+        [[ ! -e "$cfg/gtk-4.0/theme.css" && "$(<"$calls")" != *high-contrast* && ! -e "$_THEME_STATE/gtk.served" ]] &&
+            ok "gtk-4.0/gtk.css without the import: its theme.css removed, no nudge" ||
+            bad "gtk-4.0 without import: theme.css $(readlink "$cfg/gtk-4.0/theme.css"), calls ${(f)$(<"$calls")}"
         _theme-live() { return 1; }; theme-apply catppuccin-mocha >/dev/null 2>&1
     )
     local -a gcounts=(${=$(<"$scratch/gtk-counts")})
