@@ -924,7 +924,7 @@ _theme-activate() {
     _theme-history-pop
     if [[ -n "$prev" ]] && _theme-link current "$prev" && _theme-reload; then
         log-warning "[theme] restored the previous build $prev"
-    elif [[ -n "$kg" ]] && _theme-link current "$kg" && _theme-reload; then
+    elif [[ -n "$kg" ]] && _theme-build-complete "$kg" && _theme-link current "$kg" && _theme-reload; then
         log-warning "[theme] restored known-good $kg"
     else
         log-error "[theme] rollback failed too; run: theme apply default"
@@ -968,7 +968,8 @@ theme-apply() {
         [[ -n "$target" ]] || target=$_THEME_DEFAULT_SCHEME
     fi
     if _theme-build-ok "$target"; then
-        id=$target
+        _theme-build-fresh "$target" || return 1
+        id=$REPLY
         name=$(jq -r .name "$_THEME_STATE/builds/$id/spec.json")
     else
         _theme-build "$target" || return 1
@@ -1154,28 +1155,47 @@ theme-swatch() {
     fi
 }
 
-# True when state link $1 points at a build holding every template's output.
-# A build made before a template was added (polybar.ini, say) is incomplete,
-# and polybar can't start without its include.
-_theme-link-complete() {
-    _theme-link-id "$1" || return 1
+# True when build $1 holds every template's output. A build made before a
+# template was added (polybar.ini, say) is incomplete, and polybar can't
+# start without its include.
+_theme-build-complete() {
+    _theme-build-ok "$1" || return 1
     local t
     for t in "$_THEME_TEMPLATES"/*.tmpl(N:t:r); do
-        [[ -r "$_THEME_STATE/$1/$t" ]] || return 1
+        [[ -r "$_THEME_STATE/builds/$1/$t" ]] || return 1
     done
 }
 
+# True when state link $1 points at a complete build; REPLY = its id.
+_theme-link-complete() {
+    _theme-link-id "$1" && _theme-build-complete "$REPLY"
+}
+
+# REPLY = a complete build of build $1's theme: $1 itself, or, when it lacks
+# an output, a fresh render of its source (same scheme; prefs and overrides
+# as they are now). Returns 1, leaving everything as it was, when the source
+# can't be rendered (its scheme file gone, say).
+_theme-build-fresh() {
+    local id=$1 ref
+    _theme-build-complete "$id" && { REPLY=$id; return 0; }
+    _theme-build-ok "$id" || { log-error "[theme] no build $id"; return 1; }
+    ref=$(jq -r '.source.ref // .name' "$_THEME_STATE/builds/$id/spec.json")
+    log-warning "[theme] build $id lacks an output (made before a template existed); re-rendering $ref"
+    _theme-build "$ref" && return 0
+    log-error "[theme] cannot re-render $id from '$ref'; nothing changed"
+    return 1
+}
+
 theme-ensure() {
-    local id name t0=$EPOCHREALTIME
+    local id t0=$EPOCHREALTIME
     _theme-paths
     _theme-link-complete current && return 0
     _theme-lock || return 1
     _theme-link-complete current && return 0
-    # Incomplete: rebuild the same theme so a new template doesn't change it.
+    # Incomplete: apply re-renders the same theme so a new template doesn't
+    # change it.
     if _theme-link-id current; then
-        name=$(jq -r '.source.ref // .name' "$_THEME_STATE/current/spec.json")
-        log-warning "[theme] current build lacks an output; re-rendering $name"
-        theme-apply "$name" && return 0
+        theme-apply "$REPLY" && return 0
     fi
     if _theme-link-complete known-good; then
         id=$REPLY
@@ -1184,6 +1204,9 @@ theme-ensure() {
         _theme-ms-since $t0
         log-warning "[theme] current was missing; re-activated known-good $id in ${REPLY} ms"
         return 0
+    fi
+    if _theme-link-id known-good; then
+        theme-apply "$REPLY" && return 0
     fi
     log-warning "[theme] no usable build; rendering the default"
     theme-apply default
@@ -1207,6 +1230,11 @@ theme-undo() {
         _theme-link-id current && _theme-history-push "$REPLY" "$(jq -r .name "$_THEME_STATE/current/spec.json")"
         return 1
     fi
+    if ! _theme-build-fresh "$id"; then
+        _theme-link-id current && _theme-history-push "$REPLY" "$(jq -r .name "$_THEME_STATE/current/spec.json")"
+        return 1
+    fi
+    id=$REPLY
     line=$(tail -n 1 "$_THEME_STATE/history")
     name=${line#*$'\t'}
     _theme-history-pop
@@ -1418,6 +1446,44 @@ _theme-self-test-run() {
     [[ "${THEME_META[name]}" == nord && -r "$_THEME_STATE/current/polybar.ini" ]] &&
         ok "ensure: a build missing polybar.ini is re-rendered (still nord)" ||
         bad "ensure on an incomplete build left ${THEME_META[name]}"
+    # apply <id>, undo and a known-good fallback re-render a build from
+    # before a template existed rather than swap it in and break polybar.
+    local old new
+    theme-apply nord 2>/dev/null; _theme-link-id current; old=$REPLY
+    rm -f "$_THEME_STATE/builds/$old/polybar.ini"
+    theme-apply dracula 2>/dev/null
+    theme-apply "$old" 2>"$scratch/err"; _theme-link-id current; new=$REPLY
+    [[ "$new" != "$old" ]] && _theme-build-complete "$new" && grep -q 're-rendering nord' "$scratch/err" &&
+       [[ "$(jq -r .name "$_THEME_STATE/current/spec.json")" == nord ]] &&
+        ok "apply <old id>: a build missing polybar.ini is re-rendered as a new nord build, with a warning" ||
+        bad "apply <old id>: current=$new (old $old): $(<"$scratch/err")"
+    rm -f "$_THEME_STATE/builds/$new/polybar.ini"
+    theme-apply dracula 2>/dev/null
+    theme-undo 2>"$scratch/err"; _theme-link-id current
+    [[ "$REPLY" != "$new" ]] && _theme-build-complete "$REPLY" && grep -q 're-rendering nord' "$scratch/err" &&
+       [[ "$(jq -r .name "$_THEME_STATE/current/spec.json")" == nord ]] &&
+        ok "undo to a build missing polybar.ini re-renders it (still nord)" ||
+        bad "undo to an incomplete build: current=$REPLY: $(<"$scratch/err")"
+    _theme-link known-good "$new"; rm -f "$_THEME_STATE/current"
+    theme-ensure 2>/dev/null; _theme-link-id current
+    [[ "$REPLY" != "$new" ]] && _theme-build-complete "$REPLY" &&
+       [[ "$(jq -r .name "$_THEME_STATE/current/spec.json")" == nord ]] &&
+        ok "ensure: an incomplete known-good is re-rendered (still nord)" ||
+        bad "ensure with an incomplete known-good: current=$REPLY"
+    # A build whose scheme is gone can't be re-rendered: refused, nothing swapped.
+    jq '.source.ref = "self-test-gone" | .name = "self-test-gone"' "$_THEME_STATE/builds/$new/spec.json" \
+        > "$scratch/spec.json" && mv -f "$scratch/spec.json" "$_THEME_STATE/builds/$new/spec.json"
+    _theme-link-id current; before=$REPLY
+    bl=("$_THEME_STATE"/builds/*(N/)); nb=${#bl}
+    if theme-apply "$new" 2>/dev/null; then
+        bad "apply <old id> with its scheme gone succeeded"
+    else
+        _theme-link-id current
+        bl=("$_THEME_STATE"/builds/*(N/))
+        [[ "$REPLY" == "$before" && ${#bl} -eq $nb ]] &&
+            ok "apply <old id> with its scheme gone: refused, current unchanged" ||
+            bad "apply <old id> with its scheme gone left current=$REPLY builds $nb->${#bl}"
+    fi
     _theme-link-id known-good; kg=$REPLY
     rm -rf -- "$_THEME_STATE"
     theme-ensure 2>/dev/null
