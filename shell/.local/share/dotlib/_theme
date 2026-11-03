@@ -342,6 +342,13 @@ Commands:
   wallpaper restore                 Set the recorded wallpaper again and
                                     refresh the lock screen's cache if it
                                     changed (.zlogin.d/90-feh)
+  pick [schemes|wallpapers] [--dry-run]
+                                    rofi picker (super + alt + space): each
+                                    scheme with a preview of its colours, the
+                                    current one marked, then Wallpapers and
+                                    the dark/light switch; or the wallpapers
+                                    with thumbnails. Enter applies; --dry-run
+                                    prints the command instead (_theme_ui)
   reload [target...]                Re-run reloaders (default all; targets:
                                     rofi, alacritty, polybar, bspwm, dunst,
                                     xresources, wallpaper, lockscreen,
@@ -2659,6 +2666,88 @@ _theme-wallpaper-restore() {
     log-success "[theme] wallpaper ${wall/#$HOME/~}"
 }
 
+# theme pick (_theme_ui) against a rofi stub that records each call's
+# arguments and rows in $scratch/rofi/{args,rows}.<n> and answers from
+# $scratch/rofi/picks, a row index per line (an empty line or none is
+# Escape). DISPLAY is unset as well, so nothing reaches a screen. Called from
+# _theme-self-test-run, whose ok/bad it uses.
+_theme-self-test-pick() {
+    local scratch=$1 r=$1/rofi out before line
+    local -i nrows nschemes mocha=-1 nord=-1 i
+    local -a rows
+    if ! source "${DOTLIB}/_theme_ui" 2>/dev/null; then
+        bad "pick: can't source ${DOTLIB}/_theme_ui"
+        return 0
+    fi
+    mkdir -p "$scratch/rbin" || return 1
+    print -rl -- '#!/bin/sh' "d='$r'" \
+        'n=$(( $(cat "$d/n" 2>/dev/null || echo 0) + 1 )); echo $n > "$d/n"' \
+        'printf "%s\n" "$@" > "$d/args.$n"; cat > "$d/rows.$n"' \
+        'p=$(sed -n 1p "$d/picks" 2>/dev/null); sed -i 1d "$d/picks" 2>/dev/null' \
+        '[ -n "$p" ] || exit 1' 'echo "$p"' > "$scratch/rbin/rofi" && chmod +x "$scratch/rbin/rofi" || return 1
+    # pick <theme-pick args, one word> <rofi answers...>; stdout is pick's.
+    pick() {
+        # The subshell is a child: it would wait on this process's lock.
+        _theme-unlock
+        rm -rf -- "$r"; mkdir -p "$r"
+        print -rl -- "${@[2,-1]}" > "$r/picks"
+        ( path=("$scratch/rbin" $path); hash -r; unset DISPLAY WAYLAND_DISPLAY
+          theme-pick ${=1} 2>>"$scratch/pick-err" )
+    }
+
+    theme-apply catppuccin-mocha 2>/dev/null
+    _theme-link-id current; before=$REPLY
+    pick ''
+    rows=("${(@f)$(<"$r/rows.1")}")
+    nrows=${#rows}
+    nschemes=${#${(@f)"$(print -l "$_THEME_CONFIG"/schemes/*.y(a|)ml(N))"}}
+    for (( i = 1; i <= nrows; i++ )); do
+        [[ "${rows[i]}" == *">  Catppuccin Mocha  <"* ]] && mocha=$(( i - 1 ))
+        [[ "${rows[i]}" == *">  Nord  <"* ]] && nord=$(( i - 1 ))
+    done
+    (( nrows == nschemes + 2 )) && [[ "${rows[-2]}" == Wallpapers* && "${rows[-1]}" == "Light mode"* ]] &&
+        ok "pick: $nschemes scheme rows, then Wallpapers and Light mode" ||
+        bad "pick: $nrows rows for $nschemes schemes, last two '${rows[-2]%% *}' '${rows[-1]%% *}'"
+    (( mocha >= 0 )) && [[ "${rows[mocha + 1]}" == *"dark · current"* ]] &&
+       grep -qx -- -a "$r/args.1" && [[ "$(grep -A1 -x -- -a "$r/args.1" | tail -1)" == "$mocha" &&
+       "$(grep -A1 -x -- -selected-row "$r/args.1" | tail -1)" == "$mocha" ]] &&
+        ok "pick: the applied catppuccin-mocha is marked current, active and selected" ||
+        bad "pick: current row $mocha: ${rows[mocha + 1]} / args $(tr '\n' ' ' < "$r/args.1")"
+    (( nord >= 0 )) && [[ "${rows[nord + 1]}" == *"background='#2e3440'"*"foreground='#88c0d0'"* ]] &&
+        ok "pick: nord's chip is its resolved bg #2e3440 and accent #88c0d0" ||
+        bad "pick: nord row: ${rows[nord + 1]:-missing}"
+    _theme-link-id current
+    [[ "$REPLY" == "$before" && "$(<"$r/n")" == 1 ]] && ok "pick: Escape applies nothing" ||
+        bad "pick: Escape changed the theme or reopened rofi"
+    _theme-cache-dir
+    [[ -s "$REPLY/pick/nord" ]] && ok "pick: swatches cached in pick/" || bad "pick: no swatch cache"
+
+    out=$(pick --dry-run "$nord")
+    _theme-link-id current
+    [[ "$out" == "theme apply nord" && "$REPLY" == "$before" ]] && ok "pick --dry-run: prints 'theme apply nord', applies nothing" ||
+        bad "pick --dry-run printed '$out'"
+    out=$(pick --dry-run $(( nrows - 1 )))
+    [[ "$out" == "theme mode toggle" ]] && ok "pick --dry-run: the last row is 'theme mode toggle'" ||
+        bad "pick --dry-run mode row printed '$out'"
+
+    pick '' "$nord" >/dev/null
+    _theme-source-current
+    [[ "${THEME_META[name]}" == nord ]] && ok "pick: Enter on Nord applied nord" ||
+        bad "pick: Enter on Nord left ${THEME_META[name]} ($(<"$scratch/pick-err"))"
+
+    # Wallpapers, then Escape: back to the schemes, whose Escape ends it.
+    pick '' $(( nrows - 2 ))
+    [[ "$(<"$r/n")" == 3 ]] && grep -qx Wallpaper "$r/args.2" && grep -qx -- -show-icons "$r/args.2" &&
+       (( $(grep -ac $'\x1f' "$r/rows.2") == 4 )) &&
+        ok "pick: Wallpapers opens 4 thumbnail rows; Escape there goes back to the schemes" ||
+        bad "pick: wallpapers flow: $(<"$r/n") rofi calls, $(grep -ac $'\x1f' "$r/rows.2" 2>/dev/null) icon rows"
+    out=$(pick 'wallpapers --dry-run' 0)
+    [[ "$out" == "theme wallpaper $scratch/walls/0001.png" ]] &&
+        ok "pick wallpapers --dry-run: prints 'theme wallpaper .../0001.png'" ||
+        bad "pick wallpapers --dry-run printed '$out'"
+    unfunction pick
+}
+
 # Generated sources, with the matugen stub first on PATH (theme-self-test):
 # the fixture's shape, colour and image sources, the cache, the knobs,
 # mode, --keep-palette, hue anchoring, next/previous/random and failures.
@@ -2860,7 +2949,7 @@ _theme-self-test-generated() {
 }
 
 # Commands self-test shadows with logging guard stubs for its whole run.
-declare -gr _THEME_SELFTEST_GUARDED='betterlockscreen feh polybar-msg bspc coord dunstctl xrdb gsettings xsettingsd'
+declare -gr _THEME_SELFTEST_GUARDED='betterlockscreen feh polybar-msg bspc coord dunstctl xrdb gsettings xsettingsd notify-send'
 
 # Renders every scheme into a scratch state dir under ~/.cache and checks the
 # swap, undo, rollback and known-good behaviour. The real state is untouched.
@@ -3573,6 +3662,8 @@ _theme-self-test-run() {
         ok "overrides.json: scale 1.5 -> terminal 19.5, accent base0E -> #cba6f7" ||
         bad "overrides: terminal ${THEME_SIZE[terminal]} accent ${THEME_ROLE[accent]}"
     rm -f "$_THEME_STATE/overrides.json"
+
+    _theme-self-test-pick "$scratch"
 
     sleep 0.3
     [[ ! -s "$scratch/escaped-calls" ]] && ok "no desktop command escaped to a guard stub" ||

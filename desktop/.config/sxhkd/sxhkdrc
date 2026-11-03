@@ -18,6 +18,10 @@ super + Return + {_, alt, shift}
 super + space
   rofi -show drun -show-icons -theme launcher
 
+# theme - picker: schemes with a colour preview (current marked), wallpapers, dark/light
+super + alt + space
+  theme pick
+
 # preselect on {north, south, west, east} postion
 super + {Up, Down, Left, Right}
   bspc node -p "{~north,~south,~west,~east}"

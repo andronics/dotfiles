@@ -3,6 +3,8 @@ set -e
 
 source "${DOTLIB}/_dispatcher" || { echo "missing _dispatcher" >&2; exit 1; }
 source "${DOTLIB}/_theme"      || { echo "missing _theme"      >&2; exit 1; }
+# Optional: login (theme ensure) must not depend on the picker.
+source "${DOTLIB}/_theme_ui"   2>/dev/null || true
 
 dispatcher-init "theme" \
     --route=function \

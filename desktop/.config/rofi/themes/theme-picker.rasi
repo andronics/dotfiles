@@ -1,0 +1,61 @@
+/**
+ * Theme picker (theme pick, dotlib _theme_ui; super + alt + space). Each
+ * scheme row starts with a chip in that scheme's own colours, drawn in pango
+ * by _theme_ui, so light schemes show up on a dark menu and the reverse. The
+ * applied scheme is active: an accent ring, not base.rasi's green fill, which
+ * would hide its chip. The wallpaper view adds the icon column back with
+ * -theme-str for its thumbnails.
+ */
+
+@import "../base.rasi"
+
+window {
+    location:            center;
+    anchor:              center;
+    width:               760px;
+    border-radius:       @radius-lg;
+}
+
+mainbox {
+    padding:             8px;
+    spacing:             6px;
+    children:            [ inputbar, message, listview ];
+}
+
+inputbar {
+    border:              0px;
+    border-radius:       @radius;
+    padding:             10px 12px;
+}
+
+entry {
+    placeholder:         "Filter themes";
+}
+
+listview {
+    lines:               12;
+    padding:             0px;
+    spacing:             2px;
+    scrollbar:           false;
+}
+
+/* Scheme rows carry their preview in the text: no icon column. */
+element {
+    padding:             6px 12px;
+    children:            [ element-text ];
+    border:              2px;
+    border-color:        transparent;
+}
+
+element normal.active,
+element alternate.active {
+    background-color:    transparent;
+    text-color:          @fg-color;
+    border-color:        @accent-color;
+}
+
+element selected.active {
+    background-color:    @accent-color;
+    text-color:          @accent-fg-color;
+    border-color:        @accent-color;
+}

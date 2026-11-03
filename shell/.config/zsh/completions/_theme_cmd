@@ -8,9 +8,9 @@
 # or shadow, it if ${DOTLIB} ever ended up on fpath. #compdef binds it to the
 # `theme` command whatever the function is called.
 #
-# Everything offered comes from the module itself, read in a `zsh -f` child
-# so the interactive shell neither pays for loading _theme nor gets its
-# readonly THEME_LOADED: subcommands from the theme-* functions and
+# Everything offered comes from the modules themselves (_theme, and
+# _theme_ui for pick), read in a `zsh -f` child so the interactive shell
+# neither pays for loading _theme nor gets its readonly THEME_LOADED: subcommands from the theme-* functions and
 # _THEME_DESCRIPTIONS, schemes from `theme list schemes`, builds from the
 # history, keys from the current theme.zsh (or _THEME_FALLBACK), reload
 # targets from _THEME_RELOADERS, wallpapers from _theme-wallpaper-list (the
@@ -23,6 +23,7 @@ _theme_cmd_data() {
     DOTLIB=${DOTLIB:-${XDG_DATA_HOME:-$HOME/.local/share}/dotlib} \
     command zsh -fc '
         source "$DOTLIB/_theme" || exit 1
+        source "$DOTLIB/_theme_ui" 2>/dev/null
         _theme-paths
         local f s line id name cur= marker title map ref k
         local -a w seen
@@ -291,6 +292,14 @@ _theme_cmd() {
                         (( ${words[(I)--keep-palette]} )) || k=('--keep-palette:keep the current colours (else they come from the image)')
                         _theme_cmd_genopts "${k[@]}" && ret=0
                     fi
+                    ;;
+                pick)
+                    local -a o=() done=("${(@)words[2,CURRENT-1]}")
+                    (( ${done[(I)(wallpapers|schemes)]} )) || o+=(
+                        'schemes:schemes with a colour preview, then Wallpapers and the dark/light switch (default)'
+                        'wallpapers:wallpapers with thumbnails; Enter takes the colours from the picture')
+                    (( ${done[(I)--dry-run]} )) || o+=('--dry-run:print the command picked instead of running it')
+                    (( ${#o} )) && _describe -t what 'pick' o && ret=0
                     ;;
                 current)
                     (( CURRENT == 2 )) || return 1
