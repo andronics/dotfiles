@@ -21,15 +21,16 @@ ui   = "Roboto Mono for Powerline"
 mono = "Source Code Pro for Powerline"
 icon = "Symbols Nerd Font Mono"
 
-# Pixels. gap and bar_height are used as is (the bar keeps its height and
-# its text grows inside it); border, radius and padding are multiplied by
-# fonts.scale and rounded.
+# Pixels. gap, cell_gap and bar_height are used as is (the bar keeps its
+# height and its text grows inside it); border, radius and padding are
+# multiplied by fonts.scale and rounded.
 [metrics]
 gap = 5
 border = 2
 radius = 8
 padding = 12
 bar_height = 50
+cell_gap = 8        # polybar desktop strip: offset between cells
 
 [icons]
 dark = "Papirus-Dark"
