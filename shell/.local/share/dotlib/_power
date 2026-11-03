@@ -1,0 +1,210 @@
+#!/usr/bin/env zsh
+
+# _power - session and power actions behind a rofi confirmation: lock, log
+# out, suspend, hibernate, reboot, shut down.
+#
+# `menu` shows the actions as one row of large icons (rofi/themes/power.rasi)
+# and runs the pick exactly as if it had been typed, so it confirms too.
+# Every action except `lock` first asks a one-line Yes/No (themes/prompt.rasi)
+# with No selected: Return on open, Escape, or rofi failing all mean No.
+# `--yes` skips the question for scripts. `lock` never asks; an unwanted lock
+# costs a password.
+#
+# Suspend and hibernate lock first. `lockscreen activate` blocks until unlock
+# (betterlockscreen runs i3lock -n) and has no ready signal, so it is started
+# detached and the locker process polled for before systemctl runs; if it
+# never appears the machine stays awake rather than waking unlocked. The
+# lockscreen-suspend user unit (WantedBy=sleep.target) then finds i3lock
+# already running and exits.
+#
+# Logging out is `bspc quit`: bspwm is the session process under both lightdm
+# (bspwm.desktop) and startx (.xinitrc execs it), so its exit ends the session.
+#
+# Usage:
+#   source "${DOTLIB}/_power"
+#
+# Dependencies:
+#   Required:
+#     - _common, _log
+#   External:
+#     - rofi, lockscreen (desktop/.local/bin), pgrep, systemctl, bspc
+
+[[ -n "${POWER_LOADED:-}" ]] && return 0
+declare -gr POWER_LOADED=1
+
+source "${DOTLIB}/_common" || { echo "[ERROR] _power requires _common" >&2; return 1; }
+source "${DOTLIB}/_log"    2>/dev/null || true
+
+typeset -ga _POWER_ACTIONS=(lock logout suspend hibernate reboot shutdown)
+typeset -ga _POWER_UNCONFIRMED=(lock)
+typeset -gA _POWER_LABELS=(
+    [lock]="Lock"           [logout]="Log out"   [suspend]="Suspend"
+    [hibernate]="Hibernate" [reboot]="Reboot"    [shutdown]="Shut down"
+)
+# Papirus icon names, as themes/power.rasi expects.
+typeset -gA _POWER_ICONS=(
+    [lock]=system-lock-screen  [logout]=system-log-out  [suspend]=system-suspend
+    [hibernate]=system-hibernate [reboot]=system-reboot [shutdown]=system-shutdown
+)
+# rofi themes: a name resolves to ~/.config/rofi/themes/<name>.rasi.
+declare -g _POWER_MENU_THEME="${POWER_MENU_THEME:-power}"
+declare -g _POWER_CONFIRM_THEME="${POWER_CONFIRM_THEME:-prompt}"
+declare -gi _POWER_LOCK_TIMEOUT="${POWER_LOCK_TIMEOUT:-5}"
+# betterlockscreen runs i3lock-color under either name.
+declare -g _POWER_LOCKER='i3lock(-color)?'
+# Both themes lay their choices out in one row, so Left/Right step through
+# them; the entry's cursor keys keep their Emacs bindings.
+typeset -ga _POWER_ROFI_KEYS=(
+    -kb-move-char-back Control+b -kb-move-char-forward Control+f
+    -kb-row-left Left -kb-row-right Right
+)
+
+typeset -gA _POWER_DESCRIPTIONS=(
+    [menu]="Pick an action from a row of icons; it then asks like the action itself"
+    [lock]="Lock the screen now (never asks)"
+    [logout]="Quit bspwm, ending the X session"
+    [suspend]="Lock, then suspend to RAM"
+    [hibernate]="Lock, then hibernate to disk"
+    [reboot]="Reboot"
+    [shutdown]="Power off"
+)
+
+power-help() {
+    cat <<'EOF'
+power - session and power actions, confirmed in rofi
+
+Usage: power [--dry-run] <action> [--yes]
+       power menu
+
+Actions:
+  menu        Pick an action from a row of icons (Escape does nothing)
+  lock        Lock the screen now; never asks
+  logout      Quit bspwm, ending the X session
+  suspend     Lock, then suspend to RAM
+  hibernate   Lock, then hibernate to disk
+  reboot      Reboot
+  shutdown    Power off (alias: poweroff)
+
+Every action except lock asks "<Action>? Yes / No" first, with No selected:
+Return on open, Escape, or typing n then Return all cancel.
+
+Options:
+  -y, --yes   Skip the confirmation (for scripts)
+  --dry-run   Print the function that would run instead of running it
+              (before the action)
+
+Environment:
+  POWER_MENU_THEME, POWER_CONFIRM_THEME   rofi theme name or path
+                                          (default power, prompt)
+  POWER_LOCK_TIMEOUT                      seconds to wait for the locker
+                                          before suspending (default 5)
+EOF
+}
+
+# ------------------------------
+# Private Helpers
+# ------------------------------
+
+# Sets reply to the -theme arguments for theme $1. A missing theme would make
+# rofi exit with an error, so an unstowed themes/ falls back to the default
+# look instead of a dead prompt.
+_power-theme-args() {
+    local _theme=$1
+    [[ "$_theme" == */* ]] || _theme="${XDG_CONFIG_HOME:-$HOME/.config}/rofi/themes/${_theme}.rasi"
+    reply=()
+    [[ -r "$_theme" ]] && reply=(-theme "$_theme")
+    return 0
+}
+
+# Sets REPLY to the picked action. Returns 1 on Escape. Extra arguments go to
+# rofi (rofi-preview adds a -mesg).
+_power-menu-choose() {
+    local _action _choice
+    local -a _rows
+    for _action in "${_POWER_ACTIONS[@]}"; do
+        _rows+=("${_POWER_LABELS[$_action]}"$'\0icon\x1f'"${_POWER_ICONS[$_action]}")
+    done
+    _power-theme-args "$_POWER_MENU_THEME"
+
+    # -format i returns the row's index in the unfiltered list.
+    _choice=$(print -rn -- "${(pj:\n:)_rows}" | rofi -dmenu -i -no-custom -format i \
+        "${reply[@]}" "${_POWER_ROFI_KEYS[@]}" -p "Power" "$@") || return 1
+    [[ "$_choice" == <-> ]] && (( _choice < ${#_POWER_ACTIONS} )) || return 1
+    REPLY=${_POWER_ACTIONS[_choice + 1]}
+}
+
+# Returns 0 only on an explicit Yes for action $1. Extra arguments go to rofi.
+_power-confirm-ask() {
+    local _action=$1 _choice
+    shift
+    _power-theme-args "$_POWER_CONFIRM_THEME"
+    _choice=$(print -rl -- Yes No | rofi -dmenu -i -no-custom -format s -selected-row 1 \
+        "${reply[@]}" "${_POWER_ROFI_KEYS[@]}" -p "${_POWER_LABELS[$_action]}?" "$@") || return 1
+    [[ "$_choice" == Yes ]]
+}
+
+_power-locker-up() {
+    pgrep -u "$UID" -x "$_POWER_LOCKER" >/dev/null
+}
+
+# Locks and returns once the locker is up, or 1 after _POWER_LOCK_TIMEOUT.
+_power-lock-wait() {
+    local -i _i
+    _power-locker-up && return 0
+    lockscreen activate &>/dev/null &!
+    for (( _i = 0; _i < _POWER_LOCK_TIMEOUT * 10; _i++ )); do
+        if _power-locker-up; then
+            # The process exists a moment before i3lock has mapped its window
+            # and grabbed the keyboard.
+            sleep 0.5
+            return 0
+        fi
+        sleep 0.1
+    done
+    log-error "[power] the locker did not start within ${_POWER_LOCK_TIMEOUT}s; not sleeping"
+    return 1
+}
+
+_power-do-lock()      { lockscreen activate &>/dev/null &! }
+_power-do-logout()    { bspc quit; }
+_power-do-suspend()   { _power-lock-wait && systemctl suspend; }
+_power-do-hibernate() { _power-lock-wait && systemctl hibernate; }
+_power-do-reboot()    { systemctl reboot; }
+_power-do-shutdown()  { systemctl poweroff; }
+
+# Parses [-y|--yes] [-h|--help] for action $1, asks unless told not to, then
+# runs it. A declined confirmation returns 1 having run nothing.
+_power-run() {
+    local _action=$1 _arg _yes=
+    shift
+    for _arg; do
+        case "$_arg" in
+            -y|--yes)  _yes=1 ;;
+            -h|--help) power-help; return 0 ;;
+            *) log-error "[power] ${_action}: unknown argument '${_arg}'"; return 2 ;;
+        esac
+    done
+
+    if [[ -z "$_yes" ]] && (( ! ${_POWER_UNCONFIRMED[(Ie)$_action]} )); then
+        _power-confirm-ask "$_action" || return 1
+    fi
+    "_power-do-${_action}"
+}
+
+# ------------------------------
+# Public
+# ------------------------------
+
+# Escape returns 0: closing the menu is not a failure.
+power-menu() {
+    [[ "${1:-}" == (-h|--help) ]] && { power-help; return 0; }
+    _power-menu-choose || return 0
+    _power-run "$REPLY"
+}
+
+power-lock()      { _power-run lock "$@"; }
+power-logout()    { _power-run logout "$@"; }
+power-suspend()   { _power-run suspend "$@"; }
+power-hibernate() { _power-run hibernate "$@"; }
+power-reboot()    { _power-run reboot "$@"; }
+power-shutdown()  { _power-run shutdown "$@"; }
