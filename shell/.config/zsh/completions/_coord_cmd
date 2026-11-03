@@ -1,0 +1,191 @@
+#compdef coord
+
+# Completion for `coord` (desktop/.local/bin/coord over dotlib _coord).
+#
+# Named _coord_cmd, not the conventional _coord: dotlib already has a file
+# _coord, and its helpers use the _coord- prefix, so a completion function
+# called _coord would share a name with the module (see _theme_cmd).
+#
+# Data comes from the module, read in a `zsh -f` child so the interactive
+# shell doesn't load it: subcommands from the coord-* functions and
+# _COORD_DESCRIPTIONS, names from _COORD_NAMES, bar keys from
+# _COORD_BAR_ROLES, hook events from coord-status's own case labels. A
+# coordinator's state is read the way the strip reads it, minus the bspwm
+# scan: running means its tmux session exists, then the state file says busy
+# or waiting, else idle. Read-only: unlike _coord-activity it never removes a
+# stale state file. Errors are swallowed.
+
+# Prints "<group>\t<value>\t<description>" lines for one context.
+_coord_cmd_data() {
+    DOTLIB=${DOTLIB:-${XDG_DATA_HOME:-$HOME/.local/share}/dotlib} \
+    command zsh -fc '
+        source "$DOTLIB/_coord" || exit 1
+        local f s n state last side ev
+        local -a running events
+        out() { printf "%s\t%s\t%s\n" "$@" }
+        case $1 in
+            commands)
+                for f in ${(ok)functions[(I)coord-*]}; do
+                    s=${f#coord-}
+                    [[ $s == (help|version) ]] && continue
+                    out command "$s" "${_COORD_DESCRIPTIONS[$s]:-}"
+                done
+                ;;
+            names)
+                (( ${+commands[tmux]} )) && running=(${${(M)${(f)"$(tmux list-sessions -F "#S" 2>/dev/null)"}:#*-coordinator}%-coordinator})
+                last=$(_coord-last-get 2>/dev/null)
+                for n in "${_COORD_NAMES[@]}"; do
+                    if (( ${running[(Ie)$n]} )); then
+                        state=
+                        [[ -r $_COORD_STATE_DIR/$n ]] && state=$(<$_COORD_STATE_DIR/$n)
+                        [[ $state == (busy|waiting) ]] || state=idle
+                    else
+                        state="not running"
+                    fi
+                    [[ $n == "$last" ]] && state+=", last shown"
+                    out name "$n" "$state"
+                done
+                ;;
+            side)
+                side=$(_coord-side-get)
+                for s in left right; do
+                    out side "$s" "dock on the $s edge${${(M)s:#$side}:+ (current)}"
+                done
+                ;;
+            width)
+                side=$(_coord-side-get)
+                out edge left "move the inner edge left [N], default $_COORD_WIDTH_STEP: $([[ $side == left ]] && print narrower || print wider) (docked $side)"
+                out edge right "move the inner edge right [N], default $_COORD_WIDTH_STEP: $([[ $side == right ]] && print narrower || print wider) (docked $side)"
+                out delta "+$_COORD_WIDTH_STEP" "wider by $_COORD_WIDTH_STEP"
+                out delta "-$_COORD_WIDTH_STEP" "narrower by $_COORD_WIDTH_STEP"
+                out absolute "$(_coord-width-get)" "current width; any N in $_COORD_WIDTH_MIN-$_COORD_WIDTH_MAX"
+                out absolute "$_COORD_WIDTH_DEFAULT" "default width"
+                ;;
+            step)
+                out step "$_COORD_WIDTH_STEP" "default step"
+                ;;
+            events)
+                # The case labels of coord-status, every event it acts on.
+                # zsh prints a function body with labels as "(A | B)".
+                for ev in ${(f)functions[coord-status]}; do
+                    [[ $ev =~ "^[[:space:]]*[(]([A-Z][A-Za-z| ]*)[)]" ]] || continue
+                    events+=(${(s:|:)${match[1]//[[:space:]]/}})
+                done
+                for ev in ${(u)events}; do out event "$ev" "treat stdin as a $ev hook"; done
+                ;;
+            barkeys)
+                for s in "${_COORD_BAR_ROLES[@]}"; do
+                    out key "${s%%=*}" "colour, theme role ${s#*=}"
+                done
+                ;;
+            barcolour)
+                for s in "${_COORD_BAR_ROLES[@]}"; do
+                    [[ ${s%%=*} == "$2" ]] || continue
+                    source "$DOTLIB/_theme" || exit 1
+                    local -A c=()
+                    theme-roles c "k=${s#*=}" 2>/dev/null
+                    [[ -n ${c[k]:-} ]] && out colour "${c[k]}" "current theme ${s#*=}"
+                done
+                ;;
+        esac
+    ' _coord_cmd_data "$@" 2>/dev/null
+}
+
+# Fills the caller's assoc _cc_groups (group -> NUL-joined "value:desc"
+# entries) from _coord_cmd_data.
+_coord_cmd_load() {
+    local line group value desc
+    _cc_groups=()
+    for line in ${(f)"$(_coord_cmd_data "$@")"}; do
+        group=${line%%$'\t'*} line=${line#*$'\t'}
+        value=${line%%$'\t'*} desc=${line#*$'\t'}
+        _cc_groups[$group]+="${value//:/\\:}:${desc}"$'\0'
+    done
+}
+
+# Offers group $1 from _cc_groups with tag $2 and heading $3; the rest goes
+# to compadd.
+_coord_cmd_offer() {
+    local group=$1 tag=$2 descr=$3; shift 3
+    local -a items=("${(@0)${_cc_groups[$group]%$'\0'}}")
+    (( ${#items} )) && [[ -n $items[1] ]] || return 1
+    _describe -t "$tag" "$descr" items "$@"
+}
+
+_coord_cmd() {
+    local curcontext=$curcontext state state_descr line sub ret=1
+    local -A opt_args _cc_groups
+
+    _arguments -C \
+        '(-v --verbose -q --quiet)'{-v,--verbose}'[verbose output]' \
+        '(-v --verbose -q --quiet)'{-q,--quiet}'[quiet output]' \
+        '--debug[debug output]' \
+        '--dry-run[show what would be done]' \
+        '(- *)'{-h,--help}'[show help]' \
+        '(- *)--version[show version]' \
+        '1: :->command' \
+        '*:: :->args' && return 0
+
+    case $state in
+        command)
+            _coord_cmd_load commands
+            _coord_cmd_offer command commands 'coord command' && ret=0
+            ;;
+        args)
+            sub=$words[1]
+            case $sub in
+                toggle|launch)
+                    (( CURRENT == 2 )) || return 1
+                    _coord_cmd_load names
+                    _coord_cmd_offer name coordinators 'coordinator' && ret=0
+                    ;;
+                cycle)
+                    (( CURRENT == 2 )) || return 1
+                    local -a dir=('next:the next coordinator, wrapping' 'prev:the previous coordinator, wrapping')
+                    _describe -t directions 'direction' dir && ret=0
+                    ;;
+                side)
+                    (( CURRENT == 2 )) || return 1
+                    _coord_cmd_load side
+                    _coord_cmd_offer side sides 'side' && ret=0
+                    ;;
+                width)
+                    if (( CURRENT == 2 )); then
+                        _coord_cmd_load width
+                        _coord_cmd_offer edge edges 'move the inner edge' && ret=0
+                        _coord_cmd_offer delta deltas 'resize by +N/-N' && ret=0
+                        _coord_cmd_offer absolute widths 'set to N' && ret=0
+                    elif (( CURRENT == 3 )) && [[ $words[2] == (left|right) ]]; then
+                        _coord_cmd_load step
+                        _coord_cmd_offer step steps 'step N' && ret=0
+                    fi
+                    ;;
+                status)
+                    (( CURRENT == 2 )) || return 1
+                    _coord_cmd_load events
+                    _coord_cmd_offer event events 'hook event (overrides hook_event_name)' && ret=0
+                    ;;
+                bar)
+                    if compset -P '(#b)([a-z]##)='; then
+                        _coord_cmd_load barcolour $match[1]
+                        _coord_cmd_offer colour colours '#rrggbb' -Q && ret=0
+                        (( ret )) && _message -e colours '#rrggbb'
+                    else
+                        _coord_cmd_load barkeys
+                        local -a used=(${${(@)words[2,CURRENT-1]}%%=*}) keys=() k
+                        for k in "${(@0)${_cc_groups[key]%$'\0'}}"; do
+                            (( ${used[(Ie)${k%%:*}]} )) || keys+=($k)
+                        done
+                        (( ${#keys} )) && [[ -n $keys[1] ]] && _describe -t keys 'colour override key=#rrggbb' keys -S '=' && ret=0
+                    fi
+                    ;;
+                *)
+                    _message 'no more arguments'
+                    ;;
+            esac
+            ;;
+    esac
+    return ret
+}
+
+_coord_cmd "$@"
