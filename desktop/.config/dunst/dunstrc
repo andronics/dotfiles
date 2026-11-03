@@ -1,3 +1,8 @@
+# Layout lives here. font, corner_radius, frame_color, highlight and the
+# [urgency_*] colours are overridden by the theme's drop-in,
+# dunstrc.d/90-theme.conf (a link `theme ensure` makes to
+# ~/.local/state/theme/current/dunst.conf); the values below are the
+# fallback when it is missing.
 [global]
 
     # Which monitor should the notifications be displayed on.
