@@ -4,10 +4,27 @@
 # come from the checkout this script lives in (stow links resolve back to it),
 # so a worktree previews its own, uninstalled themes. Besides one variant per
 # theme, `confirm` shows power's Yes/No question (themes/prompt.rasi).
+#
+# THEME_STATE_DIR=<dir> previews against that theme state (e.g. one made by
+# `THEME_STATE_DIR=<dir> theme apply nord`) instead of ~/.local/state/theme:
+# each variant is wrapped in a cache file that imports its generated
+# rofi.rasi last, since base.rasi's own import path is fixed.
 
 _repo=${0:A:h:h:h:h}
 _themes="${_repo}/desktop/.config/rofi/themes"
 _variants=(${_themes}/*.rasi(N:t:r) confirm)
+
+# REPLY = the theme file for variant $1, wrapped when THEME_STATE_DIR is set.
+_theme_file() {
+    REPLY="${_themes}/$1.rasi"
+    [[ -n "${THEME_STATE_DIR:-}" ]] || return 0
+    local gen="${THEME_STATE_DIR}/current/rofi.rasi"
+    local wrap="${XDG_CACHE_HOME:-$HOME/.cache}/theme/rofi-preview/$1.rasi"
+    [[ -r "$gen" ]] || { print -u2 "rofi-preview: no ${gen}; run: THEME_STATE_DIR=${THEME_STATE_DIR} theme apply <scheme>"; exit 1; }
+    mkdir -p "${wrap:h}" || exit 1
+    print -rl -- "@import \"${REPLY}\"" "@import \"${gen:A}\"" > "$wrap"
+    REPLY=$wrap
+}
 
 _variant=${1:-}
 if [[ -z "$_variant" || ${_variants[(Ie)$_variant]} -eq 0 ]]; then
@@ -15,7 +32,8 @@ if [[ -z "$_variant" || ${_variants[(Ie)$_variant]} -eq 0 ]]; then
     exit 2
 fi
 
-_args=(-dmenu -i -no-custom -theme "${_themes}/${_variant}.rasi")
+_theme_file "${_variant/#confirm/prompt}"
+_args=(-dmenu -i -no-custom -theme "$REPLY")
 _rows=()
 
 case "$_variant" in
@@ -52,7 +70,8 @@ case "$_variant" in
     power|confirm)
         # The real menu and question from _power, minus the acting.
         export DOTLIB="${_repo}/shell/.local/share/dotlib"
-        export POWER_MENU_THEME="${_themes}/power.rasi" POWER_CONFIRM_THEME="${_themes}/prompt.rasi"
+        _theme_file power;  export POWER_MENU_THEME=$REPLY
+        _theme_file prompt; export POWER_CONFIRM_THEME=$REPLY
         source "${DOTLIB}/_power" || exit 1
         if [[ "$_variant" == power ]]; then
             _power-menu-choose -mesg "Power (preview: nothing runs)" \
