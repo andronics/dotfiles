@@ -316,10 +316,21 @@ _theme-prune() {
     done
 }
 
+# The lock is held until the process exits (or _theme-unlock). It is an
+# fcntl lock: a forked child doesn't inherit it, and blocks on it while the
+# parent holds it.
+declare -gi _THEME_LOCK_FD=0
 _theme-lock() {
     mkdir -p "$_THEME_STATE/builds" || return 1
     : >> "$_THEME_STATE/lock"
-    zsystem flock -t 10 "$_THEME_STATE/lock" || { log-error "[theme] another theme command holds the lock"; return 1; }
+    zsystem flock -t 10 -f _THEME_LOCK_FD "$_THEME_STATE/lock" || { log-error "[theme] another theme command holds the lock"; return 1; }
+}
+
+# Releases the lock (closing one of its fds drops the process's lock), so
+# that a child of this process can take it: self-test's subshells.
+_theme-unlock() {
+    (( _THEME_LOCK_FD )) && zsystem flock -u $_THEME_LOCK_FD 2>/dev/null
+    _THEME_LOCK_FD=0
 }
 
 _theme-ms-since() {
@@ -1715,9 +1726,18 @@ _theme-wallpaper-restore() {
 theme-self-test() {
     local base="${XDG_CACHE_HOME:-$HOME/.cache}/theme"
     mkdir -p "$base" || return 1
-    local scratch
+    local scratch f
     scratch=$(mktemp -d "$base/self-test.XXXXXX") || return 1
-    ( XDG_STATE_HOME="$scratch/state" THEME_STATE_DIR="$scratch/state/theme" _theme-self-test-run "$scratch" )
+    # Wallpaper dirs of 1x1 PNGs, so no test depends on (or sets) a real
+    # image: 0002 in both dirs (the first wins), fake.png isn't an image.
+    mkdir -p "$scratch/walls" "$scratch/pics" || return 1
+    for f in walls/0001.png walls/0002.png walls/0010.png pics/0002.png pics/beach.png; do
+        print -rn -- 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==' |
+            base64 -d > "$scratch/$f" || return 1
+    done
+    print -r -- 'not an image' > "$scratch/pics/fake.png"
+    ( XDG_STATE_HOME="$scratch/state" THEME_STATE_DIR="$scratch/state/theme" \
+      THEME_WALLPAPER_DIRS="$scratch/walls:$scratch/pics:$scratch/missing" _theme-self-test-run "$scratch" )
     local rc=$?
     if [[ -n "${THEME_SELF_TEST_KEEP:-}" ]]; then print -r -- "scratch kept: $scratch"
     else rm -rf -- "$scratch"; fi
@@ -1868,6 +1888,136 @@ _theme-self-test-run() {
        _theme-validate-dunst "$cur/dunst.conf" && _theme-validate-xresources "$cur/xresources" &&
         ok "validators: unquoted dunst colour and missing *.color1-15 fail; Mocha's pass" ||
         bad "dunst/xresources validators"
+
+    # Wallpaper: every build records one, apply keeps it, `theme wallpaper`
+    # changes only it. The lock screen fragment comes from the roles.
+    local w1="$scratch/walls/0001.png" w2="$scratch/walls/0002.png" w10="$scratch/walls/0010.png"
+    local wbeach="$scratch/pics/beach.png" roles_before wb
+    [[ "$(theme-get wallpaper)" == "$w1" ]] &&
+        ok "wallpaper: a fresh state records the default, 0001 from the first dir" ||
+        bad "wallpaper after the scheme loop: $(theme-get wallpaper)"
+    grep -qx 'ringcolor=b4befeff' "$cur/betterlockscreen.sh" && grep -qx 'insidecolor=1e1e2e80' "$cur/betterlockscreen.sh" &&
+       grep -qx 'ringwrongcolor=f38ba8ff' "$cur/betterlockscreen.sh" && grep -qx 'ringvercolor=94e2d5ff' "$cur/betterlockscreen.sh" &&
+       grep -qx 'timecolor=cdd6f4ff' "$cur/betterlockscreen.sh" &&
+       grep -qx "font='Roboto Mono for Powerline'" "$cur/betterlockscreen.sh" && bash -n "$cur/betterlockscreen.sh" &&
+        ok "catppuccin-mocha betterlockscreen.sh: ring #b4befe, inside #1e1e2e 50%, verify #94e2d5, wrong #f38ba8, text #cdd6f4, Roboto Mono; bash -n" ||
+        bad "catppuccin-mocha betterlockscreen.sh: $(grep -v '^#' "$cur/betterlockscreen.sh" | tr '\n' ' ')"
+    print -rl -- 'font=x' 'ringcolor=#b4befe' > "$scratch/betterlockscreen.sh"
+    ! _theme-validate-betterlockscreen "$scratch/betterlockscreen.sh" >/dev/null &&
+       _theme-validate-betterlockscreen "$cur/betterlockscreen.sh" &&
+        ok "validator: a #-prefixed lock colour and missing keys fail; Mocha's passes" ||
+        bad "betterlockscreen.sh validator"
+    roles_before=$(jq -c '[.roles, .palette, .font, .metrics, .name]' "$cur/spec.json")
+    _theme-link-id current; before=$REPLY
+    theme-wallpaper 2 2>/dev/null
+    _theme-link-id current
+    [[ "$REPLY" != "$before" && "$(theme-get wallpaper)" == "$w2" &&
+       "$(jq -c '[.roles, .palette, .font, .metrics, .name]' "$cur/spec.json")" == "$roles_before" &&
+       "$(jq -r .wallpaper "$_THEME_STATE/builds/$before/spec.json")" == "$w1" ]] &&
+        ok "wallpaper 2: a new build with walls/0002.png (first dir over pics/), colours, sizes and name unchanged" ||
+        bad "wallpaper 2: current $REPLY (was $before), wallpaper $(theme-get wallpaper)"
+    grep -qx 'ringcolor=b4befeff' "$cur/betterlockscreen.sh" && grep -qxF "    [wallpaper]='$w2'" "$cur/theme.zsh" &&
+        ok "wallpaper 2: betterlockscreen.sh unchanged, theme.zsh THEME_META[wallpaper] updated" ||
+        bad "wallpaper 2 outputs: $(grep wallpaper "$cur/theme.zsh")"
+    theme-apply nord 2>/dev/null
+    [[ "$(theme-get wallpaper)" == "$w2" && "$(jq -r .name "$cur/spec.json")" == nord ]] &&
+        ok "apply nord keeps the wallpaper (0002)" || bad "apply nord: wallpaper $(theme-get wallpaper)"
+    theme-wallpaper beach 2>/dev/null; wb=$(theme-get wallpaper)
+    theme-wallpaper 0010.png 2>/dev/null
+    [[ "$wb" == "$wbeach" && "$(theme-get wallpaper)" == "$w10" ]] &&
+        ok "wallpaper by name from the second dir (beach) and by file name (0010.png)" ||
+        bad "wallpaper beach -> $wb, 0010.png -> $(theme-get wallpaper)"
+    theme-wallpaper "$w1" 2>/dev/null && [[ "$(theme-get wallpaper)" == "$w1" ]] &&
+        ok "wallpaper by absolute path" || bad "wallpaper by path: $(theme-get wallpaper)"
+    _theme-link-id current; before=$REPLY
+    bl=("$_THEME_STATE"/builds/*(N/)); nb=${#bl}
+    local wbad wrc= 
+    for wbad in nope fake 99 "$scratch/none.png" "$scratch/pics" /etc/hostname; do
+        theme-wallpaper "$wbad" 2>/dev/null; wrc+="$? "
+    done
+    theme-wallpaper 2 --palette 2>/dev/null; wrc+="$? "
+    theme-wallpaper 2>/dev/null; wrc+="$?"
+    _theme-link-id current
+    bl=("$_THEME_STATE"/builds/*(N/))
+    [[ "$wrc" == "1 1 1 1 1 1 2 2" && "$REPLY" == "$before" && ${#bl} -eq $nb && "$(theme-get wallpaper)" == "$w1" ]] &&
+        ok "bad wallpapers (unknown name or number, not an image, missing, a dir, bad option) fail; current unchanged" ||
+        bad "bad wallpapers: exit codes $wrc, current $REPLY (was $before), builds $nb->${#bl}"
+    theme-undo 2>/dev/null
+    [[ "$(theme-get wallpaper)" == "$w10" ]] && ok "undo brings back the previous wallpaper (0010)" ||
+        bad "undo: wallpaper $(theme-get wallpaper)"
+    local -a wl=("${(@f)$(theme-list wallpapers)}")
+    [[ ${#wl} -eq 5 && "${wl[(r)\* 0010*]}" == *"${w10/#$HOME/~}" && -z "${(@M)wl:#*pics/0002.png}" ]] &&
+        ok "list wallpapers: 5 (pics/0002 shadowed by walls/0002), * on 0010" ||
+        bad "list wallpapers: ${(j:|:)wl}"
+    theme-wallpaper restore >/dev/null 2>&1 && ok "wallpaper restore in a scratch state: succeeds, sets nothing" ||
+        bad "wallpaper restore in a scratch state failed"
+
+    # The wallpaper and lockscreen reloaders: skipped for a scratch state;
+    # forced live, with feh and betterlockscreen stubbed first on PATH (nice
+    # and ionice exec them) and every other desktop command stubbed, feh
+    # sets the wallpaper and betterlockscreen -u runs once per new wallpaper.
+    # The subshell takes the theme lock, so this process lets go of it.
+    _theme-unlock
+    (
+        local calls="$scratch/wall-calls" bin="$scratch/bin" w out c
+        local -i i
+        pass=0 failed=0
+        trap 'print -r -- "$pass $failed" >| "$scratch/wall-counts"' EXIT
+        mkdir -p "$bin"
+        for c in feh betterlockscreen; do
+            print -rl -- '#!/bin/sh' "echo \"$c \$*\" >> '$calls'" > "$bin/$c" && chmod +x "$bin/$c"
+        done
+        path=("$bin" $path)
+        for c in bspc coord dunstctl xrdb polybar-msg; do functions[$c]="print -r -- \"$c \$*\" >> ${(q)calls}"; done
+        pgrep()   { return 1; }
+        timeout() { shift; "$@"; }
+        [[ "$(whence -p feh) $(whence -p betterlockscreen)" == "$bin/feh $bin/betterlockscreen" ]] ||
+            { bad "feh/betterlockscreen stubs not first on PATH; live reloaders not exercised"; exit; }
+        for c in bspc coord dunstctl xrdb polybar-msg pgrep timeout; do
+            [[ "$(whence -w $c)" == "$c: function" ]] ||
+                { bad "stub for $c not in place; live reloaders not exercised"; exit; }
+        done
+        DISPLAY=:theme-self-test XDG_CONFIG_HOME="$scratch/config"
+        _theme-reload wallpaper lockscreen
+        sleep 0.2
+        [[ ! -e "$calls" ]] && ok "wallpaper and lockscreen reloads skipped for a scratch state dir" ||
+            bad "a scratch state reached feh/betterlockscreen: $(<"$calls")"
+        _theme-live() { return 0; }
+        _wait-cached() {
+            for (( i = 0; i < 50; i++ )); do
+                [[ "$(<"$_THEME_STATE/lockscreen.cached")" == "$1"$'\t'* ]] 2>/dev/null && return 0
+                sleep 0.1
+            done
+            return 1
+        }
+        theme-wallpaper restore >/dev/null 2>&1; _wait-cached "$w10"
+        out=$(<"$calls")
+        [[ "$out" == "feh --no-fehbg --bg-fill $w10"$'\n'"betterlockscreen -u $w10" ]] &&
+            ok "restore: feh --no-fehbg --bg-fill, then betterlockscreen -u in the background (nice/ionice)" ||
+            bad "restore calls: ${(f)out}"
+        : >| "$calls"
+        theme-wallpaper restore >/dev/null 2>&1; sleep 0.3
+        [[ "$(<"$calls")" == "feh --no-fehbg --bg-fill $w10" ]] &&
+            ok "restore again: feh only, the lock cache is already from this wallpaper" ||
+            bad "second restore calls: ${(f)$(<"$calls")}"
+        : >| "$calls"
+        theme-wallpaper 2 >/dev/null 2>&1; _wait-cached "$w2"
+        out=$(<"$calls")
+        [[ "$out" == "feh --no-fehbg --bg-fill $w2"$'\n'"betterlockscreen -u $w2" ]] &&
+            ok "wallpaper 2: feh and one lock cache refresh; no other target reloaded" ||
+            bad "wallpaper 2 calls: ${(f)out}"
+        : >| "$calls"
+        theme-apply dracula >/dev/null 2>&1; sleep 0.3
+        out=$(<"$calls")
+        [[ "${(@M)${(@f)out}:#feh *}" == "feh --no-fehbg --bg-fill $w2" && "$out" != *betterlockscreen* ]] &&
+            ok "apply dracula: same wallpaper set again, no lock cache refresh" ||
+            bad "apply dracula calls: ${(f)out}"
+        [[ "$(<"$_THEME_STATE/lockscreen.log")" == *"nice -n 19"*"betterlockscreen -u $w2" ]] &&
+            ok "lockscreen.log records the niced refresh" || bad "lockscreen.log: $(<"$_THEME_STATE/lockscreen.log")"
+    )
+    local -a wcounts=(${=$(<"$scratch/wall-counts")})
+    (( pass += wcounts[1], failed += wcounts[2] )) || true
+    theme-apply catppuccin-mocha 2>/dev/null
 
     # polybar includes ~/.local/state/theme only; a scratch state never restarts it.
     polybar-msg() { : > "$scratch/polybar-msg"; }
