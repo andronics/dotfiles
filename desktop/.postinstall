@@ -17,3 +17,10 @@ fi
 # colour:#hex`) need matugen; named schemes work without it.
 command -v matugen >/dev/null \
    || warn "matugen missing: install it (sudo pacman -S matugen) for colours from wallpapers; named schemes still work"
+
+# GTK apps follow the theme through adw-gtk3 (the generated gtk.css colours
+# its libadwaita names) and xsettingsd (theme, icons, font and cursor, live).
+[[ -r /usr/share/themes/adw-gtk3/gtk-3.0/gtk.css ]] \
+   || warn "adw-gtk-theme missing: install it (sudo pacman -S adw-gtk-theme) so GTK apps follow the theme"
+command -v xsettingsd >/dev/null \
+   || warn "xsettingsd missing: install it (sudo pacman -S xsettingsd) so GTK apps follow theme changes live"
