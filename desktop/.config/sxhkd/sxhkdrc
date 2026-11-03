@@ -10,9 +10,9 @@ super + Escape + {_, alt}
 super + Return + {_, alt, shift}
   {$TERMINAL, terminal drop scratch, terminal draw}
 
-# launcher - gui
+# coordinator - pick from menu
 super + space
-  rofi -show drun -show-icons -theme launcher
+  coord pick
 
 # preselect on {north, south, west, east} postion
 super + {Up, Down, Left, Right}
@@ -46,9 +46,9 @@ super + shift + c
 super + c ; {b, t, f, h, m, a, d}
   coord toggle {brain,template,folio,homelab,metalayerlab,apps,dotfiles}
 
-# coordinator - pick from menu
+# launcher - gui
 super + alt + space
-  coord pick
+  rofi -show drun -show-icons -theme launcher
 
 # coordinator - cycle {previous, next}
 super + alt + {Left, Right}
