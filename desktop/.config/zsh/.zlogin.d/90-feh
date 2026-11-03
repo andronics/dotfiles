@@ -1,3 +1,10 @@
-[[ -n "${DISPLAY}" || "${WAYLAND_DISPLAY}" ]] && {
-    feh --no-fehbg --bg-fill "${HOME}/.local/share/backgrounds/0001.png" &
+# The theme's wallpaper (`theme wallpaper`, recorded in
+# ~/.local/state/theme/current), else backgrounds/0001.png. restore also
+# refreshes the lock screen's cache in the background when the wallpaper
+# changed since it was made. Backgrounded so login doesn't wait.
+[[ -n "${DISPLAY}" || -n "${WAYLAND_DISPLAY}" ]] && {
+    {
+        (( $+commands[theme] )) && theme wallpaper restore >/dev/null 2>&1 ||
+            feh --no-fehbg --bg-fill "${HOME}/.local/share/backgrounds/0001.png"
+    } &!
 }
