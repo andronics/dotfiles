@@ -48,6 +48,39 @@ declare -g PLAYER_LOADED=1
 declare -r PLAYER_VERSION="1.0.0"
 
 # ------------------------------
+# Command Aliases
+# ------------------------------
+
+# alias -> command, registered by _dispatcher's dispatcher-init for the
+# `player` wrapper (dotlib/README.md, "Command aliases").
+typeset -gA _PLAYER_ALIASES=(
+    [list]=list-all
+    [active]=get-active
+    [toggle]=play-pause
+    [prev]=previous
+    [title]=get-title
+    [artist]=get-artist
+    [album]=get-album
+    [metadata]=get-metadata
+    [metadata-json]=get-metadata-json
+    [artwork]=get-artwork
+    [position]=get-position
+    [position-formatted]=get-position-formatted
+    [position-percent]=get-position-percent
+    [duration]=get-duration
+    [length]=get-duration
+    [status]=get-status
+    [status-json]=get-status-json
+    [state]=get-state-icon
+    [playing]=is-playing
+    [instance]=get-instance-name
+    [instance-name]=get-instance-name
+    [icon]=get-instance-icon
+    [instance-icon]=get-instance-icon
+    [format]=format-output
+)
+
+# ------------------------------
 # Dependency Loading
 # ------------------------------
 

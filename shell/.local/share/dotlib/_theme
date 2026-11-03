@@ -287,6 +287,12 @@ typeset -gA _THEME_DESCRIPTIONS=(
     [wallpaper]="Set the wallpaper and generate the colours from it: <image|name|number> [--keep-palette] (recorded in the theme, kept by apply), or restore (login)"
 )
 
+# alias -> command, registered by _dispatcher's dispatcher-init.
+typeset -gA _THEME_ALIASES=(
+    [ls]=list
+    [prev]=previous
+)
+
 theme-help() {
     cat <<'EOF'
 theme - desktop theme from a scheme, wallpaper or colour: resolve, render, swap

@@ -8,17 +8,5 @@ dispatcher-init "audio" \
     --route=function \
     --description="PulseAudio control interface"
 
-dispatcher-register-alias "device-name"    "device-get-name"
-dispatcher-register-alias "device-icon"    "device-get-icon"
-dispatcher-register-alias "level-name"     "level-get-name"
-dispatcher-register-alias "level-icon"     "level-get-icon"
-dispatcher-register-alias "restart"        "server-restart"
-dispatcher-register-alias "sink-next"      "sink-set-next"
-dispatcher-register-alias "sink-prev"      "sink-set-prev"
-dispatcher-register-alias "sink-previous"  "sink-set-prev"
-dispatcher-register-alias "spectrum"       "spectrum-show"
-dispatcher-register-alias "volume-query"   "volume-get"
-dispatcher-register-alias "mute"           "mute-enable"
-dispatcher-register-alias "unmute"         "mute-disable"
 
 dispatcher-execute "$@"

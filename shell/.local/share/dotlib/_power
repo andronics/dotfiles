@@ -69,6 +69,12 @@ typeset -gA _POWER_DESCRIPTIONS=(
     [shutdown]="Power off"
 )
 
+# alias -> command, registered by _dispatcher's dispatcher-init.
+typeset -gA _POWER_ALIASES=(
+    [poweroff]=shutdown
+    [log-out]=logout
+)
+
 power-help() {
     cat <<'EOF'
 power - session and power actions, confirmed in rofi

@@ -13,7 +13,7 @@ A `~/.local/bin/<noun>` wrapper:
 3. Sources `${DOTLIB}/_dispatcher` and one `${DOTLIB}/_<module>` (the module name usually matches the wrapper noun; can differ — see `--prefix`).
 4. Calls `dispatcher-init "<noun>" --route=function [--prefix=<other>] [--version=<v>] [--description=<d>]`.
 5. Calls `dispatcher-execute "$@"`.
-6. May register aliases (`dispatcher-register-alias`) and pre/post hooks (`dispatcher-before` / `dispatcher-after`).
+6. May register pre/post hooks (`dispatcher-before` / `dispatcher-after`). Aliases belong in the module's `_<UPPER_PREFIX>_ALIASES` array (module contract, item 6), not in the wrapper; `dispatcher-register-alias` still works for a one-off.
 7. Contains **no business logic**. If the file grows past 30 lines, logic has leaked — push it back into the module.
 
 ### Example — `bt` on the contract
@@ -64,7 +64,15 @@ A `${DOTLIB}/_<noun>` module:
    )
    ```
    The dispatcher uppercases the prefix and replaces hyphens with underscores when looking up this array. Absence of the array is fine; help just lists names.
-6. **Optional** override functions:
+6. **Optional** command aliases, alias → real subcommand:
+   ```zsh
+   typeset -gA _<UPPER_PREFIX>_ALIASES=(
+       [toggle]=play-pause
+       [prev]=previous
+   )
+   ```
+   Found the same way as the descriptions. `dispatcher-init` registers each entry as if the wrapper had called `dispatcher-register-alias`, so the wrapper must source the module before `dispatcher-init` (the contract order already does). Aliases route like the real name, appear in `<cmd> completion zsh` (`alias for <real>`), in `<cmd> <real> --help`'s `Aliases:` line, and `<cmd> <alias> --help` / `<cmd> help <alias>` show the real command's help. An explicit `dispatcher-register-alias` after `dispatcher-init` overrides an entry. Absence of the array is fine; a non-associative array is ignored with a warning.
+7. **Optional** override functions:
    - `<prefix>-help` — replaces the auto-generated help.
    - `<prefix>-version` — replaces the auto-generated version.
    - `<prefix>-self-test` — invoked when user runs `<cmd> self-test`.
@@ -77,7 +85,7 @@ A `${DOTLIB}/_<noun>` module:
 |---|---|
 | `dispatcher-init <name> --route=function [--prefix=<p>] [--version=<v>] [--description=<d>]` | Initialise. `--prefix` defaults to `<name>`. Idempotent — safe to call again to re-bind. |
 | `dispatcher-execute "$@"` | Auto-parse global flags, resolve aliases, route `<sub>` → `<prefix>-<sub>` function call. |
-| `dispatcher-register-alias <alias> <real>` | Map a shorthand to a real subcommand name. |
+| `dispatcher-register-alias <alias> <real>` | Map a shorthand to a real subcommand name. Prefer the module's `_<UPPER_PREFIX>_ALIASES` array, which `dispatcher-init` registers. |
 | `dispatcher-before <fn>` | Register a function called before each subcommand: `fn <command> <args...>`. |
 | `dispatcher-after <fn>` | Register a function called after each subcommand: `fn <command> <exit_code> <args...>`. |
 
