@@ -1,0 +1,29 @@
+# Source: https://github.com/rebelot/kanagawa.nvim
+# Palette from tinted-theming/schemes base16/kanagawa.yaml (MIT, Copyright (c) 2022 Tinted Theming)
+# Licence: MIT, Copyright (c) 2021 Tommaso Laurenzi
+# x-* keys are local extensions read by dotlib/_theme: x-accent (slot, name or hex),
+# x-pair (light/dark twin), x-roles (role -> slot, name or hex), x-ansi (index -> same),
+# x-names (named colours, e.g. Catppuccin's).
+system: "base16"
+name: "Kanagawa"
+author: "Tommaso Laurenzi (https://github.com/rebelot)"
+variant: "dark"
+palette:
+  base00: "#1F1F28"
+  base01: "#16161D"
+  base02: "#223249"
+  base03: "#54546D"
+  base04: "#727169"
+  base05: "#DCD7BA"
+  base06: "#C8C093"
+  base07: "#717C7C"
+  base08: "#C34043"
+  base09: "#FFA066"
+  base0A: "#C0A36E"
+  base0B: "#76946A"
+  base0C: "#6A9589"
+  base0D: "#7E9CD8"
+  base0E: "#957FB8"
+  base0F: "#D27E99"
+slug: "kanagawa"
+x-accent: "base0D"   # crystal blue

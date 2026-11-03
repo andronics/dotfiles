@@ -1,0 +1,42 @@
+# Durable theme knobs, edited by hand. `theme` merges
+# ${XDG_STATE_HOME}/theme/overrides.json over this file and never writes it.
+
+default  = "catppuccin-mocha"   # applied on a fresh install or when state is missing
+contrast = "aaa"                # aa | aaa: body-text minimum (4.5 / 7.0); aaa falls back to aa only when unreachable
+accent   = "scheme"             # scheme (its x-accent slot) | base00..base17 | a palette name | "#rrggbb"
+
+# Point sizes: each base is multiplied by scale. Gaps are not scaled.
+[fonts]
+scale = 1.25
+[fonts.base]
+terminal = 13
+menu = 11
+bar = 10
+notification = 10
+gtk = 10
+
+[fonts.family]
+ui   = "Roboto Mono for Powerline"
+mono = "Source Code Pro for Powerline"
+icon = "Symbols Nerd Font Mono"
+
+# Pixels. gap is used as is; border, radius, padding and bar_height are
+# multiplied by fonts.scale and rounded.
+[metrics]
+gap = 5
+border = 2
+radius = 8
+padding = 12
+bar_height = 50
+
+[icons]
+dark = "Papirus-Dark"
+light = "Papirus-Light"
+
+[cursor]
+theme = "Adwaita"
+size = 24
+
+[gtk]
+dark = "adw-gtk3-dark"
+light = "adw-gtk3"
