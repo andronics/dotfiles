@@ -1,2 +1,2 @@
-
-gtk-theme-name="Catppuccin Mocha Blue"
+# No gtk-theme-name: the theme system styles GTK 3/4 through adw-gtk3, which
+# ships no GTK 2 theme, so GTK 2 apps keep GTK's built-in look.
