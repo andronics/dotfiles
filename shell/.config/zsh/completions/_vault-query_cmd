@@ -1,0 +1,198 @@
+#compdef vault-query
+
+# Completion for the brain's `vault-query` (/mnt/brain/tools/vault-query, a
+# sh wrapper over `uv run tools/vault-query.py`), written by hand from its
+# --help and the subcommands' --help.
+#
+# Names come live from `vault-query --list WHAT`, which exists for this. Each
+# call starts uv, so results are kept in _vault_query_cache for the life of
+# the shell (a new shell sees new notes). A failed call (no vault, no uv, no
+# vault-query) offers nothing and isn't cached, so it's retried next time.
+#
+# --where values compare links by name (`centre=🧠 Brain`), not by actor
+# slug: `owner=dotfiles-coordinator` matches nothing, so owner= offers actor
+# note names, read with a query. --owner, inbox, prompt and mode take slugs
+# and short names, which --list actors gives.
+
+typeset -gA _vault_query_cache
+
+# Sets reply to the lines `vault-query "$@"` prints, cached per shell.
+_vault-query_cmd_lines() {
+    local key=${(j: :)${(q)@}} out
+    reply=()
+    if (( ! ${+_vault_query_cache[$key]} )); then
+        (( ${+commands[vault-query]} )) || return 1
+        out=$(command vault-query "$@" </dev/null 2>/dev/null) || return 1
+        _vault_query_cache[$key]=$out
+    fi
+    reply=(${(f)_vault_query_cache[$key]})
+    (( ${#reply} ))
+}
+
+# Sets reply to the names of the notes of one kind.
+_vault-query_cmd_names() {
+    _vault-query_cmd_lines --where "kind=$1" --fields file.name || return 1
+    reply=(${${(M)reply:#*  file.name=*}##*  file.name=})
+    (( ${#reply} ))
+}
+
+# Offers `vault-query --list $1` (extra args after the tag and heading).
+_vault-query_cmd_list() {
+    local what=$1 tag=$2 descr=$3 expl; shift 3
+    local -a reply
+    _vault-query_cmd_lines --list $what "$@" || return 1
+    _wanted $tag expl $descr compadd -a - reply
+}
+
+_vault-query_cmd_actors() { _vault-query_cmd_list actors actors 'actor (slug or short name)' }
+_vault-query_cmd_notes()  { _vault-query_cmd_list notes notes 'note' }
+
+# --where 'property op value': a property, then after an operator its values.
+_vault-query_cmd_where() {
+    local expl prop op k
+    local -a reply ops
+    if compset -P '(#b)([A-Za-z_][[:alnum:]_.-]#)(=|!=)'; then
+        prop=$match[1] op=$match[2]
+        compset -P '*,'
+        case $prop in
+            kind)   _vault-query_cmd_list kinds kinds 'kind' ;;
+            status)
+                # The kind given in another --where narrows the statuses.
+                for k in ${words[(R)(--where=|)kind=*]}; do
+                    k=${k#--where=}; k=${k#kind=}
+                done
+                if [[ -n $k && $k != *,* ]] && _vault-query_cmd_lines --list statuses --kind $k; then
+                    _wanted statuses expl "status of a $k" compadd -a - reply
+                else
+                    _vault-query_cmd_list statuses statuses 'status'
+                fi
+                ;;
+            centre) _vault-query_cmd_list centres centres 'centre' ;;
+            owner)
+                _vault-query_cmd_names actor || return 1
+                _wanted actors expl 'actor note' compadd -a - reply
+                ;;
+            *) _message -e values "$prop value" ;;
+        esac
+    else
+        _vault-query_cmd_lines --list properties || return 1
+        # A whole property name so far: the operators can follow it.
+        if (( ! ${reply[(Ie)$PREFIX]} )); then
+            _wanted properties expl 'property' compadd -S '' -a - reply
+            return
+        fi
+        compset -P '*'
+        ops=(
+            '=:equals (on a list: contains); =a,b is one of'
+            '!=:not equal (on a list: does not contain)'
+            '~:contains the text, case-insensitive'
+            '<:before or less than' '<=:on or before' '>:after or more than' '>=:on or after'
+            '?:set and not empty' '!?:missing or empty'
+            '#=:number of elements is' '#<:fewer elements than' '#>:more elements than'
+        )
+        _describe -t operators 'operator' ops -S ''
+    fi
+}
+
+_vault-query_cmd() {
+    local curcontext=$curcontext state state_descr line ret=1 expl
+    local -A opt_args
+    local -a reply
+    local -a common=(
+        '--vault=[the vault to read]:vault directory:_files -/'
+        '--today=[pretend today is this ISO date]:date (YYYY-MM-DD): '
+        '(- *)'{-h,--help}'[show help]'
+    )
+
+    _arguments -C -S \
+        $common \
+        '--owner=[the owner'"'"'s queue]:actor:_vault-query_cmd_actors' \
+        '--centre=[notes whose centre is that hub]:centre:->centre' \
+        '--needs=[notes with needs set (containing the value, if given)]::needs:(review update decision)' \
+        '--due[notes whose next_review is due]' \
+        '*--where=[property op value; repeatable]:expression:->where' \
+        '--links-to=[notes with a link to this note]:note:_vault-query_cmd_notes' \
+        '--backlinks[add the notes linking to each row]' \
+        '--fields=[these properties per note, in this order]:properties:->fields' \
+        '(--table --count)--json[JSON output]' \
+        '(--json --count)--table[a Markdown table]' \
+        '(--json --table)--count[the number of matching notes only]' \
+        '--list=[one name per line, for completion]:what:(actors centres kinds notes properties statuses)' \
+        '--kind=[with --list statuses: only this kind'"'"'s]:kind:->kind' \
+        '--fill[fill in missing properties]' \
+        '--dry-run[with --fill: write nothing]' \
+        '--include-recent[with --fill: include recently edited notes]' \
+        '1: :->command' \
+        '*:: :->args' && return 0
+
+    case $state in
+        centre) _vault-query_cmd_list centres centres 'centre' && ret=0 ;;
+        kind)   _vault-query_cmd_list kinds kinds 'kind' && ret=0 ;;
+        where)  _vault-query_cmd_where && ret=0 ;;
+        fields)
+            _vault-query_cmd_lines --list properties \
+                && _sequence _wanted properties expl 'property' compadd -a - reply && ret=0
+            ;;
+        command)
+            local -a subs=(
+                'prompt:print an actor'"'"'s assembled launch prompt'
+                'inbox:print the mode, then the notices addressed to an actor'
+                'mode:print the swarm'"'"'s mode in force'
+                'goal:print a goal'"'"'s tasks, owners and due times'
+                'log-line:print the prompts.md line that accepts a note as it stands'
+            )
+            _describe -t commands 'vault-query subcommand' subs && ret=0
+            [[ -n ${opt_args[(I)--fill]} ]] && _files && ret=0
+            ;;
+        args)
+            local now='--now=[pretend now is this ISO datetime]:datetime: '
+            curcontext=${curcontext%:*:*}:vault-query-$words[1]:
+            case $words[1] in
+                prompt)
+                    _arguments -S $common $now \
+                        '--section[the Prompt section alone, with its hash on stderr]' \
+                        '--verify[list what is not in the prompt log]' \
+                        '--no-cache[don'"'"'t write the last good copy]' \
+                        '--cache-dir=[where the last good copy goes]:directory:_files -/' \
+                        '1:actor:_vault-query_cmd_actors' && ret=0
+                    ;;
+                inbox)
+                    _arguments -S $common $now \
+                        '--since=[only notices posted after this ISO datetime]:datetime: ' \
+                        '--json[JSON output]' \
+                        '1:actor:_vault-query_cmd_actors' && ret=0
+                    ;;
+                mode)
+                    _arguments -S $common $now \
+                        '--json[JSON output]' \
+                        '--list[the rules notes, and whether each is logged]' \
+                        '1:actor:_vault-query_cmd_actors' && ret=0
+                    ;;
+                goal)
+                    _arguments -S $common $now \
+                        '--json[JSON output]' \
+                        '1:goal:->goal' && ret=0
+                    if [[ $state == goal ]] && _vault-query_cmd_names goal; then
+                        _wanted goals expl 'goal' compadd -a - reply && ret=0
+                    fi
+                    ;;
+                log-line)
+                    _arguments -S $common $now \
+                        '--reason=[why the line is accepted]:reason: ' \
+                        '1:actor or note:->note' && ret=0
+                    if [[ $state == note ]]; then
+                        _vault-query_cmd_actors && ret=0
+                        _vault-query_cmd_notes && ret=0
+                    fi
+                    ;;
+                *)
+                    # Not a subcommand: paths for --fill.
+                    [[ -n ${opt_args[(I)--fill]} ]] && _files && ret=0
+                    ;;
+            esac
+            ;;
+    esac
+    return ret
+}
+
+_vault-query_cmd "$@"
