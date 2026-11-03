@@ -2573,6 +2573,9 @@ _theme-self-test-generated() {
         bad "re-render of a generated build: $(jq -c .source "$_THEME_STATE/current/spec.json")"
 }
 
+# Commands self-test shadows with logging guard stubs for its whole run.
+declare -gr _THEME_SELFTEST_GUARDED='betterlockscreen feh polybar-msg bspc coord dunstctl xrdb gsettings xsettingsd'
+
 # Renders every scheme into a scratch state dir under ~/.cache and checks the
 # swap, undo, rollback and known-good behaviour. The real state is untouched.
 theme-self-test() {
@@ -2600,7 +2603,20 @@ theme-self-test() {
     print -rl -- '#!/bin/sh' "printf '%s\\n' \"\$*\" >> '$scratch/matugen-calls'" \
         '[ -n "$THEME_SELFTEST_MATUGEN_FAIL" ] && { echo "stub failure" >&2; exit 1; }' \
         "cat '$fixture'" > "$scratch/mbin/matugen" && chmod +x "$scratch/mbin/matugen" || return 1
+    # Every command that reaches the running desktop is a guard stub that
+    # only logs to $scratch/escaped-calls, so no test (in any environment,
+    # whatever the caller's PATH) can run the real one; the tests that
+    # exercise a reloader put their own stubs in front.
+    mkdir -p "$scratch/guard" || return 1
+    for f in $_THEME_SELFTEST_GUARDED; do
+        print -rl -- '#!/bin/sh' "echo \"$f \$*\" >> '$scratch/escaped-calls'" > "$scratch/guard/$f" &&
+            chmod +x "$scratch/guard/$f" || return 1
+    done
+    # THEME_CONFIG_DIR is pinned to this config: the reloader tests point
+    # XDG_CONFIG_HOME at a scratch dir, which would otherwise move the
+    # schemes and templates out from under them.
     ( XDG_STATE_HOME="$scratch/state" THEME_STATE_DIR="$scratch/state/theme" THEME_CACHE_DIR="$scratch/cache" \
+      THEME_CONFIG_DIR="$_THEME_CONFIG" \
       THEME_SELFTEST_REAL_MATUGEN="$(whence -p matugen)" THEME_SELFTEST_FIXTURE="$fixture" \
       THEME_WALLPAPER_DIRS="$scratch/walls:$scratch/pics:$scratch/missing" _theme-self-test-run "$scratch" )
     local rc=$?
@@ -2615,9 +2631,17 @@ _theme-self-test-run() {
     local -a schemes
     ok()  { print -r -- "  ✓ $*"; (( pass++ )) || true; }
     bad() { print -r -- "  ✗ $*"; (( failed++ )) || true; }
-    path=("$scratch/mbin" $path)
+    # A minimal system PATH behind the stubs, so a dir the caller put first
+    # can't shadow them; the guards must win before anything runs.
+    path=("$scratch/mbin" "$scratch/guard" /usr/local/bin /usr/bin /bin)
+    hash -r
     _theme-paths
     print -r -- "theme self-test (state: $_THEME_STATE)"
+    for f in $_THEME_SELFTEST_GUARDED; do
+        [[ "$(whence -w $f)" == "$f: command" && "$(whence -p $f)" == "$scratch/guard/$f" ]] ||
+            { bad "desktop command $f resolves to $(whence -v $f), not the guard stub; aborting"; return 1; }
+    done
+    ok "desktop commands (${_THEME_SELFTEST_GUARDED// /, }) resolve to guard stubs"
 
     schemes=("$_THEME_CONFIG"/schemes/*.y(a|)ml(N:t:r))
     (( ${#schemes} )) && ok "${#schemes} schemes found" || bad "no schemes in $_THEME_CONFIG/schemes"
@@ -3083,6 +3107,10 @@ _theme-self-test-run() {
         ok "overrides.json: scale 1.5 -> terminal 19.5, accent base0E -> #cba6f7" ||
         bad "overrides: terminal ${THEME_SIZE[terminal]} accent ${THEME_ROLE[accent]}"
     rm -f "$_THEME_STATE/overrides.json"
+
+    sleep 0.3
+    [[ ! -s "$scratch/escaped-calls" ]] && ok "no desktop command escaped to a guard stub" ||
+        bad "desktop commands reached the guard stubs: ${(f)$(<"$scratch/escaped-calls")}"
 
     print -r -- "self-test: $pass passed, $failed failed"
     (( failed == 0 ))
