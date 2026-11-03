@@ -11,7 +11,7 @@ window {
     location:            center;
     anchor:              center;
     width:               1000px;
-    border-radius:       16px;
+    border-radius:       @radius-xl;
 }
 
 mainbox {
@@ -22,7 +22,7 @@ mainbox {
 
 message {
     border:              0px;
-    border-radius:       12px;
+    border-radius:       @radius-lg;
 }
 
 textbox {
@@ -44,7 +44,7 @@ element {
     orientation:         vertical;
     padding:             24px 12px 20px 12px;
     spacing:             14px;
-    border-radius:       12px;
+    border-radius:       @radius-lg;
 }
 
 element normal.normal,
@@ -59,6 +59,6 @@ element-icon {
 }
 
 element-text {
-    font:                "Source Code Pro for Powerline 12";
+    font:                @font-sm;
     horizontal-align:    0.5;
 }
