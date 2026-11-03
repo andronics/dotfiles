@@ -45,3 +45,11 @@ size = 24
 [gtk]
 dark = "adw-gtk3-dark"
 light = "adw-gtk3"
+
+# Wallpapers. `theme wallpaper <name>` looks a name or number up in dirs,
+# first dir first: the tracked defaults, then untracked images of your own
+# (D12; a dir that doesn't exist is skipped). default is used while no
+# wallpaper is recorded (a fresh state). `theme list wallpapers` shows them.
+[wallpaper]
+dirs = ["~/.local/share/backgrounds", "~/Pictures/wallpapers"]
+default = "0001"
