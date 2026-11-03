@@ -1,0 +1,52 @@
+/**
+ * Prompt: a slim one-line dmenu bar for text input (rofi-input, rofi-password,
+ * dunst's action picker). Prompt, entry and any choices share one row.
+ */
+
+@import "../base.rasi"
+
+window {
+    location:            center;
+    anchor:              center;
+    width:               900px;
+    border:              1px solid;
+    border-color:        @accent-color;
+    border-radius:       @radius;
+}
+
+mainbox {
+    orientation:         horizontal;
+    padding:             6px;
+    spacing:             8px;
+    children:            [ inputbar, listview ];
+}
+
+inputbar {
+    background-color:    transparent;
+    border:              0px;
+    padding:             6px 8px;
+    spacing:             12px;
+    children:            [ prompt, entry ];
+}
+
+entry {
+    placeholder:         "";
+}
+
+listview {
+    layout:              horizontal;
+    lines:               1;
+    expand:              false;
+    scrollbar:           false;
+    padding:             0px;
+    spacing:             4px;
+}
+
+element {
+    padding:             6px 12px;
+}
+
+element-icon {
+    size:                0px;
+    padding:             0px;
+}

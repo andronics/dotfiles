@@ -1,0 +1,64 @@
+/**
+ * Power / session menu: one horizontal row of large icon buttons, labels
+ * under the icons. Rows carry their icon as `label\0icon\x1fsystem-shutdown`
+ * (Papirus has system-{lock-screen,log-out,suspend,hibernate,reboot,shutdown});
+ * no search field, Escape cancels.
+ */
+
+@import "../base.rasi"
+
+window {
+    location:            center;
+    anchor:              center;
+    width:               1000px;
+    border-radius:       16px;
+}
+
+mainbox {
+    padding:             24px;
+    spacing:             16px;
+    children:            [ message, listview ];
+}
+
+message {
+    border:              0px;
+    border-radius:       12px;
+}
+
+textbox {
+    horizontal-align:    0.5;
+}
+
+listview {
+    lines:               1;
+    columns:             6;
+    /* Fewer entries than columns: the row splits between them, no empty cells. */
+    fixed-columns:       false;
+    fixed-height:        true;
+    scrollbar:           false;
+    padding:             0px;
+    spacing:             16px;
+}
+
+element {
+    orientation:         vertical;
+    padding:             24px 12px 20px 12px;
+    spacing:             14px;
+    border-radius:       12px;
+}
+
+element normal.normal,
+element alternate.normal {
+    background-color:    @bg-alt-color;
+}
+
+element-icon {
+    size:                64px;
+    padding:             0px;
+    horizontal-align:    0.5;
+}
+
+element-text {
+    font:                "Source Code Pro for Powerline 12";
+    horizontal-align:    0.5;
+}
