@@ -270,6 +270,8 @@ dispatcher-get-commands() {
             case "$sub" in
                 help|version|self-test) continue ;;
             esac
+            # <prefix>-<sub>-help is <sub>'s help, not a command of its own
+            [[ "$sub" == *-help ]] && (( ${+functions[${prefix}${sub%-help}]} )) && continue
             commands+=("$sub")
         done
         commands=( ${(uo)commands} )
@@ -619,9 +621,8 @@ dispatcher-execute() {
     case "$command" in
         help|--help|-h)
             shift
-            if [[ -n "$1" ]] && dispatcher-command-exists "$1"; then
-                # Show help for specific command
-                dispatcher-execute-command "$1" --help
+            if [[ -n "$1" ]] && dispatcher-command-exists "$(dispatcher-resolve-alias "$1")"; then
+                dispatcher-show-command-help "$1"
             else
                 dispatcher-show-help
             fi
@@ -642,8 +643,54 @@ dispatcher-execute() {
             ;;
     esac
 
+    # `<tool> <command> --help` shows the command's help and never runs it:
+    # a command that ignores --help would otherwise act (`bt power-off --help`
+    # turned the adapter off). Only the first argument counts, so a command
+    # can still be given --help further on (after `--`, say).
+    if [[ "${2:-}" == (--help|-h) ]] && dispatcher-command-exists "$(dispatcher-resolve-alias "$command")"; then
+        dispatcher-show-command-help "$command"
+        return 0
+    fi
+
     # Execute subcommand
     dispatcher-execute-command "$@"
+}
+
+# Show one command's help without running it
+#
+# Function mode: the module's _<prefix>-<command>-help (or
+# <prefix>-<command>-help) if it defines one. Otherwise, and in file mode,
+# a usage line built from the command's description and its aliases.
+#
+# Usage: dispatcher-show-command-help "list"
+#
+dispatcher-show-command-help() {
+    local command
+    command=$(dispatcher-resolve-alias "${1}")
+
+    if [[ "${DISPATCHER_ROUTE_MODE}" == "function" ]]; then
+        local help_fn
+        for help_fn in "_${DISPATCHER_FUNCTION_PREFIX}-${command}-help" \
+                       "${DISPATCHER_FUNCTION_PREFIX}-${command}-help"; do
+            if (( ${+functions[$help_fn]} )); then
+                "$help_fn"
+                return 0
+            fi
+        done
+    fi
+
+    local desc alias_name
+    local -a aliases=()
+    desc=$(dispatcher-get-command-description "$command")
+    for alias_name in ${(ok)_DISPATCHER_ALIASES}; do
+        [[ "${_DISPATCHER_ALIASES[$alias_name]}" == "$command" ]] && aliases+=("$alias_name")
+    done
+
+    echo "Usage: ${DISPATCHER_NAME} ${command} [arguments]"
+    [[ -n "$desc" ]] && echo "" && echo "  $desc"
+    (( ${#aliases} )) && echo "" && echo "Aliases: ${(j:, :)aliases}"
+    echo ""
+    echo "Run '${DISPATCHER_NAME} help' for all commands"
 }
 
 # ------------------------------
@@ -988,6 +1035,47 @@ dispatcher-self-test() {
         ((tests_passed++)) || true
     else
         echo "FAIL"
+        ((tests_failed++)) || true
+    fi
+
+    # Test 7: a command's help never runs the command. Throwaway commands
+    # print a RAN: marker; beta has its own help function, alpha doesn't.
+    echo -n "Test 7: Command help doesn't run the command... "
+    typeset -gA _DISPATCHERSELFTEST_DESCRIPTIONS=([alpha]="Alpha does a thing" [beta]="Beta does another")
+    dispatcherselftest-alpha() { echo "RAN:alpha"; }
+    dispatcherselftest-beta()  { echo "RAN:beta"; }
+    _dispatcherselftest-beta-help() { echo "Beta's own help"; }
+    local -A saved_aliases=("${(@kv)_DISPATCHER_ALIASES}")
+    local -a saved_before=("${_DISPATCHER_BEFORE_HOOKS[@]}") saved_after=("${_DISPATCHER_AFTER_HOOKS[@]}")
+    local saved_dry_run="$DISPATCHER_DRY_RUN"
+    _DISPATCHER_ALIASES=() _DISPATCHER_BEFORE_HOOKS=() _DISPATCHER_AFTER_HOOKS=() DISPATCHER_DRY_RUN=false
+    dispatcher-init "dispatcherselftest" --route=function
+    dispatcher-register-alias "a" "alpha"
+    local -a help_failures=()
+    local cmd out want
+    local invocation
+    for cmd in alpha beta a; do
+        want="Alpha does a thing"
+        [[ "$cmd" == beta ]] && want="Beta's own help"
+        for invocation in "$cmd --help" "$cmd -h" "help $cmd" "--help $cmd"; do
+            out=$(dispatcher-execute ${=invocation} 2>&1)
+            [[ "$out" == *RAN:* ]] && help_failures+=("'$invocation' ran it")
+            [[ "$out" == *"$want"* ]] || help_failures+=("'$invocation' printed no help")
+        done
+    done
+    [[ "$(dispatcher-execute alpha 2>&1)" == *RAN:alpha* ]] || help_failures+=("'alpha' didn't run")
+    [[ "$(dispatcher-execute alpha -- --help 2>&1)" == *RAN:alpha* ]] || help_failures+=("'alpha -- --help' didn't run")
+    [[ " $(dispatcher-get-commands) " == *" beta-help "* ]] && help_failures+=("beta-help listed as a command")
+    unfunction dispatcherselftest-alpha dispatcherselftest-beta _dispatcherselftest-beta-help
+    unset _DISPATCHERSELFTEST_DESCRIPTIONS
+    _DISPATCHER_ALIASES=("${(@kv)saved_aliases}")
+    _DISPATCHER_BEFORE_HOOKS=("${saved_before[@]}") _DISPATCHER_AFTER_HOOKS=("${saved_after[@]}")
+    DISPATCHER_DRY_RUN="$saved_dry_run"
+    if (( ${#help_failures} == 0 )); then
+        echo "PASS"
+        ((tests_passed++)) || true
+    else
+        echo "FAIL (${(j:; :)help_failures})"
         ((tests_failed++)) || true
     fi
 
