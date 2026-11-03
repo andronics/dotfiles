@@ -7,7 +7,7 @@
 # Its memory belongs to that home, so always launch from it. Extra arguments go
 # to claude, e.g. `folio-coordinator --model opus`. Check `tmux ls` / ListAgents
 # first: two of the same coordinator would both act. Vault cheatsheet:
-# "🤖 Launching a Coordinator".
+# "📇 🤖 Launching a Coordinator".
 
 _coordinator() {
   local name=$1 home=/pool/local/actors/$1; shift
