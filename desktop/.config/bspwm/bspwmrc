@@ -17,7 +17,6 @@ bspc config honor_size_hints true
 bspc config remove_disabled_monitors true
 bspc config remove_unplugged_monitors true
 bspc config merge_overlapping_monitors true
-# bspc config presel_feedback_color "$(palette overlay0)"
 
 # External Rules
 bspc config external_rules_command "$(which bsp-external-rules)"
@@ -28,19 +27,23 @@ bspc config pointer_action1 move
 bspc config pointer_action2 resize_side
 bspc config pointer_action3 resize_corner
 
-# Borders
-# bspc config border_radius 0
-# bspc config border_width 0
-# bspc config normal_border_color	"$(palette peach)"
-# bspc config active_border_color	"$(palette crust)"
-# bspc config focused_border_color "$(palette sky)"
+# Borders, gap and the bar reservation: border colours and width,
+# window_gap, bottom_padding and presel_feedback_color come from the theme
+# (`theme reload bspwm` re-applies them and re-docks the coordinator panel).
+# Without a theme, today's sizes and bspwm's default colours. bottom_padding
+# 32 under the 50px bar is deliberate (D15).
+if theme ensure >/dev/null 2>&1 && [[ -r ~/.local/state/theme/current/bspwm.sh ]]; then
+    source ~/.local/state/theme/current/bspwm.sh
+else
+    bspc config border_width 1
+    bspc config window_gap 5
+    bspc config bottom_padding 32
+fi
 
 # Desktop Padding
 bspc config top_padding 0
-bspc config bottom_padding 32
 bspc config left_padding 0
 bspc config right_padding 0
-bspc config window_gap 5
 
 # Rules
 bspc rule -r "*:*:*"
