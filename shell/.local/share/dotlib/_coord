@@ -79,7 +79,9 @@ typeset -gA _COORD_ICONS=(
     [dotfiles]=$'\U000F0493'       # md-cog
 )
 
-# Fallbacks for `bar`; polybar's hook passes its own [colors] as key=value.
+# Colours for `bar`. These mirror polybar's [colors] (overlay0, peach, red,
+# crust, lavender) because polybar can't interpolate references inside a
+# command, so the hook is a plain `coord bar`. key=value args still override.
 typeset -gA _COORD_BAR_COLORS=(
     [dim]='#6c7086' [busy]='#fab387' [waiting]='#f38ba8' [ink]='#11111b' [shown]='#b4befe'
 )
@@ -93,7 +95,7 @@ typeset -gA _COORD_DESCRIPTIONS=(
     [launch]="Start <name>'s window hidden, attaching to its tmux session if one exists"
     [list]="List coordinator windows and whether each is hidden or visible"
     [status]="Claude Code hook: read the hook JSON on stdin and, for a session under ${_COORD_ACTORS_DIR}/<name>, record <name> busy, idle, or waiting on a question (AskUserQuestion), permission or elicitation, notifying on waiting and refresh polybar; [event] overrides hook_event_name; always exits 0"
-    [bar]="Print the polybar strip: one clickable icon per coordinator styled not running, idle, busy, waiting or shown; [key=#rrggbb ...] sets ${(kj:, :)_COORD_BAR_COLORS}"
+    [bar]="Print the polybar strip: one clickable icon per coordinator styled not running, idle, busy, waiting or shown; [key=#rrggbb ...] overrides the built-in colours: ${(kj:, :)_COORD_BAR_COLORS}"
 )
 
 # ------------------------------
