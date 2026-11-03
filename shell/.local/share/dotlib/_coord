@@ -413,14 +413,16 @@ _coord-activity() {
     fi
 }
 
-# Sets REPLY to one pick row as pango markup (rofi -markup-rows): the strip's
-# glyph coloured as the strip colours it, the name, and a faint state. rofi
-# takes icons only as image names, so the Nerd Font glyph has to be text.
-# Shown isn't drawn here: pick marks those rows active, which
-# rofi/themes/coord.rasi underlines in lavender like the strip.
+# Sets REPLY to one pick cell as pango markup (rofi -markup-rows), three
+# centred lines for rofi/themes/coord.rasi's grid: the strip's glyph, large
+# and coloured as the strip colours it, the name, and a small faint state.
+# rofi takes icons only as image names, so the glyph has to be text, and a
+# row can't hold a newline, so the line breaks are &#10; entities. Shown is
+# only named here: pick marks those cells active and the theme rings them.
 _coord-pick-row() {
     local _name=$1 _activity=$2 _shown=${3:-} _glyph _label
-    _glyph="<span font_family='Symbols Nerd Font Mono'> ${_COORD_ICONS[$_name]:-${_name[1]}} </span>"
+    # size is in 1024ths of a point: 36pt, about 48px.
+    _glyph="<span font_family='Symbols Nerd Font Mono' size='36864'> ${_COORD_ICONS[$_name]:-${_name[1]}} </span>"
     case "$_activity" in
         off)     _glyph="<span foreground='${_COORD_BAR_COLORS[dim]}'>${_glyph}</span>"
                  _label="not running" ;;
@@ -431,7 +433,7 @@ _coord-pick-row() {
         *)       _label=idle ;;
     esac
     [[ -n "$_shown" ]] && _label+=" · shown"
-    printf -v REPLY "%s  %-14s<span fgalpha='55%%'>%s</span>" "$_glyph" "$_name" "$_label"
+    REPLY="${_glyph}&#10;${_name}&#10;<span size='small' fgalpha='55%'>${_label}</span>"
 }
 
 # The cursor starts on the shown coordinator (also highlighted as active), or
