@@ -35,3 +35,9 @@ verifcolor=ffffffff
 wrongcolor=d23c3dff
 modifcolor=d23c3dff
 bgcolor=000000ff
+
+# The theme's ring, inside, verify/wrong and text colours and its font
+# (`theme apply`), over the defaults above; without a theme they stand. The
+# picture is betterlockscreen's cache of the theme's wallpaper, refreshed by
+# `theme wallpaper` (`betterlockscreen -u`, in the background).
+[[ -r ~/.local/state/theme/current/betterlockscreen.sh ]] && source ~/.local/state/theme/current/betterlockscreen.sh

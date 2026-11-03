@@ -32,7 +32,8 @@ source "${DOTLIB}/_systemd"   || { echo "[ERROR] _lockscreen requires _systemd" 
 
 declare -g _LOCKSCREEN_SUSPEND_UNIT="lockscreen-suspend"
 declare -g _LOCKSCREEN_SCOPE="--user"
-declare -g _LOCKSCREEN_WALLPAPER="$(xdg-data-file "backgrounds" "0001.png")"
+# The lock picture when the theme records no wallpaper (see _lockscreen-wallpaper).
+declare -g _LOCKSCREEN_FALLBACK_WALLPAPER="$(xdg-data-file "backgrounds" "0001.png")"
 
 # Seconds to wait before the first idle-time check after (re)starting the
 # daemon. xidlehook reads real X idle time, not time-since-daemon-start, so
@@ -43,7 +44,7 @@ declare -g _LOCKSCREEN_GRACE_PERIOD="${LOCKSCREEN_GRACE_PERIOD:-10}"
 
 typeset -gA _LOCKSCREEN_DESCRIPTIONS=(
     [activate]="Lock the screen now"
-    [wallpaper-update]="Regenerate betterlockscreen's cached lock wallpaper"
+    [wallpaper-update]="Regenerate betterlockscreen's cached lock picture from the theme's wallpaper (or [image])"
     [hook-init]="Start the idle daemon in the foreground (used by .zlogin.d/50-lockscreen)"
     [hook-stop]="Stop the idle daemon"
     [hook-enable]="Resume the idle timer"
@@ -68,6 +69,16 @@ _lockscreen-check() {
     fi
 }
 
+# REPLY = the wallpaper the theme records (`theme wallpaper`; read with
+# _theme's theme-get in a subshell, so this module doesn't load it), when it
+# is readable; else _LOCKSCREEN_FALLBACK_WALLPAPER.
+_lockscreen-wallpaper() {
+    local wall
+    wall=$(source "${DOTLIB}/_theme" 2>/dev/null && theme-get wallpaper 2>/dev/null)
+    [[ -n "$wall" && -r "$wall" ]] || wall=$_LOCKSCREEN_FALLBACK_WALLPAPER
+    REPLY=$wall
+}
+
 _lockscreen-timer-disabled() {
     xidlehook-query 2>/dev/null | grep -q "disabled: true"
 }
@@ -81,10 +92,15 @@ lockscreen-activate() {
     betterlockscreen --lock -- -n
 }
 
+# Usage: lockscreen-wallpaper-update [image]  (default: the theme's wallpaper)
+# `theme wallpaper` already does this in the background when the wallpaper
+# changes; this is the manual, foreground way.
 lockscreen-wallpaper-update() {
     _lockscreen-check || return 1
-    log-info "Updating lockscreen wallpaper cache"
-    betterlockscreen --update "${_LOCKSCREEN_WALLPAPER}"
+    local wall=${1:-}
+    [[ -n "$wall" ]] || { _lockscreen-wallpaper; wall=$REPLY; }
+    log-info "Updating lockscreen wallpaper cache from ${wall}"
+    betterlockscreen --update "${wall}"
 }
 
 # ------------------------------
