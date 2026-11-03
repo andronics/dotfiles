@@ -1,14 +1,22 @@
-# Git-crypt encrypted files.
+# Git-crypt encrypted files. This repo is public.
 #
-# Files matching the patterns below are encrypted on commit (clean filter)
-# and decrypted on checkout (smudge filter) using the symmetric key in
-# `pass show git/crypt-key`. Filter is wired by `shell/.local/bin/git-crypt`,
-# invoked automatically by `shell/.postinstall` after a fresh clone.
+# Files matching the patterns below are encrypted on commit and decrypted on
+# checkout by the official git-crypt (Andrew Ayer's, `pacman -S git-crypt`).
+# The repo's symmetric key is in pass at
+# `hosts/desktop/dotfiles-git-crypt-key-official` (base64 of
+# `git-crypt export-key`), and Stephen's GPG key is a git-crypt user
+# (.git-crypt/keys/), so either unlocks it.
 #
-# To activate manually: cd ~/.dotfiles && ./shell/.local/bin/git-crypt init
+# `shell/.postinstall` unlocks a fresh clone from pass. To unlock by hand,
+# from a clean working tree:
 #
-# Until activated, the patterns below are no-ops — git's filter resolution
-# falls through to identity when filter.git-crypt.* is unset, so adding
-# this file to a fresh clone is harmless.
+#   with your GPG key:   cd ~/.dotfiles && git-crypt unlock
+#   with the pass key:   key=$(mktemp -p "$XDG_RUNTIME_DIR") \
+#                          && pass show hosts/desktop/dotfiles-git-crypt-key-official | base64 -d > "$key" \
+#                          && git-crypt unlock "$key"; shred -u "$key"
+#
+# Until unlocked, git-crypt's filter is not configured and git would commit a
+# matching file in plaintext: the .githooks/pre-commit gate refuses that, and
+# `./dotfiles check-crypt` checks every committed one.
 
 *.env filter=git-crypt diff=git-crypt

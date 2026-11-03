@@ -54,9 +54,11 @@ Scripts in `shell/.local/bin/` (e.g. `audio`, `player`) should be thin dispatche
 
 ## Secrets architecture
 
-Three-tier chain: GPG key (private submodule) → `pass` (private repo) → git-crypt symmetric key (in `pass`) → encrypted files in this public repo.
+Three-tier chain: GPG key (private submodule) → `pass` (private repo) → git-crypt symmetric key (in `pass` at `hosts/desktop/dotfiles-git-crypt-key-official`) → encrypted files in this public repo. Official git-crypt; Stephen's GPG key is also a git-crypt user. Design record: `docs/design/0002-official-git-crypt.md`.
 
-Wired automatically by `shell/.postinstall`. Patterns declared in `.gitattributes` (currently `*.env`). See README.md "Secrets architecture" for the full diagram.
+Unlocked automatically by `shell/.postinstall`. Patterns declared in `.gitattributes` (currently `*.env`). See README.md "Secrets architecture" for the full diagram.
+
+**Never commit a git-crypt file unencrypted** (the repo is public). `.githooks/pre-commit` refuses it; don't bypass it with `--no-verify`. Never run `git-crypt init` here (it would make a new key).
 
 **Do not put files behind git-crypt that are read by the zsh dispatcher chain.** Login shells before bootstrap step 5 would see binary garbage.
 
@@ -68,10 +70,9 @@ Wired automatically by `shell/.postinstall`. Patterns declared in `.gitattribute
 | `.zXXX.d/*` | `zsh -n <file>`; `time zsh -ic exit` (regression check) |
 | desktop boot | login on a 2nd TTY; `pgrep -c dunst sxhkd picom polybar` should each be `1` |
 | theme | `theme get bg` returns hex; `theme check` passes; `theme self-test` passes; `theme get wallpaper` is a readable image; `theme pick --dry-run` (super + alt + space) shows every scheme with its colours and prints the command instead of applying it; visually scan polybar / rofi / dunst / alacritty |
-| git-crypt | `git check-attr filter -- foo.env` returns `git-crypt`; `.git/config` has `filter.git-crypt.{clean,smudge}` pointing at the real script path |
+| git-crypt | `./dotfiles check-crypt` passes; `git-crypt status -e` lists no `NOT ENCRYPTED` warning; `git config core.hooksPath` is `.githooks` |
 
 ## House style
 
 - Prefer Stow profile composition over chezmoi-style templating. `gomplate` is the templating escape hatch (`.gomplate/plugins.yml` is wired to `pass`) for the rare files that need per-host variants.
-- The custom `git-crypt` (openssl-based) is deliberate, not a placeholder for the upstream tool.
 - Don't add comments that restate code. Comments belong on non-obvious *why* (constraints, workarounds, surprising behaviour).

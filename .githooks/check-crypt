@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+# This repo is public: a file that .gitattributes puts behind git-crypt must
+# never reach it in plaintext. git-crypt only encrypts when its filter is
+# configured (after `git-crypt unlock`); in a locked or half-set-up clone the
+# filter silently falls through and the plaintext is committed. So check the
+# blobs themselves: each one must start with git-crypt's "\0GITCRYPT\0" header.
+#
+#   check-crypt            committed files at HEAD, plus `git-crypt status -e`
+#   check-crypt --staged   the index (what .githooks/pre-commit runs)
+#
+# Exit 0 clean, 1 a plaintext file found, 2 usage or repo error.
+
+mode="head"
+case "${1:-}" in
+   ""|--head) ;;
+   --staged)  mode=staged ;;
+   *) echo "usage: check-crypt [--staged|--head]" >&2; exit 2 ;;
+esac
+
+root=$(git rev-parse --show-toplevel 2>/dev/null) || { echo "check-crypt: not in a git work tree" >&2; exit 2; }
+cd "${root}" || exit 2
+
+if [[ ${mode} == staged ]]; then
+   attr_src=(--cached)
+   rev=""
+   list_paths() { git diff --cached --name-only -z --diff-filter=ACMRT; }
+else
+   git rev-parse -q --verify HEAD >/dev/null || { echo "check-crypt: no commits yet"; exit 0; }
+   attr_src=(--source=HEAD)
+   rev=HEAD
+   list_paths() { git ls-tree -r -z --full-tree --name-only HEAD; }
+fi
+
+bad=0
+checked=0
+while IFS= read -r -d '' path && IFS= read -r -d '' _attr && IFS= read -r -d '' value; do
+   [[ ${value} == git-crypt ]] || continue
+   checked=$((checked + 1))
+   if ! cmp -s <(git cat-file blob "${rev}:${path}" 2>/dev/null | head -c 10) <(printf '\0GITCRYPT\0'); then
+      echo "check-crypt: NOT ENCRYPTED (${mode}): ${path}" >&2
+      bad=1
+   fi
+done < <(list_paths | git check-attr -z --stdin "${attr_src[@]}" filter)
+
+if [[ ${mode} == head ]]; then
+   if git-crypt --version 2>&1 | grep -q '^git-crypt '; then
+      git-crypt status -e >&2 || { echo "check-crypt: git-crypt status -e reported a problem" >&2; bad=1; }
+   else
+      echo "check-crypt: official git-crypt not on PATH, skipped 'git-crypt status -e'" >&2
+   fi
+fi
+
+if (( bad )); then
+   [[ ${mode} == staged ]] && cat >&2 <<'MSG'
+check-crypt: commit refused. These files are marked filter=git-crypt in
+.gitattributes but their staged content is plaintext, and this repo is public.
+Unlock the repo first (see .gitattributes), then `git rm --cached <file>` and
+`git add <file>` so git-crypt encrypts it.
+MSG
+   exit 1
+fi
+echo "check-crypt: ok (${checked} git-crypt file(s) checked, ${mode})"

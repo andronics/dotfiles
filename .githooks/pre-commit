@@ -1,0 +1,5 @@
+#!/bin/sh
+# Refuse a commit that would put a git-crypt file into this public repo in plaintext.
+root=$(git rev-parse --show-toplevel) || exit 1
+"${root}/.githooks/check-crypt" --staged >/dev/null || exit 1
+HOOK=pre-commit exec "${root}/.githooks/_chain" "$@"

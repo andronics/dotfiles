@@ -18,7 +18,9 @@ desktop/.local/share/icons/hicolor/icon-theme.cache
 **/tokens.json
 **/**/hosts.yml
 
-# git-crypt-encrypted exception: tracked (encrypted at rest), not a plaintext leak
+# git-crypt files (patterns in .gitattributes) are tracked encrypted at rest,
+# not a plaintext leak: an ignored path meant to be tracked that way gets a
+# `!path` exception here. .githooks/pre-commit refuses them unencrypted.
 
 # allow template files
 !**/*.tmpl

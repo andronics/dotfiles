@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Sourced by ./dotfiles after stowing the shell package.
 # Locks down secret-dir perms (ssh/gpg refuse loose modes), reloads gpg-agent
-# so newly-imported keys are picked up, and wires git-crypt filters in the
-# dotfiles repo if .gitattributes declares them.
+# so newly-imported keys are picked up, and sets up official git-crypt in the
+# dotfiles repo (hooks, unlock from pass) if .gitattributes declares it.
 # shellcheck disable=SC2154  # err/info/ok and dotfiles_source_root come from the wrapper
 
 [[ -d "${HOME}/.ssh"   ]] && chmod 700 "${HOME}/.ssh"
@@ -12,16 +12,59 @@ command -v gpg-connect-agent >/dev/null && {
    gpg-connect-agent reloadagent /bye >/dev/null 2>&1 && ok "gpg-agent reloaded"
 }
 
-# Wire git-crypt clean/smudge filters into the dotfiles repo's .git/config.
-# Idempotent: skipped if filter is already configured. Best-effort: does not
-# abort install if pass / key is unavailable.
-_gitattrs="${dotfiles_source_root}/.gitattributes"
-[[ -f "${_gitattrs}" ]] && grep -q 'filter=git-crypt' "${_gitattrs}" 2>/dev/null && {
-   git -C "${dotfiles_source_root}" config --get filter.git-crypt.clean >/dev/null 2>&1 || {
-      info "wiring git-crypt filters in dotfiles repo"
-      ( cd "${dotfiles_source_root}" \
-         && "${dotfiles_source_root}/shell/.local/bin/git-crypt" init >/dev/null 2>&1 \
-      ) && ok "git-crypt activated (run 'git checkout HEAD -- .' to refresh tracked files)" \
-        || warn "git-crypt init skipped — pass entry 'git/crypt-key' missing or gpg locked"
+# git-crypt (the official tool, Andrew Ayer's): clear the retired openssl
+# script's filter config, point the repo at its own hooks (.githooks: the
+# pre-commit gate that refuses plaintext git-crypt files), and unlock a fresh
+# clone with the symmetric key from pass. Best-effort: warns, never fails the
+# install. The key file lives only in tmpfs and is shredded on exit.
+_dotfiles_git_crypt() {
+   local repo="${dotfiles_source_root}"
+   local key_entry="hosts/desktop/dotfiles-git-crypt-key-official"
+   local store="${PASSWORD_STORE_DIR:-${HOME}/.password-store}"
+   local keydir
+
+   grep -q 'filter=git-crypt' "${repo}/.gitattributes" 2>/dev/null || return 0
+
+   # Official git-crypt writes its own filter.git-crypt.* on unlock; the old
+   # script's entries point at a file that no longer exists and would break
+   # every checkout of an encrypted file (filter.git-crypt.required).
+   git -C "${repo}" config --get filter.git-crypt.clean 2>/dev/null | grep -q 'shell/\.local/bin/git-crypt' && {
+      git -C "${repo}" config --remove-section filter.git-crypt 2>/dev/null
+      git -C "${repo}" config --remove-section diff.git-crypt 2>/dev/null
+      info "removed the retired git-crypt filter config"
    }
+
+   [[ "$(git -C "${repo}" config --local --get core.hooksPath)" == ".githooks" ]] || {
+      git -C "${repo}" config --local core.hooksPath .githooks \
+         && ok "dotfiles commit hooks: .githooks (refuses unencrypted git-crypt files)"
+   }
+
+   keydir="$(git -C "${repo}" rev-parse --path-format=absolute --git-common-dir)/git-crypt/keys/default"
+   [[ -e "${keydir}" ]] && return 0
+
+   git-crypt --version 2>&1 | grep -q '^git-crypt ' || {
+      warn "official git-crypt not installed (pacman -S git-crypt): dotfiles repo left locked"
+      return 0
+   }
+
+   command -v pass >/dev/null && [[ -f "${store}/${key_entry}.gpg" ]] || {
+      warn "git-crypt key not in pass (${key_entry}); unlock with your GPG key instead: cd ${repo} && git-crypt unlock"
+      return 0
+   }
+
+   info "unlocking git-crypt in dotfiles repo"
+   if (
+      umask 077
+      key=$(mktemp -p "${XDG_RUNTIME_DIR:-/dev/shm}" dotfiles-git-crypt.XXXXXX) || exit 1
+      trap 'shred -u "${key}" 2>/dev/null' EXIT
+      trap 'exit 1' HUP INT TERM
+      pass show "${key_entry}" | base64 -d > "${key}" || exit 1
+      cd "${repo}" && git-crypt unlock "${key}"
+   ); then
+      ok "git-crypt unlocked"
+   else
+      warn "git-crypt unlock failed (it needs a clean working tree, and gpg must be unlocked); or use your GPG key: cd ${repo} && git-crypt unlock"
+   fi
 }
+_dotfiles_git_crypt
+unset -f _dotfiles_git_crypt
