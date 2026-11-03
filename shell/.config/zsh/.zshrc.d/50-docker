@@ -1,80 +1,70 @@
 # docker compose
+#
+# Stacks live one per directory under $DCKR_DIR (set in .zprofile.d/50-docker),
+# each with its own compose.yml and .env. Dot-directories such as .extend hold
+# shared fragments, not stacks, and are skipped.
 
+# List the stack names: every non-hidden directory holding a compose file.
+_dc_stacks() {
+    local d
+    local -a f
+    for d in "$DCKR_DIR"/*(N/); do
+        f=($d/(compose|docker-compose).y(|a)ml(N.))
+        (( $#f )) && print -r -- "${d:t}"
+    done
+}
+
+# Run docker-compose in one stack's directory: _dc_in <stack> <args>...
+_dc_in() {
+    local dir="$DCKR_DIR/$1"
+    [[ -n $1 && -d $dir ]] || {
+        echo "${1:-<stack>}: does not exist in $DCKR_DIR" >&2
+        return 1
+    }
+    shift
+    ( cd "$dir" && docker-compose --env-file ./.env "$@" )
+}
 
 dcd() {
-    dir="$DCKR_DIR/svcs/$1"
-    [[ ! -d $dir ]] && {
-        echo "$1: does not exist"
-    
-    } || {
-        # ths need to be a loop to do multiple svcs at once
-        pushd "$DCKR_DIR/svcs/$1" > /dev/null
-        docker-compose --env-file ./.env down
-        popd  > /dev/null
-    }
+    [[ $1 == (-h|--help) ]] && { echo "Usage: dcd <stack>  (docker-compose down in \$DCKR_DIR/<stack>)"; return 0; }
+    _dc_in "$1" down
 }
 
 dcda() {
-    dir="$DCKR_DIR/svcs"
-    [[ ! -d $dir ]] && {
-        echo "$dir: does not exist"
-    
-    } || {
-        for i in $dir/*/; do
-            dcd $(basename "$i")
-        done
-    }
+    [[ $1 == (-h|--help) ]] && { echo "Usage: dcda  (dcd every stack in \$DCKR_DIR)"; return 0; }
+    [[ -d $DCKR_DIR ]] || { echo "$DCKR_DIR: does not exist" >&2; return 1; }
+    local s
+    for s in $(_dc_stacks); do
+        dcd "$s"
+    done
 }
 
 dcu() {
-    dir="$DCKR_DIR/svcs/$1"
-    [[ ! -d $dir ]] && {
-        echo "$1: does not exist"
-    
-    } || {
-        pushd "$DCKR_DIR/svcs/$1"  > /dev/null
-        docker-compose pull
-        docker-compose --env-file ./.env up -d
-        popd  > /dev/null
-    }
+    [[ $1 == (-h|--help) ]] && { echo "Usage: dcu <stack>  (docker-compose pull, then up -d, in \$DCKR_DIR/<stack>)"; return 0; }
+    _dc_in "$1" pull && _dc_in "$1" up -d
 }
 
 dcua() {
-    dir="$DCKR_DIR/svcs"
-    [[ ! -d $dir ]] && {
-        echo "$dir: does not exist"
-    
-    } || {
-        for i in $dir/*/; do
-            dcu $(basename "$i")
-        done
-    }
+    [[ $1 == (-h|--help) ]] && { echo "Usage: dcua  (dcu every stack in \$DCKR_DIR)"; return 0; }
+    [[ -d $DCKR_DIR ]] || { echo "$DCKR_DIR: does not exist" >&2; return 1; }
+    local s
+    for s in $(_dc_stacks); do
+        dcu "$s"
+    done
 }
 
 dcru() {
-    dir="$DCKR_DIR/svcs/$1"
-    [[ ! -d $dir ]] && {
-        echo "$1: does not exist"
-    
-    } || {
-        pushd "$DCKR_DIR/svcs/$1" > /dev/null
-        docker-compose --env-file ./.env down
-        docker-compose pull
-        docker-compose --env-file ./.env up -d
-        popd  > /dev/null
-    }
+    [[ $1 == (-h|--help) ]] && { echo "Usage: dcru <stack>  (docker-compose down, pull, then up -d, in \$DCKR_DIR/<stack>)"; return 0; }
+    _dc_in "$1" down && _dc_in "$1" pull && _dc_in "$1" up -d
 }
 
 dcrua() {
-    dir="$DCKR_DIR/svcs"
-    [[ ! -d $dir ]] && {
-        echo "$dir: does not exist"
-    
-    } || {
-        for i in $dir/*/; do
-            dcru $(basename "$i")
-        done
-    }
+    [[ $1 == (-h|--help) ]] && { echo "Usage: dcrua  (dcru every stack in \$DCKR_DIR)"; return 0; }
+    [[ -d $DCKR_DIR ]] || { echo "$DCKR_DIR: does not exist" >&2; return 1; }
+    local s
+    for s in $(_dc_stacks); do
+        dcru "$s"
+    done
 }
 
 # docker network

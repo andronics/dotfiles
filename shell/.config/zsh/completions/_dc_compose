@@ -1,0 +1,12 @@
+#compdef dcd dcu dcru
+
+# Stack names for the docker compose helpers in .zshrc.d/50-docker: the
+# non-hidden directories under $DCKR_DIR that hold a compose file.
+local -a stacks
+local d
+local -a f
+for d in "$DCKR_DIR"/*(N/); do
+    f=($d/(compose|docker-compose).y(|a)ml(N.))
+    (( $#f )) && stacks+=("${d:t}")
+done
+_describe -t stacks 'compose stack' stacks

@@ -1,1 +1,1 @@
-export DCKR_DIR=/mnt/docker
+export DCKR_DIR=/pool/distributed/iac/workstation/compose
