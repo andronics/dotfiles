@@ -1,0 +1,14 @@
+#!/usr/bin/env zsh
+set -e
+
+source "${DOTLIB}/_dispatcher" || { echo "missing _dispatcher" >&2; exit 1; }
+source "${DOTLIB}/_power"      || { echo "missing _power"      >&2; exit 1; }
+
+dispatcher-init "power" \
+    --route=function \
+    --description="Lock, log out, suspend, hibernate, reboot or shut down, confirmed in rofi"
+
+dispatcher-register-alias "poweroff" "shutdown"
+dispatcher-register-alias "log-out"  "logout"
+
+dispatcher-execute "$@"
