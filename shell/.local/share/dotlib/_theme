@@ -2145,23 +2145,29 @@ theme-undo() {
     log-success "[theme] back to $name ($id) in ${REPLY} ms"
 }
 
-# theme wallpaper <image|name|number> [--keep-palette] | restore
+# theme wallpaper <image|name|number> [--keep-palette] [--mode m]
+#                 [--variant v] [--contrast c] | restore
+# By default the colours are generated from the image (matugen), so every
+# target reloads. --keep-palette keeps the current build's colours and
+# reloads only the wallpaper and the lock screen.
 theme-wallpaper() {
-    local ref= a wall cur id name src t0=$EPOCHREALTIME
-    # What the colours do with a new wallpaper. keep is the only mode until
-    # palettes from images (matugen, PR 9); that PR adds the image mode and
-    # makes it the default, leaving --keep-palette to ask for this one.
-    local palette=keep
+    local _THEME_OPT_MODE= _THEME_OPT_VARIANT= _THEME_OPT_CONTRAST=
+    local ref= a wall cur id name src palette=image t0=$EPOCHREALTIME
+    local usage="[theme] usage: theme wallpaper <image|name|number> [--keep-palette] [--mode m] [--variant v] [--contrast c] | restore"
+    local -a args=()
     for a; do
         case "$a" in
             -h|--help) theme-help; return 0 ;;
             --keep-palette) palette=keep ;;
-            -*) log-error "[theme] wallpaper: unknown option '$a'"; return 2 ;;
-            *)  [[ -z "$ref" ]] || { log-error "[theme] usage: theme wallpaper <image|name|number> [--keep-palette] | restore"; return 2; }
-                ref=$a ;;
+            *) args+=("$a") ;;
         esac
     done
-    [[ -n "$ref" ]] || { log-error "[theme] usage: theme wallpaper <image|name|number> [--keep-palette] | restore"; return 2; }
+    _theme-opts "${args[@]}" || return 2
+    for a in "${reply[@]}"; do
+        [[ -z "$ref" ]] || { log-error "$usage"; return 2; }
+        ref=$a
+    done
+    [[ -n "$ref" ]] || { log-error "$usage"; return 2; }
     _theme-paths
     [[ "$ref" == restore ]] && { _theme-wallpaper-restore; return; }
 
@@ -2172,7 +2178,20 @@ theme-wallpaper() {
     fi
     wall=$REPLY
     _theme-lock || return 1
-    if _theme-link-complete current; then
+    if [[ "$palette" == image ]]; then
+        # Already this image's colours with the same knobs: only set it again.
+        if _theme-link-complete current && _theme-matugen-knobs 2>/dev/null &&
+           [[ "$(jq -r '[.wallpaper, .source.kind, .source.ref, .source.mode, .source.variant, (.source.contrast | tostring)] | join("\t")' \
+                 "$_THEME_STATE/current/spec.json")" == "$wall"$'\t'image$'\t'"$wall"$'\t'"$_THEME_SRC_MODE"$'\t'"$_THEME_SRC_VARIANT"$'\t'"$_THEME_SRC_CONTRAST" ]]; then
+            _theme-reload wallpaper || return 1
+            log-success "[theme] wallpaper and colours are already ${wall/#$HOME/~}"
+            return 0
+        fi
+        _theme-build "image:$wall" "$wall" || return 1
+        id=$REPLY
+        name=$(jq -r .name "$_THEME_STATE/builds/$id/spec.json")
+        _theme-activate "$id" "$name" || return 1
+    elif _theme-link-complete current; then
         id=$REPLY
         cur=$(jq -r '.wallpaper // ""' "$_THEME_STATE/builds/$id/spec.json")
         name=$(jq -r .name "$_THEME_STATE/builds/$id/spec.json")
@@ -2189,7 +2208,8 @@ theme-wallpaper() {
         # No complete current build: render its theme (or the default) with
         # the wallpaper, and reload everything as apply would.
         if _theme-link-id current; then
-            src=$(jq -r '.source.ref // .name' "$_THEME_STATE/current/spec.json")
+            _theme-spec-source "$_THEME_STATE/current/spec.json"; src=$REPLY
+            : ${_THEME_OPT_MODE:=${reply[1]}} ${_THEME_OPT_VARIANT:=${reply[2]}} ${_THEME_OPT_CONTRAST:=${reply[3]}}
         else
             _theme-default-scheme; src=$REPLY
         fi
@@ -2202,6 +2222,141 @@ theme-wallpaper() {
     _theme-ms-since $t0
     log-success "[theme] wallpaper ${wall/#$HOME/~} ($name, $id) in ${REPLY} ms"
 }
+
+# REPLY = the mode new generated themes use: prefs mode (overrides merged),
+# else dark.
+_theme-pref-mode() {
+    _theme-prefs '.mode // ""' && [[ "$REPLY" == (dark|light) ]] || REPLY=dark
+}
+
+# Merges jq filter $1 (with $v = $2) into overrides.json, atomically.
+_theme-override() {
+    local ov="$_THEME_STATE/overrides.json" cur='{}'
+    mkdir -p "$_THEME_STATE" || return 1
+    [[ -r "$ov" ]] && cur=$(<"$ov")
+    print -r -- "$cur" | jq --arg v "$2" "$1" > "$ov.tmp" && mv -f -- "$ov.tmp" "$ov" ||
+        { rm -f -- "$ov.tmp"; log-error "[theme] cannot write $ov"; return 1; }
+}
+
+# theme mode [dark|light|toggle]
+theme-mode() {
+    local want=${1:-} cur pref kind ref pair id name t0=$EPOCHREALTIME
+    [[ "$want" == (-h|--help) ]] && { theme-help; return 0; }
+    (( $# <= 1 )) && [[ "$want" == (|dark|light|toggle) ]] ||
+        { log-error "[theme] usage: theme mode [dark|light|toggle]"; return 2; }
+    _theme-paths
+    _theme-pref-mode; pref=$REPLY
+    cur=$pref
+    _theme-source-current 2>/dev/null && cur=${THEME_META[mode]:-$pref}
+    if [[ -z "$want" ]]; then
+        print -r -- "$cur${${pref:#$cur}:+ (wallpapers and colours generate $pref)}"
+        return 0
+    fi
+    [[ "$want" == toggle ]] && { [[ "$cur" == dark ]] && want=light || want=dark; }
+    _theme-lock || return 1
+    _theme-override '.mode = $v' "$want" || return 1
+    if ! _theme-link-id current; then
+        log-success "[theme] mode $want (no theme applied yet)"
+        return 0
+    fi
+    _theme-spec-source "$_THEME_STATE/current/spec.json"
+    ref=$REPLY
+    kind=$(jq -r '.source.kind // "scheme"' "$_THEME_STATE/current/spec.json")
+    if [[ "$kind" == scheme ]]; then
+        if [[ "$cur" == "$want" ]]; then
+            log-success "[theme] mode $want (${THEME_META[name]} already is)"
+            return 0
+        fi
+        pair=${THEME_META[pair]:-}
+        if [[ -z "$pair" ]] || ! _theme-scheme-file "$pair" 2>/dev/null; then
+            log-warning "[theme] ${THEME_META[name]} has no $want twin (x-pair), so it stays; wallpapers and colours now generate $want"
+            return 0
+        fi
+        theme-apply "$pair" || return 1
+        return 0
+    fi
+    # A generated theme: the same source with its own variant and contrast,
+    # in the new mode, keeping the wallpaper it has.
+    local _THEME_OPT_MODE=$want _THEME_OPT_VARIANT=${reply[2]} _THEME_OPT_CONTRAST=${reply[3]}
+    _theme-build "$ref" || return 1
+    id=$REPLY
+    name=$(jq -r .name "$_THEME_STATE/builds/$id/spec.json")
+    _theme-activate "$id" "$name" || return 1
+    _theme-prune
+    _theme-ms-since $t0
+    log-success "[theme] mode $want: $name ($id) in ${REPLY} ms"
+}
+
+# reply = the schemes whose variant is mode $1 (all when none match), by
+# name.
+_theme-schemes-of-mode() {
+    local f v
+    local -a all
+    reply=()
+    for f in "$_THEME_CONFIG"/schemes/*.y(a|)ml(N); do
+        all+=("${f:t:r}")
+        v=${${(M)${(f)"$(<"$f")"}:#variant:*}#variant: }
+        [[ "${v//[\"\' ]/}" == "$1" ]] && reply+=("${f:t:r}")
+    done
+    (( ${#reply} )) || reply=("${all[@]}")
+}
+
+# _theme-walk <step> [wallpapers|schemes] [--keep-palette]: step 1 next, -1
+# previous, 0 random. Wallpapers that aren't images are skipped; next and
+# previous wrap; random never picks the current one. Schemes are those of
+# the current mode (D9).
+_theme-walk() {
+    local -i step=$1 i n k
+    shift
+    local what=wallpapers a cur= mode
+    local -a flags items
+    for a; do
+        case "$a" in
+            -h|--help) theme-help; return 0 ;;
+            wallpapers|wallpaper|w) what=wallpapers ;;
+            schemes|scheme|s) what=schemes ;;
+            --keep-palette) flags+=("$a") ;;
+            *) log-error "[theme] usage: theme next|previous|random [wallpapers|schemes] [--keep-palette]"; return 2 ;;
+        esac
+    done
+    _theme-paths
+    if [[ "$what" == wallpapers ]]; then
+        _theme-wallpaper-list
+        for a in "${reply[@]}"; do _theme-wallpaper-image "$a" && items+=("$a"); done
+        _theme-wallpaper-current; cur=$REPLY
+    else
+        (( ${#flags} )) && { log-error "[theme] --keep-palette is for wallpapers"; return 2; }
+        _theme-pref-mode; mode=$REPLY
+        if _theme-source-current 2>/dev/null; then
+            mode=${THEME_META[mode]:-$mode}
+            [[ "${THEME_META[source]}" == scheme:* ]] && cur=${THEME_META[name]}
+        fi
+        _theme-schemes-of-mode "$mode"; items=("${reply[@]}")
+    fi
+    n=${#items}
+    (( n )) || { log-error "[theme] no $what to walk (theme list $what)"; return 1; }
+    i=${items[(Ie)$cur]}
+    if (( step == 0 )); then
+        if (( n == 1 )); then k=1
+        else
+            k=$(( RANDOM % n + 1 ))
+            (( k == i )) && k=$(( k % n + 1 ))
+        fi
+    elif (( i == 0 )); then
+        (( step > 0 )) && k=1 || k=n
+    else
+        k=$(( (i - 1 + step + n) % n + 1 ))
+    fi
+    if [[ "$what" == wallpapers ]]; then
+        theme-wallpaper "${items[k]}" "${flags[@]}"
+    else
+        theme-apply "${items[k]}"
+    fi
+}
+
+theme-next()     { _theme-walk 1 "$@"; }
+theme-previous() { _theme-walk -1 "$@"; }
+theme-random()   { _theme-walk 0 "$@"; }
 
 # Sets the recorded wallpaper again and refreshes the lock screen's cache if
 # it was made from another one. Read-only on the theme (no lock, no build),

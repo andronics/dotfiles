@@ -6,8 +6,9 @@ source "${DOTLIB}/_theme"      || { echo "missing _theme"      >&2; exit 1; }
 
 dispatcher-init "theme" \
     --route=function \
-    --description="Generate the desktop theme from a scheme, resolve its roles with guaranteed contrast, render it and swap it in atomically"
+    --description="Generate the desktop theme from a scheme, wallpaper or colour, resolve its roles with guaranteed contrast, render it and swap it in atomically"
 
-dispatcher-register-alias "ls" "list"
+dispatcher-register-alias "ls"   "list"
+dispatcher-register-alias "prev" "previous"
 
 dispatcher-execute "$@"
