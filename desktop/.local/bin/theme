@@ -1,0 +1,13 @@
+#!/usr/bin/env zsh
+set -e
+
+source "${DOTLIB}/_dispatcher" || { echo "missing _dispatcher" >&2; exit 1; }
+source "${DOTLIB}/_theme"      || { echo "missing _theme"      >&2; exit 1; }
+
+dispatcher-init "theme" \
+    --route=function \
+    --description="Generate the desktop theme from a scheme, resolve its roles with guaranteed contrast, render it and swap it in atomically"
+
+dispatcher-register-alias "ls" "list"
+
+dispatcher-execute "$@"
