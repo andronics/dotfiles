@@ -8,25 +8,27 @@ monitor-strict = false
 ;override-redirect = false
 wm-restack = bspwm
 
-background = ${colors.background}
-foreground = ${colors.foreground}
+background = ${colors.bg}
+foreground = ${colors.fg}
 border-size = 0
 
 cursor-click = pointer
 cursor-scroll = pointer
 
+; Fonts and sizes from the generated theme ([theme] in polybar.ini). The
+; height is fixed; the text and icons scale with prefs.toml's fonts.scale.
 ; font-0 - icons
-font-0 = "Symbols Nerd Font Mono:style=2048-em:size=13;2"
-; font-1 - spacers
-font-1 = "Symbols Nerd Font Mono:style=2048-em:size=50;2"
+font-0 = ${theme.font-icon}
+; font-1 - spacers (powerline corners, sized to the height)
+font-1 = ${theme.font-spacer}
 ; font-2 - text
-font-2 = "Roboto Mono for Powerline:size=10:weight=medium;2"
-font-3 = "Adwaita Mono:size=10:weight=medium;2"
+font-2 = ${theme.font-text}
+font-3 = ${theme.font-text-alt}
 
-height = 50
+height = ${theme.height}
 width = 5120
 
-line-size = 2
+line-size = ${theme.line-size}
 module-margin-left = 0
 module-margin-right = 0
 offset-x = 0
