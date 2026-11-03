@@ -1,0 +1,81 @@
+/**
+ * Launcher (super + space, the bar's run button): spotlight style. A large
+ * search field over a 6 x 3 grid of big app icons, names underneath.
+ */
+
+@import "../base.rasi"
+
+configuration {
+    drun-display-format: "{name}";
+}
+
+window {
+    location:            center;
+    anchor:              center;
+    width:               1240px;
+    border-radius:       16px;
+}
+
+mainbox {
+    padding:             32px;
+    spacing:             28px;
+    children:            [ inputbar, message, listview ];
+}
+
+inputbar {
+    background-color:    @bg-alt-color;
+    border:              0px;
+    border-radius:       12px;
+    padding:             16px 20px;
+    spacing:             16px;
+    children:            [ textbox-search, entry ];
+}
+
+textbox-search {
+    expand:              false;
+    str:                 "󰍉";
+    text-color:          @accent-color;
+    font:                "Source Code Pro for Powerline 22";
+    padding:             0px;
+    vertical-align:      0.5;
+}
+
+entry {
+    font:                "Source Code Pro for Powerline 22";
+    placeholder:         "Search apps";
+    vertical-align:      0.5;
+}
+
+message {
+    border:              0px;
+    border-radius:       12px;
+}
+
+listview {
+    columns:             6;
+    lines:               3;
+    fixed-columns:       true;
+    fixed-height:        true;
+    flow:                horizontal;
+    scrollbar:           false;
+    padding:             0px;
+    spacing:             12px;
+}
+
+element {
+    orientation:         vertical;
+    padding:             20px 8px 16px 8px;
+    spacing:             12px;
+    border-radius:       12px;
+}
+
+element-icon {
+    size:                72px;
+    padding:             0px;
+    horizontal-align:    0.5;
+}
+
+element-text {
+    font:                "Source Code Pro for Powerline 12";
+    horizontal-align:    0.5;
+}

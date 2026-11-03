@@ -1,0 +1,47 @@
+/**
+ * Bar popup: menus opened from the polybar centre strips (desk's right-click
+ * window list). Docked bottom-centre, just above the bottom bar: bar/base
+ * height is 50px and the monitor's bottom_padding 55px, so the window sits
+ * 60px up, clear of the bar and level with the tiled windows' bottom edge.
+ */
+
+@import "../base.rasi"
+
+window {
+    location:            south;
+    anchor:              south;
+    y-offset:            -60px;
+    width:               640px;
+    border:              1px solid;
+    border-color:        @border-color;
+    border-radius:       12px;
+}
+
+mainbox {
+    padding:             8px;
+    spacing:             6px;
+    children:            [ inputbar, message, listview ];
+}
+
+inputbar {
+    border:              0px;
+    border-radius:       @radius;
+    padding:             8px 12px;
+}
+
+message {
+    border:              0px;
+    border-radius:       @radius;
+    padding:             8px 12px;
+}
+
+listview {
+    lines:               10;
+    padding:             0px;
+    spacing:             2px;
+    scrollbar:           false;
+}
+
+element {
+    padding:             6px 12px;
+}

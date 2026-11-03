@@ -1,0 +1,37 @@
+/**
+ * Coordinator picker (coord pick, the coord strip's right-click). Rows are
+ * pango markup from _coord: the coordinator's Nerd Font glyph coloured as on
+ * the strip (dim not running, peach busy, red pill waiting) and its state.
+ * Shown coordinators are marked active and drawn here as the strip draws
+ * them, with a lavender underline.
+ */
+
+@import "bar-popup.rasi"
+
+window {
+    width:               420px;
+}
+
+listview {
+    lines:               7;
+    fixed-height:        true;
+}
+
+element {
+    children:            [ element-text ];
+    border:              0px 0px 2px 0px;
+    border-color:        transparent;
+}
+
+element normal.active,
+element alternate.active {
+    background-color:    transparent;
+    text-color:          @fg-color;
+    border-color:        @accent-color;
+}
+
+element selected.active {
+    background-color:    @accent-color;
+    text-color:          @accent-fg-color;
+    border-color:        @accent-color;
+}
