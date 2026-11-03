@@ -1,0 +1,72 @@
+#!/usr/bin/env zsh
+# rofi-preview <variant> - open a rofi theme variant on harmless sample rows
+# and print what was picked instead of acting on it. Themes and _coord come
+# from the checkout this script lives in (stow links resolve back to it), so
+# a worktree previews its own, uninstalled themes.
+
+_repo=${0:A:h:h:h:h}
+_themes="${_repo}/desktop/.config/rofi/themes"
+_variants=(${_themes}/*.rasi(N:t:r))
+
+_variant=${1:-}
+if [[ -z "$_variant" || ! -r "${_themes}/${_variant}.rasi" ]]; then
+    print -u2 "usage: ${0:t} <variant>   variants: ${_variants[*]}"
+    exit 2
+fi
+
+_args=(-dmenu -i -no-custom -theme "${_themes}/${_variant}.rasi")
+_rows=()
+
+case "$_variant" in
+    launcher)
+        for _app _icon in Firefox firefox Code visual-studio-code Files nemo Spotify spotify \
+            Alacritty Alacritty GIMP gimp Thunderbird thunderbird Writer libreoffice-writer \
+            VLC vlc Steam steam Discord discord OBS com.obsproject.Studio Inkscape inkscape \
+            Blender blender Calculator accessories-calculator KeePassXC keepassxc \
+            Transmission transmission VirtualBox virtualbox; do
+            _rows+=("${_app}"$'\0icon\x1f'"${_icon}")
+        done
+        ;;
+    bar-popup)
+        _rows=(
+            "firefox     GitHub - andronics/dotfiles"$'\0icon\x1f'"firefox"
+            "code        _coord - dotfiles"$'\0icon\x1f'"visual-studio-code"
+            "alacritty   ~/.dotfiles: zsh"$'\0icon\x1f'"Alacritty"
+            "nemo        Downloads"$'\0icon\x1f'"nemo"
+            "spotify     Spotify Premium"$'\0icon\x1f'"spotify"
+        )
+        _args+=(-p "window") ;;
+    coord)
+        export DOTLIB="${_repo}/shell/.local/share/dotlib"
+        source "${DOTLIB}/_coord" || exit 1
+        _states=(idle busy waiting off idle off off)
+        for _i in {1..${#_COORD_NAMES}}; do
+            _shown=
+            (( _i == 1 )) && _shown=1
+            _coord-pick-row "${_COORD_NAMES[_i]}" "${_states[_i]:-off}" "$_shown"
+            _rows+=("$REPLY")
+        done
+        _args+=(-markup-rows -format i -p "Coordinator" -selected-row 0 -a 0) ;;
+    power)
+        _rows=(
+            "Lock"$'\0icon\x1f'"system-lock-screen"
+            "Log out"$'\0icon\x1f'"system-log-out"
+            "Suspend"$'\0icon\x1f'"system-suspend"
+            "Hibernate"$'\0icon\x1f'"system-hibernate"
+            "Reboot"$'\0icon\x1f'"system-reboot"
+            "Shut down"$'\0icon\x1f'"system-shutdown"
+        )
+        _args+=(-mesg "Power (preview: nothing runs)") ;;
+    prompt)
+        _args=(${_args:#-no-custom} -p "Rename") ;;
+    *)
+        _args+=(-p "$_variant")
+        _rows=("first sample row" "second sample row" "third sample row") ;;
+esac
+
+if _choice=$(print -rn -- "${(pj:\n:)_rows}" | rofi "${_args[@]}"); then
+    [[ "$_variant" == coord && "$_choice" == <-> ]] && _choice="${_choice} (${_COORD_NAMES[_choice + 1]})"
+    print -r -- "${_variant}: picked '${_choice}'"
+else
+    print -r -- "${_variant}: cancelled"
+fi
