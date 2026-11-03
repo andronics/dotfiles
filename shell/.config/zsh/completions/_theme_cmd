@@ -13,7 +13,8 @@
 # readonly THEME_LOADED: subcommands from the theme-* functions and
 # _THEME_DESCRIPTIONS, schemes from `theme list schemes`, builds from the
 # history, keys from the current theme.zsh (or _THEME_FALLBACK), reload
-# targets from _THEME_RELOADERS. A new scheme or key shows up without editing
+# targets from _THEME_RELOADERS, wallpapers from _theme-wallpaper-list (the
+# [wallpaper] dirs). A new scheme, key or wallpaper shows up without editing
 # this file. Errors are swallowed: a broken module just completes nothing.
 
 # Prints "<group>\t<value>\t<description>" lines for one context.
@@ -84,6 +85,13 @@ _theme_cmd_data() {
                 ;;
             reload)
                 for k in ${(ok)_THEME_RELOADERS}; do out target "$k" "reload $k"; done
+                ;;
+            wallpapers)
+                _theme-wallpaper-current 2>/dev/null; cur=$REPLY
+                _theme-wallpaper-list
+                for f in "${reply[@]}"; do
+                    out wallpaper "${f:t:r}" "${f/#$HOME/~}${${(M)f:#${(b)cur}}:+ - current}"
+                done
                 ;;
         esac
     ' _theme_cmd_data "$@" 2>/dev/null
@@ -166,6 +174,7 @@ _theme_cmd() {
                     (( CURRENT == 2 )) || return 1
                     local -a what=(
                         'schemes:schemes that can be applied (default)'
+                        'wallpapers:images for theme wallpaper, from the [wallpaper] dirs'
                         'history:activations, newest last'
                         'builds:rendered builds kept in the state dir'
                     )
@@ -180,6 +189,23 @@ _theme_cmd() {
                         (( ${done[(Ie)${t%%:*}]} )) || left+=($t)
                     done
                     (( ${#left} )) && [[ -n $left[1] ]] && _describe -t targets 'reload target' left && ret=0
+                    ;;
+                wallpaper)
+                    if (( CURRENT == 2 )); then
+                        # A path once the word looks like one; else names
+                        # from the wallpaper dirs and restore.
+                        if [[ $PREFIX == (*/*|\~*|.*) ]]; then
+                            _files -g '*.(#i)(png|jpg|jpeg|webp|bmp|gif)(-.)' && ret=0
+                        else
+                            _theme_cmd_load wallpapers
+                            _theme_cmd_offer wallpaper wallpapers 'wallpaper' && ret=0
+                            local -a act=('restore:set the recorded wallpaper again (login)')
+                            _describe -t actions 'action' act && ret=0
+                        fi
+                    elif (( CURRENT == 3 )) && [[ $words[2] != restore ]]; then
+                        local -a o=('--keep-palette:keep the current colours (the only mode for now)')
+                        _describe -t flags 'option' o && ret=0
+                    fi
                     ;;
                 current)
                     (( CURRENT == 2 )) || return 1
