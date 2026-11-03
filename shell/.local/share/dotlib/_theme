@@ -768,56 +768,126 @@ _theme-reload-alacritty() {
     touch -c -- "${files[@]}"
 }
 
-# polybar reads the theme at start-up only, so it is restarted in place
-# (`polybar-msg cmd restart` re-execs each bar, keeping its pid and
+# polybar reads the theme at start-up only, so each bar is restarted in place
+# (`polybar-msg -p <pid> cmd restart` re-execs it, keeping its pid and
 # environment). Only for the state dir its config.ini includes: a scratch
 # state (self-test, a preview) never touches the running bar. No bar running
 # is success; the login hook or `polybar-reload` starts one.
 #
-# A bar that can't parse its config exits on restart. Its command line and
-# HOST_MONITOR are kept in _THEME_POLYBAR_DEAD and the reload fails, so
-# _theme-activate rolls `current` back and reloads again; that reload, finding
-# no bar, relaunches the dead ones on the restored build.
+# A restarted bar must answer IPC again within _THEME_POLYBAR_WAIT seconds.
+# One that doesn't, or that wouldn't take the restart, is frozen (a restart
+# that hangs leaves a bar deaf to IPC and SIGTERM): it is killed with its
+# scripts and relaunched from its recorded command line and environment, so a
+# reload never leaves a frozen or missing bar. Every message has a timeout;
+# polybar-msg killed by it can take a slow bar down with SIGPIPE when the
+# answer comes, which the relaunch covers too.
+#
+# A bar that exits by itself, after its restart or a relaunch, can't parse
+# its config. Its command line and environment are kept in
+# _THEME_POLYBAR_DEAD and the reload fails, so _theme-activate rolls
+# `current` back and reloads again; that reload relaunches the dead ones on
+# the restored build.
 typeset -ga _THEME_POLYBAR_DEAD=()
+typeset -g _THEME_POLYBAR_WAIT=${THEME_POLYBAR_WAIT:-6}
 _theme-reload-polybar() {
     local pid entry live=${_THEME_POLYBAR_STATE/#\~/$HOME}
-    local -a pids cmdv alive
-    local -A cmd=()
+    local -a pids started
+    local -A cmd=() waiting=()
+    local -F deadline
     [[ "${_THEME_STATE:A}" == "${live:A}" ]] || return 0
     (( $+commands[polybar] )) || return 0
     pids=(${(f)"$(pgrep -x -u $UID polybar || :)"})
-    if (( ${#pids} )); then
-        for pid in "${pids[@]}"; do _theme-polybar-cmd $pid && cmd[$pid]=$REPLY; done
-        polybar-msg cmd restart >/dev/null 2>&1 || { log-error "[theme] polybar-msg cmd restart failed"; return 1; }
-    else
-        (( ${#_THEME_POLYBAR_DEAD} )) || return 0
-        for entry in "${_THEME_POLYBAR_DEAD[@]}"; do
-            cmdv=("${(@ps:\0:)${entry#*$'\t'}}")
-            ( cd ~ && HOST_MONITOR=${entry%%$'\t'*} exec "${cmdv[@]}" ) </dev/null >/dev/null 2>&1 &!
-            pids+=($!)
-            cmd[$!]=$entry
-        done
-        _THEME_POLYBAR_DEAD=()
-        log-warning "[theme] relaunched ${#pids} polybar bar(s) that exited on restart"
-    fi
-    # A bar that can't parse its config exits within milliseconds.
-    sleep 0.5
+    for entry in "${_THEME_POLYBAR_DEAD[@]}"; do
+        _theme-polybar-start "$entry" && { started+=($REPLY); cmd[$REPLY]=$entry; }
+    done
+    (( ${#_THEME_POLYBAR_DEAD} )) &&
+        log-warning "[theme] relaunched ${#_THEME_POLYBAR_DEAD} polybar bar(s) that exited on restart"
+    _THEME_POLYBAR_DEAD=()
     for pid in "${pids[@]}"; do
-        if kill -0 $pid 2>/dev/null; then alive+=($pid)
-        elif [[ -n "${cmd[$pid]:-}" ]]; then _THEME_POLYBAR_DEAD+=("${cmd[$pid]}")
+        _theme-polybar-cmd $pid && cmd[$pid]=$REPLY
+        if timeout 3 polybar-msg -p $pid cmd restart >/dev/null 2>&1; then
+            waiting[$pid]=1
+        else
+            log-warning "[theme] polybar $pid didn't take the restart; relaunching it"
+            _theme-polybar-relaunch $pid "${cmd[$pid]:-}" && { started+=($REPLY); cmd[$REPLY]=${cmd[$pid]}; }
         fi
     done
-    (( ${#alive} == ${#pids} )) && return 0
-    log-error "[theme] polybar exited after restart (${#alive}/${#pids} bars alive)"
+    (( deadline = EPOCHREALTIME + _THEME_POLYBAR_WAIT ))
+    while (( ${#waiting} )); do
+        sleep 0.25
+        for pid in ${(k)waiting}; do
+            if ! kill -0 $pid 2>/dev/null; then
+                unset "waiting[$pid]"
+                [[ -n "${cmd[$pid]:-}" ]] && _THEME_POLYBAR_DEAD+=("${cmd[$pid]}")
+            elif _theme-polybar-ping $pid; then
+                unset "waiting[$pid]"
+            elif (( $? == 124 || EPOCHREALTIME >= deadline )); then
+                # No answer: frozen.
+                unset "waiting[$pid]"
+                log-warning "[theme] polybar $pid froze on restart; killing and relaunching it"
+                _theme-polybar-relaunch $pid "${cmd[$pid]:-}" && { started+=($REPLY); cmd[$REPLY]=${cmd[$pid]}; }
+            fi
+        done
+    done
+    # A bar that can't parse its config exits within milliseconds.
+    (( ${#started} )) && sleep 0.5
+    for pid in "${started[@]}"; do
+        kill -0 $pid 2>/dev/null || _THEME_POLYBAR_DEAD+=("${cmd[$pid]}")
+    done
+    (( ${#_THEME_POLYBAR_DEAD} )) || return 0
+    log-error "[theme] ${#_THEME_POLYBAR_DEAD} polybar bar(s) exited on the new config"
     return 1
 }
 
-# REPLY = "<HOST_MONITOR>\t<argv joined by NUL>" for polybar pid $1.
+# Succeeds when polybar $1 answers IPC; 124 when it doesn't answer in time.
+# The action names no module: polybar answers and logs it as unknown.
+_theme-polybar-ping() {
+    timeout 2 polybar-msg -p $1 action '#theme-ping.ping' >/dev/null 2>&1
+}
+
+# REPLY = "<count>\0<environment...>\0<argv...>" for polybar pid $1, NUL
+# separated: its environment variables, then its command line.
 _theme-polybar-cmd() {
     local args env
+    local -a envv
     args=$(</proc/$1/cmdline) && env=$(</proc/$1/environ) || return 1
-    REPLY=${${(M)${(ps:\0:)env}:#HOST_MONITOR=*}#HOST_MONITOR=}$'\t'${args%$'\0'}
+    envv=("${(@ps:\0:)${env%$'\0'}}")
+    REPLY=${#envv}$'\0'${env%$'\0'}$'\0'${args%$'\0'}
 } 2>/dev/null
+
+# Starts the bar recorded in entry $1 (from _theme-polybar-cmd), detached in
+# ~ with exactly its recorded environment; REPLY = its pid.
+_theme-polybar-start() {
+    local entry=$1
+    local -a parts envv argv
+    local -i n
+    parts=("${(@ps:\0:)entry}")
+    n=${parts[1]}
+    envv=("${(@)parts[2,n+1]}") argv=("${(@)parts[n+2,-1]}")
+    (( ${#argv} )) || return 1
+    ( cd ~ && exec env -i "${envv[@]}" "${argv[@]}" ) </dev/null >/dev/null 2>&1 &!
+    REPLY=$!
+}
+
+# SIGKILLs polybar $1 and the process group of each script it runs (desk
+# watch and its bspc subscribe), then starts entry $2; REPLY = the new pid.
+# SIGKILL because a frozen bar ignores SIGTERM; its scripts would otherwise
+# linger until they next write to the dead bar.
+_theme-polybar-relaunch() {
+    local pid=$1 entry=$2 kid
+    local -a kids
+    local -i i
+    kids=(${(f)"$(pgrep -P $pid 2>/dev/null || :)"})
+    kill -KILL $pid 2>/dev/null
+    for kid in "${kids[@]}"; do
+        # polybar makes each script a group leader; never signal another group.
+        [[ ${"$(ps -o pgid= -p $kid 2>/dev/null)"// /} == $kid ]] && kill -KILL -- -$kid 2>/dev/null
+        kill -KILL $kid 2>/dev/null
+    done
+    for (( i = 0; i < 20; i++ )); do kill -0 $pid 2>/dev/null || break; sleep 0.05; done
+    [[ -n "$entry" ]] || { log-error "[theme] no command line recorded for polybar $pid"; return 1; }
+    _theme-polybar-start "$entry"
+}
 
 # Runs the reloaders for targets $@ (default: every target); non-zero if any
 # fails or is unknown.
@@ -1231,10 +1301,31 @@ _theme-self-test-run() {
 
     # polybar includes ~/.local/state/theme only; a scratch state never restarts it.
     polybar-msg() { : > "$scratch/polybar-msg"; }
+    timeout() { : > "$scratch/polybar-msg"; }
     _theme-reload-polybar
     [[ ! -e "$scratch/polybar-msg" ]] && ok "polybar reload skipped for a scratch state dir" ||
         bad "polybar reload ran polybar-msg for a scratch state dir"
-    unfunction polybar-msg
+    unfunction polybar-msg timeout
+
+    # A frozen bar is relaunched from its recorded command line and exactly
+    # its environment: a stand-in process makes the round trip.
+    local -i sp np=0
+    ( THEME_SELFTEST_ENV='a b' exec sleep 30 ) </dev/null >/dev/null 2>&1 &!
+    sp=$!
+    sleep 0.1
+    if _theme-polybar-cmd $sp && THEME_SELFTEST_OTHER=1 _theme-polybar-start "$REPLY"; then
+        np=$REPLY
+        sleep 0.2
+        local -a nargv nenv
+        nargv=("${(@ps:\0:)$(</proc/$np/cmdline)}") nenv=("${(@ps:\0:)$(</proc/$np/environ)}")
+        [[ "${nargv[1,2]}" == "sleep 30" ]] && (( ${nenv[(Ie)THEME_SELFTEST_ENV=a b]} )) &&
+            (( ! ${nenv[(I)THEME_SELFTEST_OTHER=*]} )) &&
+            ok "polybar relaunch keeps a bar's command line and environment" ||
+            bad "polybar relaunch got argv '${nargv[*]}', env THEME_SELFTEST_*: ${(M)nenv:#THEME_SELFTEST_*}"
+    else
+        bad "polybar relaunch couldn't record or start a stand-in process"
+    fi
+    kill $sp $np 2>/dev/null
 
     [[ -L "$_THEME_STATE/current" && ! -e "$_THEME_STATE/current.tmp" ]] &&
         ok "current is a symlink; no current.tmp left" || bad "current link state"
