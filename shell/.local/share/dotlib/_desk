@@ -250,10 +250,12 @@ desk-bar() {
         if (( ${#_order} == 0 )); then
             (( _focused )) || continue
             _icons=("$_DESK_ICON_EMPTY")
+        else
+            # Guarded: a quoted range of an empty array is one empty word.
+            for _icon in "${(@)_order[1,_DESK_MAX_ICONS]}"; do
+                _icons+=("${_icon}${_DESK_SUPERSCRIPTS[${_count[$_icon]}]-⁹⁺}")
+            done
         fi
-        for _icon in "${(@)_order[1,_DESK_MAX_ICONS]}"; do
-            _icons+=("${_icon}${_DESK_SUPERSCRIPTS[${_count[$_icon]}]-⁹⁺}")
-        done
         (( ${#_order} > _DESK_MAX_ICONS )) && _icons+=("+$(( ${#_order} - _DESK_MAX_ICONS ))")
 
         _cell=" ${(j: :)_icons} "
