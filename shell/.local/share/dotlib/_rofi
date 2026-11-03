@@ -84,6 +84,10 @@ declare -g ROFI_CONFIG="${ROFI_CONFIG:-$(xdg-config-dir rofi)/config.rasi}"
 # ROFI_THEME: Theme name or path
 declare -g ROFI_THEME="${ROFI_THEME:-}"
 
+# ROFI_PROMPT_THEME: Theme for free-text prompts (rofi-input, rofi-password)
+# when ROFI_THEME is unset; a name resolves to ~/.config/rofi/themes/<name>.rasi
+declare -g ROFI_PROMPT_THEME="${ROFI_PROMPT_THEME:-prompt}"
+
 # ROFI_DEFAULT_FORMAT: Default output format
 #   s: String (selected text)
 #   i: Index (0-based)
@@ -690,6 +694,7 @@ rofi-input() {
     fi
 
     # Add common args
+    local ROFI_THEME="${ROFI_THEME:-$ROFI_PROMPT_THEME}"
     local common_args=($(_rofi-build-args))
     args+=("${common_args[@]}")
 
@@ -731,6 +736,7 @@ rofi-password() {
     fi
 
     # Add common args
+    local ROFI_THEME="${ROFI_THEME:-$ROFI_PROMPT_THEME}"
     local common_args=($(_rofi-build-args))
     args+=("${common_args[@]}")
 
@@ -1174,7 +1180,7 @@ Features:
   - Format helpers
 
 Configuration:
-  ROFI_CONFIG, ROFI_THEME, ROFI_DEFAULT_FORMAT
+  ROFI_CONFIG, ROFI_THEME, ROFI_PROMPT_THEME, ROFI_DEFAULT_FORMAT
   ROFI_DEFAULT_PROMPT, ROFI_LINES, ROFI_COLUMNS
   ROFI_CASE_SENSITIVE, ROFI_MATCHING, ROFI_SORT
 
