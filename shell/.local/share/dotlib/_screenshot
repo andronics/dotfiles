@@ -8,22 +8,25 @@
 #
 # Dependencies:
 #   Required: _common, maim, xclip
-#   Optional: _log, _rofi (menu/geometry/wait prompts), _notify (feedback),
-#             xdotool (window capture only)
+#   Optional: _log, _rofi (menu/geometry/delay prompts), _notify (feedback),
+#             xdotool (window capture only), notify-send (countdown),
+#             dunstctl or gdbus (closing the countdown before the capture)
 
 [[ -n "${SCREENSHOT_LOADED:-}" ]] && return 0
 declare -gr SCREENSHOT_LOADED=1
 
 source "${DOTLIB}/_common"     || { echo "[ERROR] _screenshot requires _common" >&2; return 1; }
-source "${DOTLIB}/_validation" || { echo "[ERROR] _screenshot requires _validation" >&2; return 1; }
 source "${DOTLIB}/_log"    2>/dev/null || true
 source "${DOTLIB}/_rofi"   2>/dev/null || true
 source "${DOTLIB}/_notify" 2>/dev/null || true
 
 declare -g SCREENSHOT_OUTPUT_DIR="${SCREENSHOT_OUTPUT_DIR:-${HOME}/.screenshots}"
-declare -ga SCREENSHOT_WAIT_CHOICES=(5 10 15 20 25 30)
+# Delay presets (seconds) offered by the delay prompt; any other whole
+# number can be typed in.
+declare -ga SCREENSHOT_WAIT_CHOICES=(3 5 10 15 30)
 
 typeset -gA _SCREENSHOT_DESCRIPTIONS=(
+    [delayed]="Wait a delay, then capture a region, a clicked window or the whole desktop"
     [fullscreen]="Capture the whole screen immediately"
     [fullscreen_wait]="Prompt for a delay, then capture the whole screen"
     [selection]="Drag-select a region and capture it"
@@ -70,24 +73,103 @@ _screenshot-capture() {
     print -- "${shot_path}"
 }
 
-# _screenshot-wait-seconds: rofi-driven delay picker.
+# _screenshot-wait-seconds: rofi delay picker; prints a whole number of
+# seconds (a preset or a typed number, a trailing "s" allowed).
 _screenshot-wait-seconds() {
     rofi-check || { log-error "rofi not available"; return 1; }
-    printf '%s\n' "${SCREENSHOT_WAIT_CHOICES[@]}" | rofi-select "Wait Time (secs)"
+    local secs
+    secs="$(printf '%s\n' "${SCREENSHOT_WAIT_CHOICES[@]}" \
+        | rofi-menu "Delay (secs)" "Pick a delay, or type a number of seconds")" || return 1
+    secs="${${secs// /}%s}"
+    [[ -z "$secs" ]] && return 1
+    _screenshot-valid-delay "$secs" || return 2
+    print -- "$secs"
 }
 
-# _screenshot-countdown <seconds>: blocks, updating a single live
-# notification once a second instead of a silent sleep.
+# _screenshot-valid-delay <seconds>: 1 to 3600 whole seconds.
+_screenshot-valid-delay() {
+    [[ "$1" == <1-3600> ]] && return 0
+    log-error "invalid delay: $1 (expected whole seconds, 1-3600)"
+    notify-error "Screenshot failed" "Invalid delay: $1" &>/dev/null
+    return 2
+}
+
+# _screenshot-target <word>: prints the canonical target (region, window,
+# full) for a target name or alias; returns 1 for anything else.
+_screenshot-target() {
+    case "${(L)1}" in
+        region|selection|select|area)          print region ;;
+        window|win)                            print window ;;
+        full|fullscreen|desktop|screen|whole*) print full ;;
+        *) return 1 ;;
+    esac
+}
+
+# _screenshot-pick-target <seconds>: rofi target picker; prints the target.
+_screenshot-pick-target() {
+    rofi-check || { log-error "rofi not available"; return 1; }
+    local choice
+    choice="$(printf '%s\n' Region Window 'Whole desktop' \
+        | rofi-menu "Capture" "After ${1}s: drag a region, click a window, or the whole desktop")" || return 1
+    [[ -z "$choice" ]] && return 1
+    _screenshot-target "$choice" || {
+        log-error "unknown target: ${choice}"
+        return 2
+    }
+}
+
+# _screenshot-countdown <seconds>: blocks for <seconds>, showing one
+# notification replaced each second. notify-send is used directly (not
+# `notify`) because only it hands back the server's id, which replacing and
+# closing need. The last second is split: the notification is closed half
+# way, so it has gone (picom fades it out) before the capture. Its short
+# expiry is the fallback when it can't be closed.
 _screenshot-countdown() {
-    local seconds="$1"
-    validate-type-integer "$seconds" || return 2
+    local -i seconds="$1"
     local id=""
+    if (( ! ${+commands[notify-send]} )); then
+        sleep "$seconds"
+        return 0
+    fi
     while (( seconds > 0 )); do
-        id=$(notify "Screenshot" "Capturing in ${seconds}s..." \
-                --urgency low --timeout 1200 ${id:+--replace "$id"} 2>/dev/null)
-        sleep 1
+        id=$(notify-send --print-id --app-name=screenshot --urgency=low \
+                --expire-time=$(( seconds > 1 ? 1500 : 500 )) ${id:+--replace-id="$id"} \
+                "Screenshot" "Capturing in ${seconds}s..." 2>/dev/null) || id=""
+        if (( seconds > 1 )); then
+            sleep 1
+        else
+            sleep 0.5
+            _screenshot-close-notification "$id"
+            sleep 0.5
+        fi
         (( seconds-- ))
     done
+    return 0
+}
+
+_screenshot-close-notification() {
+    [[ "$1" == <-> ]] || return 0
+    if (( ${+commands[dunstctl]} )); then
+        dunstctl close "$1" &>/dev/null
+    elif (( ${+commands[gdbus]} )); then
+        gdbus call --session --dest org.freedesktop.Notifications \
+            --object-path /org/freedesktop/Notifications \
+            --method org.freedesktop.Notifications.CloseNotification "$1" &>/dev/null
+    fi
+    return 0
+}
+
+_screenshot-delayed-help() {
+    print -r -- "Usage: screenshot delayed [seconds] [region|window|full]"
+    print
+    print -r -- "Waits <seconds> (counting down in a notification), then captures:"
+    print -r -- "  region   drag-select a region"
+    print -r -- "  window   click the window to capture"
+    print -r -- "  full     the whole desktop"
+    print
+    print -r -- "Either argument may be left out, in any order; rofi asks for what's missing"
+    print -r -- "(the delay prompt offers ${(j:, :)SCREENSHOT_WAIT_CHOICES}s or a typed number)."
+    print -r -- "The shot is saved to ${SCREENSHOT_OUTPUT_DIR}, its path copied to the clipboard."
 }
 
 # ------------------------------
@@ -99,11 +181,7 @@ screenshot-fullscreen() {
 }
 
 screenshot-fullscreen_wait() {
-    local secs
-    secs="$(_screenshot-wait-seconds)" || { log-warning "wait cancelled"; return 1; }
-    [[ -z "$secs" ]] && return 1
-    _screenshot-countdown "$secs"
-    _screenshot-capture
+    screenshot-delayed full
 }
 
 screenshot-selection() {
@@ -111,11 +189,45 @@ screenshot-selection() {
 }
 
 screenshot-selection_wait() {
-    local secs
-    secs="$(_screenshot-wait-seconds)" || { log-warning "wait cancelled"; return 1; }
-    [[ -z "$secs" ]] && return 1
+    screenshot-delayed region
+}
+
+# screenshot-delayed [seconds] [region|window|full]: the target is chosen
+# after the delay (drag or click), so menus and tooltips can be opened first.
+# A window is clicked (maim -s with a tolerance that turns every selection into
+# a window pick), unlike `window`, which takes the active one at once.
+screenshot-delayed() {
+    local arg secs="" target=""
+    for arg in "$@"; do
+        case "$arg" in
+            -h|--help) _screenshot-delayed-help; return 0 ;;
+        esac
+        if [[ -z "$secs" && "${arg%s}" == <-> ]]; then
+            secs="${arg%s}"
+        elif [[ -z "$target" ]] && target="$(_screenshot-target "$arg")"; then
+            :
+        else
+            log-error "delayed: unexpected argument '${arg}'"
+            _screenshot-delayed-help >&2
+            return 2
+        fi
+    done
+
+    if [[ -n "$secs" ]]; then
+        _screenshot-valid-delay "$secs" || return 2
+    else
+        secs="$(_screenshot-wait-seconds)" || { log-warning "delay cancelled"; return 1; }
+    fi
+    if [[ -z "$target" ]]; then
+        target="$(_screenshot-pick-target "$secs")" || { log-warning "target cancelled"; return 1; }
+    fi
+
     _screenshot-countdown "$secs"
-    _screenshot-capture -s
+    case "$target" in
+        region) _screenshot-capture -s ;;
+        window) _screenshot-capture -s --tolerance=9999999 ;;
+        full)   _screenshot-capture ;;
+    esac
 }
 
 # screenshot-geometry: explicit WxH+X+Y region via maim -g, distinct from the
@@ -152,7 +264,7 @@ screenshot-window() {
 screenshot-menu() {
     rofi-check || { log-error "rofi not available"; return 1; }
     local choice
-    choice="$(printf '%s\n' fullscreen fullscreen_wait selection selection_wait geometry window \
+    choice="$(printf '%s\n' fullscreen selection window geometry delayed \
         | rofi-select "Screenshot")" || { log-warning "menu cancelled"; return 1; }
     [[ -z "$choice" ]] && return 1
     "screenshot-${choice}"
