@@ -1,18 +1,19 @@
 # Claude Code coordinator sessions. Each one lives in /pool/local/actors/<name>/:
-#   PROMPT.md  its launch prompt (edit it there; these functions read it)
-#   README.md  what it owns
-#   memory/    a link to its Claude memory, for browsing
+#   README.md   what it owns
+#   memory/     a link to its Claude memory, for browsing
+#   prompt.log  why a launch fell back from the fresh prompt
+# The launch prompt comes from the coordinator's actor note in the vault, via
+# /mnt/brain/tools/coordinator-prompt.sh (a cached copy if the vault fails).
 # Its memory belongs to that home, so always launch from it. Extra arguments go
 # to claude, e.g. `folio-coordinator --model opus`. Check `tmux ls` / ListAgents
 # first: two of the same coordinator would both act. Vault cheatsheet:
 # "🤖 Launching a Coordinator".
 
 _coordinator() {
-  local home=/pool/local/actors/$1; shift
-  [ -r "$home/PROMPT.md" ] || { print -u2 "no prompt: $home/PROMPT.md"; return 1; }
+  local name=$1 home=/pool/local/actors/$1; shift
   cd "$home" || return
   # Unattended, so prompt suggestions only cost usage; the env var beats the promptSuggestionEnabled setting.
-  CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false command claude --permission-mode bypassPermissions --dangerously-skip-permissions "$@" "$(<"$home/PROMPT.md")"
+  CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false command claude --permission-mode bypassPermissions --dangerously-skip-permissions "$@" "$(/mnt/brain/tools/coordinator-prompt.sh "$name")"
 }
 
 template-coordinator()     { _coordinator template "$@"; }
