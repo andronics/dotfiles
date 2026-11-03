@@ -12,6 +12,7 @@ scale = 1.25
 terminal = 13
 menu = 11
 bar = 10
+icon = 13           # polybar's glyphs (Symbols Nerd Font Mono)
 notification = 10
 gtk = 10
 
@@ -20,8 +21,9 @@ ui   = "Roboto Mono for Powerline"
 mono = "Source Code Pro for Powerline"
 icon = "Symbols Nerd Font Mono"
 
-# Pixels. gap is used as is; border, radius, padding and bar_height are
-# multiplied by fonts.scale and rounded.
+# Pixels. gap and bar_height are used as is (the bar keeps its height and
+# its text grows inside it); border, radius and padding are multiplied by
+# fonts.scale and rounded.
 [metrics]
 gap = 5
 border = 2

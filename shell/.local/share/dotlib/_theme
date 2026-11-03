@@ -123,7 +123,7 @@ typeset -gA _THEME_FALLBACK=(
 typeset -gA _THEME_VALIDATORS=(
     [zsh]=_theme-validate-zsh [sh]=_theme-validate-zsh
     [json]=_theme-validate-json [toml]=_theme-validate-toml
-    [rasi]=_theme-validate-rasi
+    [rasi]=_theme-validate-rasi [ini]=_theme-validate-polybar
 )
 
 # reload target -> reloader, run after every swap. rofi reads the generated
@@ -132,7 +132,12 @@ typeset -gA _THEME_VALIDATORS=(
 typeset -gA _THEME_RELOADERS=(
     [rofi]=_theme-reload-rofi
     [alacritty]=_theme-reload-alacritty
+    [polybar]=_theme-reload-polybar
 )
+
+# The state dir polybar's config.ini includes from. include-file expands ~
+# but not ${env:...}, so the path is literal there and fixed here.
+declare -g _THEME_POLYBAR_STATE='~/.local/state/theme'
 
 typeset -gA _THEME_DESCRIPTIONS=(
     [apply]="Resolve, render, validate and swap in <scheme|build-id|default>; keeps the current theme on any failure"
@@ -143,7 +148,7 @@ typeset -gA _THEME_DESCRIPTIONS=(
     [swatch]="Print the current theme, or [scheme], as truecolour blocks"
     [ensure]="Make sure a current theme exists: keep it, else re-activate known-good, else render the default"
     [undo]="Re-activate the previous build from history (no re-render)"
-    [reload]="Run the reloaders for [target...] (default all): rofi, alacritty"
+    [reload]="Run the reloaders for [target...] (default all): rofi, alacritty, polybar"
 )
 
 theme-help() {
@@ -166,7 +171,7 @@ Commands:
                                     when one exists)
   undo                              Back to the previous build
   reload [target...]                Re-run reloaders (default all; targets:
-                                    rofi, alacritty)
+                                    rofi, alacritty, polybar)
   self-test                         Render every scheme into a scratch state
                                     dir under ~/.cache and validate
 
@@ -554,7 +559,8 @@ _theme-contrast-table() {
 }
 
 # Point sizes from fonts.base x fonts.scale, a type scale (ratio 1.2) on the
-# menu size, and pixel metrics (gap unscaled, decision D5).
+# menu size, and pixel metrics. gap is unscaled (decision D5), and so is
+# bar_height: the bar keeps its height and its text grows inside it.
 _theme-sizes() {
     local k v
     local -F scale=${_THEME_IN[prefs.fonts.scale]:-1} n menu
@@ -575,7 +581,7 @@ _theme-sizes() {
     for k v in "${(@kv)_THEME_IN}"; do
         [[ "$k" == prefs.metrics.* ]] || continue
         k=${k#prefs.metrics.}
-        if [[ "$k" == gap ]]; then _THEME_METRIC[$k]=$(( int(rint(v)) ))
+        if [[ "$k" == (gap|bar_height) ]]; then _THEME_METRIC[$k]=$(( int(rint(v)) ))
         else _THEME_METRIC[$k]=$(( int(rint(v * scale)) )); fi
     done
     _THEME_METRIC[cursor]=$(( int(rint(${_THEME_IN[prefs.cursor.size]:-24} * scale)) ))
@@ -642,6 +648,43 @@ _theme-validate-rasi() {
     local err
     err=$(DISPLAY= WAYLAND_DISPLAY= rofi -no-config -theme "$1" -dump-theme 2>&1 </dev/null >/dev/null)
     [[ -z "$err" ]] || { print -r -- "$err"; return 1; }
+}
+
+# polybar.ini: a [colors] and [theme] fragment for config.ini's include-file.
+# Every line is a section, a comment or key = value; no key repeats in its
+# section (polybar refuses duplicates); colours are #rrggbb or #aarrggbb; and
+# nothing is a ${...} reference (the fragment is all literals, so a reference
+# would be a template bug). With an X display, polybar parses it too.
+_theme-validate-polybar() {
+    setopt localoptions extendedglob
+    local f=$1 line sec= key val wrap
+    local -A seen=()
+    local -i n=0
+    for line in "${(@f)$(<"$f")}"; do
+        (( n++ ))
+        line=${line##[[:space:]]#}
+        [[ -z "$line" || "$line" == [\;\#]* ]] && continue
+        if [[ "$line" =~ '^\[([^]]+)\]$' ]]; then sec=${match[1]}; continue; fi
+        [[ "$line" == *=* && -n "$sec" ]] || { print -r -- "line $n: not a section or key = value: $line"; return 1; }
+        key=${${line%%=*}%%[[:space:]]#}
+        val=${${line#*=}##[[:space:]]#}
+        (( ${+seen[$sec/$key]} )) && { print -r -- "line $n: duplicate key $key in [$sec]"; return 1; }
+        seen[$sec/$key]=1
+        [[ "$val" == *'${'* ]] && { print -r -- "line $n: unresolved reference: $line"; return 1; }
+        [[ "$sec" == colors && ! "$val" =~ '^#([0-9a-fA-F]{6}|[0-9a-fA-F]{8})$' ]] &&
+            { print -r -- "line $n: $key is not a colour: $val"; return 1; }
+    done
+    (( ${+seen[colors/bg]} && ${+seen[theme/height]} )) || { print -r -- "no [colors] bg or [theme] height"; return 1; }
+    [[ -n "${DISPLAY:-}" ]] && (( $+commands[polybar] )) || return 0
+    wrap="${f:h}/.polybar-validate.ini"
+    print -rl -- "include-file = ${f:A}" "[bar/theme-validate]" 'background = ${colors.bg}' > "$wrap"
+    local err
+    err=$(polybar -q --config="$wrap" --dump=background theme-validate 2>&1 >/dev/null </dev/null)
+    local rc=$?
+    rm -f -- "$wrap"
+    # No X server behind DISPLAY: the structural checks above stand.
+    [[ "$err" == *'X connection error'* ]] && return 0
+    (( rc == 0 )) || { print -r -- "polybar: ${err##*: }"; return 1; }
 }
 
 # Validates every file in build dir $1. gomplate's own errors never reach
@@ -717,6 +760,57 @@ _theme-reload-alacritty() {
     (( ${#files} )) || return 0
     touch -c -- "${files[@]}"
 }
+
+# polybar reads the theme at start-up only, so it is restarted in place
+# (`polybar-msg cmd restart` re-execs each bar, keeping its pid and
+# environment). Only for the state dir its config.ini includes: a scratch
+# state (self-test, a preview) never touches the running bar. No bar running
+# is success; the login hook or `polybar-reload` starts one.
+#
+# A bar that can't parse its config exits on restart. Its command line and
+# HOST_MONITOR are kept in _THEME_POLYBAR_DEAD and the reload fails, so
+# _theme-activate rolls `current` back and reloads again; that reload, finding
+# no bar, relaunches the dead ones on the restored build.
+typeset -ga _THEME_POLYBAR_DEAD=()
+_theme-reload-polybar() {
+    local pid entry live=${_THEME_POLYBAR_STATE/#\~/$HOME}
+    local -a pids cmdv alive
+    local -A cmd=()
+    [[ "${_THEME_STATE:A}" == "${live:A}" ]] || return 0
+    (( $+commands[polybar] )) || return 0
+    pids=(${(f)"$(pgrep -x -u $UID polybar || :)"})
+    if (( ${#pids} )); then
+        for pid in "${pids[@]}"; do _theme-polybar-cmd $pid && cmd[$pid]=$REPLY; done
+        polybar-msg cmd restart >/dev/null 2>&1 || { log-error "[theme] polybar-msg cmd restart failed"; return 1; }
+    else
+        (( ${#_THEME_POLYBAR_DEAD} )) || return 0
+        for entry in "${_THEME_POLYBAR_DEAD[@]}"; do
+            cmdv=("${(@ps:\0:)${entry#*$'\t'}}")
+            ( cd ~ && HOST_MONITOR=${entry%%$'\t'*} exec "${cmdv[@]}" ) </dev/null >/dev/null 2>&1 &!
+            pids+=($!)
+            cmd[$!]=$entry
+        done
+        _THEME_POLYBAR_DEAD=()
+        log-warning "[theme] relaunched ${#pids} polybar bar(s) that exited on restart"
+    fi
+    # A bar that can't parse its config exits within milliseconds.
+    sleep 0.5
+    for pid in "${pids[@]}"; do
+        if kill -0 $pid 2>/dev/null; then alive+=($pid)
+        elif [[ -n "${cmd[$pid]:-}" ]]; then _THEME_POLYBAR_DEAD+=("${cmd[$pid]}")
+        fi
+    done
+    (( ${#alive} == ${#pids} )) && return 0
+    log-error "[theme] polybar exited after restart (${#alive}/${#pids} bars alive)"
+    return 1
+}
+
+# REPLY = "<HOST_MONITOR>\t<argv joined by NUL>" for polybar pid $1.
+_theme-polybar-cmd() {
+    local args env
+    args=$(</proc/$1/cmdline) && env=$(</proc/$1/environ) || return 1
+    REPLY=${${(M)${(ps:\0:)env}:#HOST_MONITOR=*}#HOST_MONITOR=}$'\t'${args%$'\0'}
+} 2>/dev/null
 
 # Runs the reloaders for targets $@ (default: every target); non-zero if any
 # fails or is unknown.
@@ -952,13 +1046,30 @@ theme-swatch() {
     fi
 }
 
+# True when state link $1 points at a build holding every template's output.
+# A build made before a template was added (polybar.ini, say) is incomplete,
+# and polybar can't start without its include.
+_theme-link-complete() {
+    _theme-link-id "$1" || return 1
+    local t
+    for t in "$_THEME_TEMPLATES"/*.tmpl(N:t:r); do
+        [[ -r "$_THEME_STATE/$1/$t" ]] || return 1
+    done
+}
+
 theme-ensure() {
-    local id t0=$EPOCHREALTIME
+    local id name t0=$EPOCHREALTIME
     _theme-paths
-    _theme-link-id current && return 0
+    _theme-link-complete current && return 0
     _theme-lock || return 1
-    _theme-link-id current && return 0
-    if _theme-link-id known-good; then
+    _theme-link-complete current && return 0
+    # Incomplete: rebuild the same theme so a new template doesn't change it.
+    if _theme-link-id current; then
+        name=$(jq -r '.source.ref // .name' "$_THEME_STATE/current/spec.json")
+        log-warning "[theme] current build lacks an output; re-rendering $name"
+        theme-apply "$name" && return 0
+    fi
+    if _theme-link-complete known-good; then
         id=$REPLY
         _theme-link current "$id" || return 1
         _theme-history-push "$id" "$(jq -r .name "$_THEME_STATE/builds/$id/spec.json")"
@@ -1045,9 +1156,9 @@ _theme-self-test-run() {
         [[ "${THEME_ROLE[$role]}" == "${_THEME_FALLBACK[$role]}" ]] || drift+=" $role=${THEME_ROLE[$role]}"
     done
     [[ -z "$drift" ]] && ok "fallback table matches resolved catppuccin-mocha" || bad "fallback drift:$drift"
-    [[ "${THEME_SIZE[terminal]} ${THEME_SIZE[menu]} ${THEME_SIZE[bar]} ${THEME_METRIC[gap]}" == "16.25 13.75 12.5 5" ]] &&
-        ok "sizes: terminal 16.25, menu 13.75, bar 12.5; gap 5 unscaled" ||
-        bad "sizes: ${(kv)THEME_SIZE} gap ${THEME_METRIC[gap]}"
+    [[ "${THEME_SIZE[terminal]} ${THEME_SIZE[menu]} ${THEME_SIZE[bar]} ${THEME_METRIC[gap]} ${THEME_METRIC[bar_height]}" == "16.25 13.75 12.5 5 50" ]] &&
+        ok "sizes: terminal 16.25, menu 13.75, bar 12.5; gap 5 and bar_height 50 unscaled" ||
+        bad "sizes: ${(kv)THEME_SIZE} gap ${THEME_METRIC[gap]} bar_height ${THEME_METRIC[bar_height]}"
 
     # Under the default the consumers must look as their static fallbacks do.
     local cur="$_THEME_STATE/current"
@@ -1056,6 +1167,22 @@ _theme-self-test-run() {
        grep -q '^size = 16.0$' "$cur/alacritty.toml" && grep -q '^black = "#45475a"$' "$cur/alacritty.toml" &&
         ok "catppuccin-mocha: rofi 14pt, radius 8px, border #45475a; alacritty 16pt, black #45475a" ||
         bad "catppuccin-mocha rofi.rasi/alacritty.toml differ from the static fallbacks"
+    # The bar stays 50px with base00 behind it; text 10 and icons 13 x 1.25.
+    grep -qx 'bg = #1e1e2e' "$cur/polybar.ini" && grep -qx 'bg-alt = #313244' "$cur/polybar.ini" &&
+       grep -qx 'fg = #cdd6f4' "$cur/polybar.ini" && grep -qx 'height = 50' "$cur/polybar.ini" &&
+       grep -qx 'line-size = 2' "$cur/polybar.ini" &&
+       grep -q '^font-text = "Roboto Mono for Powerline:size=12.5:' "$cur/polybar.ini" &&
+       grep -q '^font-icon = "Symbols Nerd Font Mono:style=2048-em:size=16.25;' "$cur/polybar.ini" &&
+       grep -q '^font-spacer = .*:size=50;' "$cur/polybar.ini" &&
+        ok "catppuccin-mocha polybar.ini: bg #1e1e2e, bg-alt #313244, height 50, text 12.5pt, icons 16.25pt" ||
+        bad "catppuccin-mocha polybar.ini: $(grep -E '^(bg|bg-alt|fg|height|font-text|font-icon) ' "$cur/polybar.ini" | tr '\n' ' ')"
+
+    # polybar includes ~/.local/state/theme only; a scratch state never restarts it.
+    polybar-msg() { : > "$scratch/polybar-msg"; }
+    _theme-reload-polybar
+    [[ ! -e "$scratch/polybar-msg" ]] && ok "polybar reload skipped for a scratch state dir" ||
+        bad "polybar reload ran polybar-msg for a scratch state dir"
+    unfunction polybar-msg
 
     [[ -L "$_THEME_STATE/current" && ! -e "$_THEME_STATE/current.tmp" ]] &&
         ok "current is a symlink; no current.tmp left" || bad "current link state"
@@ -1106,6 +1233,18 @@ _theme-self-test-run() {
             bad "failed TOML validation left current=$REPLY"
     fi
 
+    # failed validation: a polybar fragment with a key twice (polybar refuses it)
+    mkdir -p "$scratch/bad-ini"
+    print -rl -- '[colors]' 'bg = {{ .spec.roles.bg }}' 'bg = {{ .spec.roles.fg }}' '[theme]' 'height = 50' \
+        > "$scratch/bad-ini/polybar.ini.tmpl"
+    if THEME_TEMPLATE_DIR="$scratch/bad-ini" theme-apply gruvbox-dark 2>"$scratch/err"; then
+        bad "a polybar.ini with a duplicate key was applied"
+    else
+        _theme-link-id current
+        [[ "$REPLY" == "$before" ]] && ok "failed validation (polybar.ini duplicate key): current unchanged" ||
+            bad "failed polybar.ini validation left current=$REPLY"
+    fi
+
     # failed reload: roll back to the previous build; known-good stays
     _theme-link-id known-good; kg=$REPLY
     _theme-reload() { return 1; }
@@ -1128,10 +1267,19 @@ _theme-self-test-run() {
         ok "ensure: missing current re-activated known-good" || bad "ensure did not restore known-good"
     t0=$EPOCHREALTIME; theme-ensure; _theme-ms-since $t0
     ok "ensure with a current theme: ${REPLY} ms (no-op)"
+    # A build from before a template existed is re-rendered from its own scheme.
+    theme-apply nord 2>/dev/null
+    rm -f "$_THEME_STATE/current/polybar.ini"
+    theme-ensure 2>/dev/null
+    _theme-source-current
+    [[ "${THEME_META[name]}" == nord && -r "$_THEME_STATE/current/polybar.ini" ]] &&
+        ok "ensure: a build missing polybar.ini is re-rendered (still nord)" ||
+        bad "ensure on an incomplete build left ${THEME_META[name]}"
+    _theme-link-id known-good; kg=$REPLY
     rm -rf -- "$_THEME_STATE"
     theme-ensure 2>/dev/null
-    _theme-source-current && [[ "${THEME_META[name]}" == "$_THEME_DEFAULT_SCHEME" ]] &&
-        ok "ensure with no state rendered the default" || bad "ensure from nothing failed"
+    _theme-source-current && [[ "${THEME_META[name]}" == "$_THEME_DEFAULT_SCHEME" && -r "$_THEME_STATE/current/polybar.ini" ]] &&
+        ok "ensure with no state rendered the default, polybar.ini included" || bad "ensure from nothing failed"
 
     # pruning
     local -i i
