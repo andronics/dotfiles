@@ -527,69 +527,71 @@ EOF
 # ------------------------------
 
 cache-self-test() {
-    # Load _test from same directory
-    local test_dir="${${(%):-%x}:A:h}"
-    if ! source "$test_dir/_test" 2>/dev/null; then
-        echo "[ERROR] cache-self-test requires _test framework (expected at $test_dir/_test)" >&2
-        return 1
+    echo "=== _cache v${CACHE_VERSION} self-test ==="
+    echo ""
+
+    local tests_passed=0
+    local tests_failed=0
+
+    # Only touch selftest-* keys, so a real cache in this shell is left alone
+    cache-set "selftest-key" "test_value" 3600
+    echo -n "Test 1: Set and get... "
+    if [[ "$(cache-get "selftest-key")" == "test_value" ]]; then
+        echo "PASS"
+        tests_passed=$((tests_passed + 1))
+    else
+        echo "FAIL"
+        tests_failed=$((tests_failed + 1))
     fi
 
-    echo "=== Testing cache v$CACHE_VERSION ==="
-    test-reset
+    echo -n "Test 2: Has... "
+    if cache-has "selftest-key" && ! cache-has "selftest-missing"; then
+        echo "PASS"
+        tests_passed=$((tests_passed + 1))
+    else
+        echo "FAIL"
+        tests_failed=$((tests_failed + 1))
+    fi
 
-    echo "## Basic Tests"
-    test-assert-not-empty "$CACHE_VERSION" "version should be set"
+    echo -n "Test 3: Clear... "
+    if cache-clear "selftest-key" && ! cache-has "selftest-key"; then
+        echo "PASS"
+        tests_passed=$((tests_passed + 1))
+    else
+        echo "FAIL"
+        tests_failed=$((tests_failed + 1))
+    fi
 
-    echo ""
-    echo "## Core Operations"
-
-    # Set and get
-    cache-set "test_key" "test_value" 3600
-    result=$(cache-get "test_key")
-    test-assert-equals "$result" "test_value" "should set and get value"
-
-    # Has
-    cache-has "test_key"
-    test-assert-true "should detect existing key" test $? -eq 0
-
-    cache-has "nonexistent"
-    test-assert-false "should detect missing key" test $? -eq 0
-
-    # Clear
-    cache-clear "test_key"
-    cache-has "test_key"
-    test-assert-false "should clear key" test $? -eq 0
-
-    echo ""
-    echo "## TTL Tests"
-
-    # Set with 1 second TTL
-    cache-set "expire_test" "value" 1
+    cache-set "selftest-expire" "value" 1
     sleep 2
-    cache-get "expire_test" &>/dev/null
-    test-assert-exit-code 1 cache-get "expire_test"
+    echo -n "Test 4: TTL expiry... "
+    if ! cache-get "selftest-expire" >/dev/null 2>&1; then
+        echo "PASS"
+        tests_passed=$((tests_passed + 1))
+    else
+        echo "FAIL"
+        tests_failed=$((tests_failed + 1))
+    fi
+
+    cache-set "selftest-ns1:key1" "val1"
+    cache-set "selftest-ns1:key2" "val2"
+    cache-set "selftest-ns2:key1" "val3"
+    cache-clear-namespace "selftest-ns1"
+    echo -n "Test 5: Namespace clear... "
+    if ! cache-has "selftest-ns1:key1" && ! cache-has "selftest-ns1:key2" && cache-has "selftest-ns2:key1"; then
+        echo "PASS"
+        tests_passed=$((tests_passed + 1))
+    else
+        echo "FAIL"
+        tests_failed=$((tests_failed + 1))
+    fi
+
+    cache-clear-namespace "selftest-ns2"
+    cache-clear "selftest-expire" 2>/dev/null
 
     echo ""
-    echo "## Namespace Tests"
-
-    cache-set "ns1:key1" "val1"
-    cache-set "ns1:key2" "val2"
-    cache-set "ns2:key1" "val3"
-
-    cache-clear-namespace "ns1"
-    cache-has "ns1:key1"
-    test-assert-false "namespace should be cleared" test $? -eq 0
-
-    cache-has "ns2:key1"
-    test-assert-true "other namespace should remain" test $? -eq 0
-
-    echo ""
-
-    # Cleanup
-    cache-clear-all
-
-    test-summary
-    return $?
+    echo "Results: $tests_passed passed, $tests_failed failed"
+    [[ $tests_failed -eq 0 ]]
 }
 
 # ------------------------------

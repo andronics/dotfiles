@@ -263,13 +263,14 @@ bsp-is-running() {
 # Get BSP version
 #
 # Function: bsp-version
-# Description: Get the version of the running BSP instance
+# Description: Get the version of the installed bspwm (bspwm -v); `bsp` here
+#   would hit the bsp wrapper script, which reads -v as --verbose
 # Output: Version string
 # Example:
 #   version=$(bsp-version)
 #
 bsp-version() {
-    bsp -v 2>/dev/null
+    bspwm -v 2>/dev/null
 }
 
 # ------------------------------
@@ -1523,8 +1524,6 @@ UTILITIES:
   help                           Display this help
   info                           Display system information
   self-test                      Run self-tests
-
-For detailed documentation: cat ~/.local/docs/lib/_bsp.md
 EOF
 }
 
@@ -1619,7 +1618,10 @@ bsp-self-test() {
             log-error "✗ Cache integration failed"
             ((tests_failed++)) || true
         fi
-        cache-delete "$test_key"
+        if ! cache-clear "$test_key"; then
+            log-error "✗ Cache clear failed"
+            ((tests_failed++)) || true
+        fi
     else
         log-info "⚠ Cache not available (skipping cache test)"
     fi
@@ -1640,7 +1642,7 @@ bsp-self-test() {
         local test_event_received=false
         test_handler() { test_event_received=true; }
 
-        events-on "bsp.test.event" test_handler
+        events-on "bsp.test.event" test_handler >/dev/null
         _bsp-emit "bsp.test.event"
 
         if [[ "$test_event_received" == "true" ]]; then

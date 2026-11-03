@@ -15,6 +15,10 @@
 #   - Handler lifecycle management
 #   - Event history and persistence
 #   - Comprehensive error handling
+#
+# Event names must not contain a colon: handlers are stored under the key
+# event:priority:id and the event name is read back as the text before the
+# first colon. Use dots to namespace (e.g. "app.startup").
 
 # ------------------------------
 # Source Guard
@@ -156,6 +160,11 @@ events-on() {
         log-error "Priority must be numeric: $priority"
         return 2
     }
+
+    if [[ "$event_name" == *:* ]]; then
+        log-error "Event name must not contain a colon (use dots to namespace): $event_name"
+        return 2
+    fi
 
     # Validate priority range
     if [[ $priority -lt 0 ]] || [[ $priority -gt 100 ]]; then
@@ -429,7 +438,7 @@ _events-cleanup-async-workers() {
 
 # Filter events by pattern
 # Usage: events-filter <pattern>
-# Pattern supports wildcards (e.g., "app:*", "*:error")
+# Pattern supports wildcards (e.g., "app.*", "*.error")
 # Returns: list of registered event names matching pattern
 events-filter() {
     local pattern="${1:-*}"
@@ -1015,7 +1024,9 @@ events-self-test() {
     test_handler() {
         echo "Handler called with event: $1"
     }
-    local handler_id=$(events-on "test.event" "test_handler" 50)
+    # Not in $(...): a subshell would lose the registration
+    events-on "test.event" "test_handler" 50 >/dev/null
+    local handler_id="$EVENTS_LAST_HANDLER_ID"
     echo "  Registered handler ID: $handler_id"
     local count=$(events-handler-count "test.event")
     [[ $count -eq 1 ]] || { echo "  FAILED: Expected 1 handler, got $count"; failed=1; }
@@ -1031,19 +1042,27 @@ events-self-test() {
     echo "✓ Priority Ordering:"
     high_priority() { echo "  High priority (80)"; }
     low_priority() { echo "  Low priority (20)"; }
-    events-on "test.priority" "high_priority" 80
-    events-on "test.priority" "low_priority" 20
+    events-on "test.priority" "high_priority" 80 >/dev/null
+    events-on "test.priority" "low_priority" 20 >/dev/null
     echo "  Emitting event (should see high priority first):"
     events-emit "test.priority"
     echo ""
 
     # Test 5: Event filtering
     echo "✓ Event Filtering:"
-    events-on "app:startup" "test_handler" 50
-    events-on "app:shutdown" "test_handler" 50
-    local matches=$(events-filter "app:*" | wc -l)
-    echo "  Events matching 'app:*': $matches"
+    events-on "app.startup" "test_handler" 50 >/dev/null
+    events-on "app.shutdown" "test_handler" 50 >/dev/null
+    local matches=$(events-filter "app.*" | wc -l)
+    echo "  Events matching 'app.*': $matches"
     [[ $matches -ge 2 ]] || { echo "  FAILED: Expected >= 2 matches, got $matches"; failed=1; }
+    echo ""
+
+    echo "✓ Event Name Validation:"
+    if events-on "bad:name" "test_handler" 50 >/dev/null 2>&1; then
+        echo "  FAILED: an event name with a colon was accepted"; failed=1
+    else
+        echo "  Colon in event name rejected"
+    fi
     echo ""
 
     # Test 6: History

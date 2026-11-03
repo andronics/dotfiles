@@ -18,27 +18,27 @@ A `~/.local/bin/<noun>` wrapper:
 
 ### Example — `bt` on the contract
 
+The real `~/.local/bin/bt` (`shell/.local/bin/bt`). Its module is `_bluetooth_ui`, whose public functions are `bt-*`, so the default prefix (the wrapper name) fits and no `--prefix` is needed:
+
 ```zsh
 #!/usr/bin/env zsh
 set -e
+
 source "${DOTLIB}/_dispatcher" || { echo "missing _dispatcher" >&2; exit 1; }
-source "${DOTLIB}/_bluetooth"  || { echo "missing _bluetooth"  >&2; exit 1; }
+source "${DOTLIB}/_bluetooth_ui" || { echo "missing _bluetooth_ui" >&2; exit 1; }
 
 dispatcher-init "bt" \
     --route=function \
-    --prefix=bluetooth \
-    --description="Bluetooth control"
-
-dispatcher-register-alias "ls"   "devices-list"
-dispatcher-register-alias "scan" "scan-start"
+    --description="Bluetooth CLI management tool"
 
 dispatcher-execute "$@"
 ```
 
 Routing:
-- `bt connect aa:bb:cc` → `bluetooth-connect aa:bb:cc`
-- `bt ls` → `bluetooth-devices-list` (via alias)
-- `bt help` → auto-generated help (or `bluetooth-help` if defined)
+- `bt connect aa:bb:cc` → `bt-connect aa:bb:cc`
+- `bt devices-paired` → `bt-devices-paired`
+- `bt scan-start` → `bt-scan-start`
+- `bt help` → auto-generated help, described from `_BT_DESCRIPTIONS` (or `bt-help` if defined)
 
 ## Module contract
 
