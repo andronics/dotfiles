@@ -1,0 +1,1092 @@
+#!/usr/bin/env zsh
+
+# _theme - the desktop theme spec: load a source, resolve it into semantic
+# roles with guaranteed contrast, render templates with gomplate, and swap the
+# result in atomically.
+#
+# Pipeline (`apply`):
+#   source   a named scheme: base16/base24 YAML in ${THEME_CONFIG}/schemes
+#            (image and colour sources arrive with matugen)
+#   resolve  prefs.toml, with ${state}/overrides.json merged over it, plus the
+#            palette -> roles (bg, fg, accent, urgent, busy, dim, ...), the
+#            contrast floors below, sizes from fonts.scale, metrics
+#   render   every templates/*.tmpl -> builds/<id>.tmp/<name>, with
+#            spec.json beside them
+#   validate per-extension checks (_THEME_VALIDATORS); any failure, or a
+#            gomplate error, discards the build and leaves `current` alone
+#   swap     builds/<id>.tmp -> builds/<id>, then `current` is replaced by a
+#            rename (ln -sfn current.tmp + mv -T), so readers see the old
+#            build or the new one, never neither
+#   reload   _theme-reload; on failure `current` rolls back to the previous
+#            build, then to known-good. known-good only advances after a
+#            successful reload. There are no consumers yet, so reload is a
+#            no-op that always succeeds.
+#
+# State (never tracked) in ${XDG_STATE_HOME}/theme:
+#   current -> builds/<id>     known-good -> builds/<id>
+#   builds/<id>/{spec.json,theme.zsh,...}   pruned to _THEME_KEEP_BUILDS,
+#                                           never current or known-good
+#   history        "<id>\t<name>" per activation, newest last; `undo` pops it
+#   overrides.json knobs merged over prefs.toml (written by a later `set`)
+#
+# Contrast guarantees (WCAG 2 ratios against bg unless noted). A colour that
+# misses its floor keeps its OKLCH hue and moves in lightness, away from bg,
+# just far enough (chroma shrinks at the sRGB edge):
+#   fg on bg and bg_alt     7.0 (contrast = "aaa") or 4.5 ("aa"); aaa falls
+#                           back to aa, recorded as degraded, only when 7.0
+#                           is out of reach
+#   fg_dim                  4.5
+#   dim                     3.0, and below fg_dim's ratio
+#   accent urgent busy ok warn info   3.0
+#   on_accent / on_urgent   4.5 on accent / urgent
+#   busy, urgent, accent    pairwise ΔE_OK >= 0.08 (the strip states)
+#   bg_alt vs bg            ΔL_OK >= 0.03 (two-tone bar segments)
+#
+# Scheme extensions (all optional): x-accent (slot, name or hex for the
+# accent when prefs accent = "scheme"), x-pair (light/dark twin), x-roles
+# (role -> slot, name or hex, replacing the default slot), x-ansi (index ->
+# same), x-names (named colours, emitted so `@lavender`-style references keep
+# resolving).
+#
+# Usage:
+#   source "${DOTLIB}/_theme"
+#
+# Environment:
+#   THEME_CONFIG_DIR     prefs, schemes, templates (default
+#                        ${XDG_CONFIG_HOME}/theme)
+#   THEME_TEMPLATE_DIR   templates only (default ${THEME_CONFIG_DIR}/templates)
+#
+# Dependencies:
+#   Required:
+#     - _common, _log, _colour
+#   External:
+#     - gomplate (YAML/TOML -> JSON, rendering), jq, GNU mv (-T)
+
+[[ -n "${THEME_LOADED:-}" ]] && return 0
+declare -gr THEME_LOADED=1
+
+source "${DOTLIB}/_common" || { echo "[ERROR] _theme requires _common" >&2; return 1; }
+source "${DOTLIB}/_log"    2>/dev/null || true
+source "${DOTLIB}/_colour" || { echo "[ERROR] _theme requires _colour" >&2; return 1; }
+
+zmodload -F zsh/datetime p:EPOCHREALTIME p:EPOCHSECONDS b:strftime
+zmodload -F zsh/system b:zsystem
+
+declare -gi _THEME_KEEP_BUILDS=20
+declare -g _THEME_DEFAULT_SCHEME=catppuccin-mocha
+
+typeset -ga _THEME_ROLES=(
+    bg bg_alt surface border fg fg_dim dim accent focused on_accent
+    urgent on_urgent busy ok warn info cursor selection
+)
+
+# Default slot per role. x-roles in a scheme replaces any of these; accent
+# comes from prefs accent / x-accent instead.
+typeset -gA _THEME_ROLE_SLOTS=(
+    [bg]=base00 [bg_alt]=base01 [surface]=base02 [border]=base02
+    [fg]=base05 [fg_dim]=base04 [dim]=base03 [accent]=base0D
+    [urgent]=base08 [busy]=base09 [ok]=base0B [warn]=base0A [info]=base0C
+    [cursor]=base06 [selection]=base02
+)
+
+# The tinted-theming terminal mapping; 9-14 use the base24 bright slots,
+# which base16 schemes fill from the normal ones.
+typeset -ga _THEME_ANSI_SLOTS=(
+    base00 base08 base0B base0A base0D base0E base0C base05
+    base03 base12 base14 base13 base16 base17 base15 base07
+)
+
+# base24 slots a base16 scheme lacks, and where they come from.
+typeset -gA _THEME_BASE24_FILL=(
+    [base10]=base00 [base11]=base00 [base12]=base08 [base13]=base0A
+    [base14]=base0B [base15]=base0C [base16]=base0D [base17]=base0E
+)
+
+declare -gr _THEME_MIN_FG_DIM=4.5 _THEME_MIN_DIM=3.0 _THEME_MIN_INDICATOR=3.0
+declare -gr _THEME_MIN_ON=4.5 _THEME_MIN_DELTA_E=0.08 _THEME_MIN_DELTA_L=0.03
+declare -gr _THEME_FONT_FLOOR=6
+
+# Roles of catppuccin-mocha as resolved: what `get` answers before any
+# theme has been applied. self-test fails if it drifts from the resolver.
+typeset -gA _THEME_FALLBACK=(
+    [bg]='#1e1e2e' [bg_alt]='#313244' [surface]='#313244' [border]='#313244'
+    [fg]='#cdd6f4' [fg_dim]='#a6adc8' [dim]='#6c7086' [accent]='#b4befe'
+    [focused]='#b4befe' [on_accent]='#11111b' [urgent]='#f38ba8'
+    [on_urgent]='#11111b' [busy]='#fab387' [ok]='#a6e3a1' [warn]='#f9e2af'
+    [info]='#94e2d5' [cursor]='#f5e0dc' [selection]='#313244'
+)
+
+# extension -> validator function, run on every rendered file.
+typeset -gA _THEME_VALIDATORS=(
+    [zsh]=_theme-validate-zsh [sh]=_theme-validate-zsh
+    [json]=_theme-validate-json [toml]=_theme-validate-toml
+)
+
+typeset -gA _THEME_DESCRIPTIONS=(
+    [apply]="Resolve, render, validate and swap in <scheme|build-id|default>; keeps the current theme on any failure"
+    [current]="Show the applied theme's name, source, mode, scale and contrast; --json prints spec.json"
+    [get]="Print one value: a role (accent, fg, ...), palette slot or name, size, metric or font"
+    [list]="List [schemes|history|builds] (default schemes)"
+    [check]="Resolve [scheme] (default: the current one) without applying; print roles, contrast and adjustments; non-zero if a guarantee can't be met"
+    [swatch]="Print the current theme, or [scheme], as truecolour blocks"
+    [ensure]="Make sure a current theme exists: keep it, else re-activate known-good, else render the default"
+    [undo]="Re-activate the previous build from history (no re-render)"
+)
+
+theme-help() {
+    cat <<'EOF'
+theme - desktop theme from a scheme: resolve, render, swap
+
+Usage: theme <command> [args]
+
+Commands:
+  apply <scheme|build-id|default>   Build and activate a theme
+  current [--json]                  Show the applied theme
+  get <key>                         One value: role, palette slot/name, size,
+                                    metric or font (e.g. accent, base0D,
+                                    lavender, terminal, gap, mono)
+  list [schemes|history|builds]     What can be applied (default schemes)
+  check [scheme]                    Resolve without applying; roles, contrast
+                                    ratios and adjustments; exit 1 on failure
+  swatch [scheme]                   Truecolour preview in the terminal
+  ensure                            Guarantee a current theme (fast no-op
+                                    when one exists)
+  undo                              Back to the previous build
+  self-test                         Render every scheme into a scratch state
+                                    dir under ~/.cache and validate
+
+Files:
+  ${XDG_CONFIG_HOME}/theme/prefs.toml      scale, font sizes, contrast, accent
+  ${XDG_CONFIG_HOME}/theme/schemes/*.yaml  base16/base24 schemes
+  ${XDG_CONFIG_HOME}/theme/templates/      gomplate templates (.tmpl)
+  ${XDG_STATE_HOME}/theme/                 builds, current, known-good,
+                                           history, overrides.json
+EOF
+}
+
+# ------------------------------
+# Private Helpers: paths, ids, state
+# ------------------------------
+
+# Paths are read from the environment on every call, not at source time, so
+# self-test can point XDG_STATE_HOME at a scratch dir.
+_theme-paths() {
+    _THEME_CONFIG=${THEME_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/theme}
+    _THEME_TEMPLATES=${THEME_TEMPLATE_DIR:-$_THEME_CONFIG/templates}
+    _THEME_STATE=${XDG_STATE_HOME:-$HOME/.local/state}/theme
+}
+
+# REPLY = a new build id: timestamp, then milliseconds and one random hex
+# digit, so ids sort in creation order (pruning relies on it).
+_theme-new-id() {
+    local ts sfx
+    local -i ms
+    strftime -s ts '%Y%m%dT%H%M%S' $EPOCHSECONDS
+    ms=$(( int((EPOCHREALTIME - int(EPOCHREALTIME)) * 1000) ))
+    while :; do
+        printf -v sfx '%03x%x' $ms $(( RANDOM % 16 ))
+        [[ -e "$_THEME_STATE/builds/$ts-$sfx" ]] || break
+    done
+    REPLY="$ts-$sfx"
+}
+
+# REPLY = the build id a state link (current, known-good) points at, if the
+# build is complete. Returns 1 otherwise.
+_theme-link-id() {
+    local link="$_THEME_STATE/$1"
+    [[ -L "$link" && -r "$link/spec.json" && -r "$link/theme.zsh" ]] || return 1
+    REPLY=${${:-$link}:A:t}
+}
+
+_theme-build-ok() {
+    [[ -n "$1" && -r "$_THEME_STATE/builds/$1/spec.json" && -r "$_THEME_STATE/builds/$1/theme.zsh" ]]
+}
+
+# Points state link $1 at build $2 by rename, so it is never missing.
+_theme-link() {
+    ln -sfn "builds/$2" "$_THEME_STATE/$1.tmp" && mv -Tf "$_THEME_STATE/$1.tmp" "$_THEME_STATE/$1"
+}
+
+_theme-history-push() {
+    print -r -- "$1"$'\t'"$2" >> "$_THEME_STATE/history"
+}
+
+# Rewrites history without its last line; atomic so a crash can't truncate it.
+_theme-history-pop() {
+    local h="$_THEME_STATE/history"
+    [[ -s "$h" ]] || return 1
+    local -a lines=("${(@f)$(<"$h")}")
+    print -rl -- "${(@)lines[1,-2]}" > "$h.tmp" && mv -f "$h.tmp" "$h"
+}
+
+_theme-history-last() {
+    local h="$_THEME_STATE/history"
+    [[ -s "$h" ]] || return 1
+    local -a lines=("${(@f)$(<"$h")}")
+    [[ -n "${lines[-1]}" ]] || return 1
+    REPLY=${lines[-1]%%$'\t'*}
+}
+
+# Keeps the newest _THEME_KEEP_BUILDS builds plus whatever current and
+# known-good point at; also clears builds left half-made by a crash.
+_theme-prune() {
+    local -a builds keep
+    local b
+    builds=("$_THEME_STATE"/builds/*(N/:t))
+    for b in current known-good; do _theme-link-id $b && keep+=($REPLY); done
+    local -a done=("${(@)builds:#*.tmp}")
+    # zsh slices from a negative index before the start come back empty.
+    (( ${#done} > _THEME_KEEP_BUILDS )) && done=("${(@)done[-$_THEME_KEEP_BUILDS,-1]}")
+    keep+=("${done[@]}")
+    for b in "${builds[@]}"; do
+        (( ${keep[(Ie)$b]} )) || rm -rf -- "$_THEME_STATE/builds/$b"
+    done
+}
+
+_theme-lock() {
+    mkdir -p "$_THEME_STATE/builds" || return 1
+    : >> "$_THEME_STATE/lock"
+    zsystem flock -t 10 "$_THEME_STATE/lock" || { log-error "[theme] another theme command holds the lock"; return 1; }
+}
+
+_theme-ms-since() {
+    REPLY=$(( int((EPOCHREALTIME - $1) * 1000) ))
+}
+
+# Formats a number for spec/templates: two decimals at most, no trailing zeros.
+_theme-num() {
+    printf -v REPLY '%.2f' "$1"
+    while [[ "$REPLY" == *.*0 ]]; do REPLY=${REPLY%0}; done
+    REPLY=${REPLY%.}
+    [[ -z "$REPLY" || "$REPLY" == "-" ]] && REPLY=0
+    return 0
+}
+
+# ------------------------------
+# Private Helpers: load
+# ------------------------------
+
+# REPLY = the YAML file for scheme name or path $1.
+_theme-scheme-file() {
+    local ref=$1
+    if [[ "$ref" == */* || "$ref" == *.y(a|)ml ]]; then
+        [[ -r "$ref" ]] && { REPLY=${ref:A}; return 0; }
+    else
+        local f
+        for f in "$_THEME_CONFIG/schemes/$ref".{yaml,yml}; do
+            [[ -r "$f" ]] && { REPLY=$f; return 0; }
+        done
+    fi
+    log-error "[theme] unknown scheme '$ref' (see: theme list)"
+    return 1
+}
+
+# Fills the assoc _THEME_IN with every scalar of prefs (overrides merged in)
+# and scheme file $1 as flat "prefs.fonts.scale"-style keys. One gomplate
+# (YAML + TOML -> JSON) and one jq.
+_theme-load() {
+    local scheme_file=$1 prefs="$_THEME_CONFIG/prefs.toml" ov="$_THEME_STATE/overrides.json"
+    local overrides='{}' line out
+    [[ -r "$prefs" ]] || { log-error "[theme] missing $prefs"; return 1; }
+    [[ -r "$ov" ]] && overrides=$(<"$ov")
+    out=$(gomplate -c "prefs=$prefs" -c "scheme=$scheme_file" \
+            -i '{{ dict "prefs" .prefs "scheme" .scheme | data.ToJSON }}' 2>&1 |
+          jq -r --argjson o "$overrides" '
+            .prefs *= $o
+            | paths(scalars) as $p
+            | [($p | map(tostring) | join(".")), (getpath($p) | tostring)] | @tsv' 2>&1) || {
+        log-error "[theme] cannot read prefs/overrides/scheme: ${out//$'\n'/ }"
+        return 1
+    }
+    typeset -gA _THEME_IN=()
+    for line in "${(@f)out}"; do
+        _THEME_IN[${line%%$'\t'*}]=${line#*$'\t'}
+    done
+}
+
+# ------------------------------
+# Private Helpers: resolve
+# ------------------------------
+
+# REPLY = hex for a colour reference: #rrggbb, a slot (base0d/base0D) or an
+# x-names name. Needs _THEME_PAL filled.
+_theme-ref() {
+    local ref=${1:l}
+    if colour-valid "$ref"; then REPLY=$ref; return 0; fi
+    if [[ "$ref" =~ '^base[0-9a-f]{2}$' ]]; then
+        REPLY=${_THEME_PAL[base${(U)ref[5,6]}]:-}
+    else
+        REPLY=${_THEME_PAL[$ref]:-}
+    fi
+    [[ -n "$REPLY" ]] && return 0
+    log-error "[theme] unknown colour reference '$1'"
+    return 1
+}
+
+# Fills _THEME_PAL: base00..base17 (base24 gaps filled) and x-names, lowercase.
+_theme-palette() {
+    typeset -gA _THEME_PAL=()
+    local k v
+    for k v in "${(@kv)_THEME_IN}"; do
+        case "$k" in
+            scheme.palette.base[0-9A-Fa-f][0-9A-Fa-f]) _THEME_PAL[base${(U)k[-2,-1]}]=${v:l} ;;
+            scheme.x-names.*)                          _THEME_PAL[${k#scheme.x-names.}]=${v:l} ;;
+        esac
+    done
+    for k in base0{0..9} base0{A..F}; do
+        colour-valid "${_THEME_PAL[$k]:-}" || { log-error "[theme] scheme lacks a valid $k"; return 1; }
+    done
+    for k v in "${(@kv)_THEME_BASE24_FILL}"; do
+        colour-valid "${_THEME_PAL[$k]:-}" || _THEME_PAL[$k]=${_THEME_PAL[$v]}
+    done
+}
+
+# Records why role $1 changed.
+_theme-adjusted() {
+    (( ${_THEME_ADJUSTED[(Ie)$1]} )) || _THEME_ADJUSTED+=($1)
+    _THEME_NOTES+=("$1: $2")
+}
+
+# Lifts role $1 to ratio $2 against bg; returns 1 if unreachable.
+_theme-floor() {
+    local role=$1 before=${_THEME_ROLE[$1]}
+    colour-ensure-contrast "$before" "${_THEME_ROLE[bg]}" "$2" || return 1
+    if [[ "$REPLY" != "$before" ]]; then
+        _THEME_ROLE[$role]=$REPLY
+        _theme-adjusted $role "$before -> $REPLY (contrast >= $2)"
+    fi
+}
+
+# True when role $1 is at least _THEME_MIN_DELTA_E from every role named after it.
+_theme-distinct() {
+    local a=$1 b
+    shift
+    for b; do
+        colour-delta-e "${_THEME_ROLE[$a]}" "${_THEME_ROLE[$b]}"
+        (( REPLY >= _THEME_MIN_DELTA_E )) || return 1
+    done
+}
+
+# Turns role $1's hue in growing steps, alternating direction, until it is
+# distinct from the roles after it and still meets the indicator floor.
+_theme-separate() {
+    local role=$1 orig=${_THEME_ROLE[$1]} step sign cand
+    shift
+    _theme-distinct $role "$@" && return 0
+    for step in 15 30 45 60 90 120 150 180; do
+        for sign in 1 -1; do
+            colour-rotate "$orig" $(( sign * step ))
+            colour-ensure-contrast "$REPLY" "${_THEME_ROLE[bg]}" $_THEME_MIN_INDICATOR || continue
+            cand=$REPLY
+            _THEME_ROLE[$role]=$cand
+            if _theme-distinct $role "$@"; then
+                _theme-adjusted $role "$orig -> $cand (hue turned $(( sign * step ))° to stay distinct from ${(j:, :)@})"
+                return 0
+            fi
+        done
+    done
+    _THEME_ROLE[$role]=$orig
+    _THEME_NOTES+=("$role: cannot be made distinct from ${(j:, :)@}")
+    return 1
+}
+
+# Resolves _THEME_IN into _THEME_ROLE, _THEME_ANSI, _THEME_CONTRAST (pair ->
+# ratio or distance), _THEME_LEVEL (aaa|aa), _THEME_DEGRADED, _THEME_ADJUSTED,
+# _THEME_NOTES, _THEME_SIZE, _THEME_METRIC, _THEME_MODE. Returns 1 if a
+# guarantee can't be met.
+_theme-resolve() {
+    typeset -gA _THEME_ROLE=() _THEME_CONTRAST=() _THEME_SIZE=() _THEME_METRIC=()
+    typeset -ga _THEME_ANSI=() _THEME_ADJUSTED=() _THEME_NOTES=()
+    typeset -g _THEME_LEVEL _THEME_MODE
+    typeset -gi _THEME_DEGRADED=0
+    local role k v accent orig body fail=0
+
+    _theme-palette || return 1
+
+    for role k in "${(@kv)_THEME_ROLE_SLOTS}"; do
+        _THEME_ROLE[$role]=${_THEME_PAL[$k]}
+    done
+    for k v in "${(@kv)_THEME_IN}"; do
+        [[ "$k" == scheme.x-roles.* ]] || continue
+        role=${k#scheme.x-roles.}
+        (( ${_THEME_ROLES[(Ie)$role]} )) && [[ "$role" != (accent|focused|on_*) ]] || {
+            log-warning "[theme] x-roles: ignoring '$role'"; continue
+        }
+        _theme-ref "$v" || return 1
+        _THEME_ROLE[$role]=$REPLY
+    done
+
+    accent=${_THEME_IN[prefs.accent]:-scheme}
+    [[ "$accent" == scheme ]] && accent=${_THEME_IN[scheme.x-accent]:-base0D}
+    _theme-ref "$accent" || return 1
+    _THEME_ROLE[accent]=$REPLY
+
+    _THEME_MODE=${_THEME_IN[scheme.variant]:-}
+    if [[ "$_THEME_MODE" != (dark|light) ]]; then
+        local -F lbg lfg
+        colour-luminance "${_THEME_ROLE[bg]}"; lbg=$REPLY
+        colour-luminance "${_THEME_ROLE[fg]}"; lfg=$REPLY
+        (( lbg < lfg )) && _THEME_MODE=dark || _THEME_MODE=light
+    fi
+
+    # bg_alt: base01, else base02, else nudged away from bg toward fg.
+    colour-delta-l "${_THEME_ROLE[bg_alt]}" "${_THEME_ROLE[bg]}"
+    if (( REPLY < _THEME_MIN_DELTA_L )) && [[ -z "${_THEME_IN[scheme.x-roles.bg_alt]:-}" ]]; then
+        _THEME_NOTES+=("bg_alt: base01 too close to bg, using base02")
+        _THEME_ROLE[bg_alt]=${_THEME_PAL[base02]}
+        colour-delta-l "${_THEME_ROLE[bg_alt]}" "${_THEME_ROLE[bg]}"
+    fi
+    if (( REPLY < _THEME_MIN_DELTA_L )); then
+        orig=${_THEME_ROLE[bg_alt]}
+        if [[ "$_THEME_MODE" == dark ]]; then colour-lighten "${_THEME_ROLE[bg]}" 0.04
+        else colour-darken "${_THEME_ROLE[bg]}" 0.04; fi
+        _THEME_ROLE[bg_alt]=$REPLY
+        _theme-adjusted bg_alt "$orig -> $REPLY (ΔL >= $_THEME_MIN_DELTA_L from bg)"
+    fi
+
+    # fg on bg and bg_alt: AAA, or AA when AAA can't be reached.
+    _THEME_LEVEL=${_THEME_IN[prefs.contrast]:-aaa}
+    [[ "$_THEME_LEVEL" == (aa|aaa) ]] || { log-error "[theme] contrast must be aa or aaa"; return 1; }
+    orig=${_THEME_ROLE[fg]}
+    while :; do
+        [[ "$_THEME_LEVEL" == aaa ]] && body=7.0 || body=4.5
+        _THEME_ROLE[fg]=$orig
+        if colour-ensure-contrast "$orig" "${_THEME_ROLE[bg]}" $body &&
+           colour-ensure-contrast "$REPLY" "${_THEME_ROLE[bg_alt]}" $body; then
+            v=$REPLY
+            colour-contrast "$v" "${_THEME_ROLE[bg]}"
+            (( REPLY >= body )) && break
+        fi
+        if [[ "$_THEME_LEVEL" == aaa ]]; then
+            _THEME_LEVEL=aa
+            _THEME_DEGRADED=1
+            _THEME_NOTES+=("fg: 7.0 (AAA) unreachable on bg/bg_alt; degraded to AA 4.5")
+            continue
+        fi
+        _THEME_NOTES+=("fg: even 4.5 (AA) is unreachable on bg/bg_alt")
+        return 1
+    done
+    if [[ "$v" != "$orig" ]]; then
+        _THEME_ROLE[fg]=$v
+        _theme-adjusted fg "$orig -> $v (contrast >= $body)"
+    fi
+
+    _theme-floor fg_dim $_THEME_MIN_FG_DIM || fail=1
+
+    # dim: visible (3.0) but quieter than fg_dim.
+    _theme-floor dim $_THEME_MIN_DIM || fail=1
+    local -F rdim rdimfg
+    colour-contrast "${_THEME_ROLE[dim]}" "${_THEME_ROLE[bg]}"; rdim=$REPLY
+    colour-contrast "${_THEME_ROLE[fg_dim]}" "${_THEME_ROLE[bg]}"; rdimfg=$REPLY
+    if (( rdim >= rdimfg )); then
+        orig=${_THEME_ROLE[dim]}
+        colour-fit-contrast "$orig" "${_THEME_ROLE[bg]}" $_THEME_MIN_DIM
+        _THEME_ROLE[dim]=$REPLY
+        _theme-adjusted dim "$orig -> $REPLY (dimmer than fg_dim)"
+    fi
+
+    for role in accent urgent busy ok warn info; do
+        _theme-floor $role $_THEME_MIN_INDICATOR || fail=1
+    done
+
+    # The three strip states: urgent keeps its colour, accent moves before busy.
+    _theme-separate accent urgent || fail=1
+    _theme-separate busy urgent accent || fail=1
+
+    _THEME_ROLE[focused]=${_THEME_ROLE[accent]}
+    for role in accent urgent; do
+        colour-best-on "${_THEME_ROLE[$role]}" $_THEME_MIN_ON \
+            "${_THEME_PAL[base11]}" "${_THEME_ROLE[bg]}" "${_THEME_ROLE[fg]}" || fail=1
+        _THEME_ROLE[on_$role]=$REPLY
+    done
+
+    # ANSI 0-15: tinted mapping, then x-ansi.
+    for k in {1..16}; do _THEME_ANSI[k]=${_THEME_PAL[${_THEME_ANSI_SLOTS[k]}]}; done
+    for k v in "${(@kv)_THEME_IN}"; do
+        [[ "$k" =~ '^scheme\.x-ansi\.([0-9]+)$' ]] || continue
+        (( match[1] <= 15 )) || continue
+        _theme-ref "$v" || return 1
+        _THEME_ANSI[$(( match[1] + 1 ))]=$REPLY
+    done
+
+    _theme-contrast-table
+    _theme-sizes || return 1
+
+    for role in "${_THEME_ROLES[@]}"; do
+        colour-valid "${_THEME_ROLE[$role]:-}" || { log-error "[theme] role $role unresolved"; return 1; }
+    done
+    for k in {1..16}; do
+        colour-valid "${_THEME_ANSI[k]:-}" || { log-error "[theme] ansi $(( k - 1 )) unresolved"; return 1; }
+    done
+    return $fail
+}
+
+_theme-contrast-table() {
+    local pair a b
+    local -A on=(on_accent accent on_urgent urgent)
+    for pair in fg/bg fg/bg_alt fg_dim/bg dim/bg accent/bg urgent/bg busy/bg ok/bg warn/bg info/bg \
+                on_accent/accent on_urgent/urgent; do
+        a=${pair%/*}; b=${pair#*/}
+        colour-contrast "${_THEME_ROLE[$a]}" "${_THEME_ROLE[$b]}"
+        colour-round $REPLY; _THEME_CONTRAST[$pair]=$REPLY
+    done
+    for pair in busy~urgent busy~accent accent~urgent; do
+        colour-delta-e "${_THEME_ROLE[${pair%~*}]}" "${_THEME_ROLE[${pair#*~}]}"
+        colour-round $REPLY 3; _THEME_CONTRAST[$pair]=$REPLY
+    done
+    colour-delta-l "${_THEME_ROLE[bg_alt]}" "${_THEME_ROLE[bg]}"
+    colour-round $REPLY 3; _THEME_CONTRAST[bg_alt~bg]=$REPLY
+}
+
+# Point sizes from fonts.base x fonts.scale, a type scale (ratio 1.2) on the
+# menu size, and pixel metrics (gap unscaled, decision D5).
+_theme-sizes() {
+    local k v
+    local -F scale=${_THEME_IN[prefs.fonts.scale]:-1} n menu
+    (( scale > 0 )) || { log-error "[theme] fonts.scale must be > 0"; return 1; }
+    _THEME_SIZE[scale]=${_THEME_IN[prefs.fonts.scale]:-1}
+    for k v in "${(@kv)_THEME_IN}"; do
+        [[ "$k" == prefs.fonts.base.* ]] || continue
+        n=$(( v * scale ))
+        (( n < _THEME_FONT_FLOOR )) && n=$_THEME_FONT_FLOOR
+        _theme-num $n; _THEME_SIZE[${k#prefs.fonts.base.}]=$REPLY
+    done
+    menu=$(( ${_THEME_IN[prefs.fonts.base.menu]:-11} * scale ))
+    _theme-num $(( menu / 1.2 ));   _THEME_SIZE[sm]=$REPLY
+    _theme-num $menu;               _THEME_SIZE[md]=$REPLY
+    _theme-num $(( menu * 1.2 ));   _THEME_SIZE[lg]=$REPLY
+    _theme-num $(( menu * 1.728 )); _THEME_SIZE[xl]=$REPLY
+
+    for k v in "${(@kv)_THEME_IN}"; do
+        [[ "$k" == prefs.metrics.* ]] || continue
+        k=${k#prefs.metrics.}
+        if [[ "$k" == gap ]]; then _THEME_METRIC[$k]=$(( int(rint(v)) ))
+        else _THEME_METRIC[$k]=$(( int(rint(v * scale)) )); fi
+    done
+    _THEME_METRIC[cursor]=$(( int(rint(${_THEME_IN[prefs.cursor.size]:-24} * scale)) ))
+}
+
+# ------------------------------
+# Private Helpers: spec, render, validate
+# ------------------------------
+
+# Prints spec.json for build id $1 from source ref $2 (scheme slug).
+_theme-spec() {
+    local id=$1 ref=$2 k v
+    local mode=$_THEME_MODE
+    {
+        print -r -- "id"$'\t'"s"$'\t'"$id"
+        print -r -- "name"$'\t'"s"$'\t'"$ref"
+        print -r -- "title"$'\t'"s"$'\t'"${_THEME_IN[scheme.name]:-$ref}"
+        print -r -- "source.kind"$'\t'"s"$'\t'"scheme"
+        print -r -- "source.ref"$'\t'"s"$'\t'"$ref"
+        print -r -- "mode"$'\t'"s"$'\t'"$mode"
+        print -r -- "pair"$'\t'"s"$'\t'"${_THEME_IN[scheme.x-pair]:-}"
+        for k v in "${(@kv)_THEME_PAL}"; do
+            if [[ "$k" == base[0-9A-F][0-9A-F] ]]; then print -r -- "palette.$k"$'\t'"s"$'\t'"$v"
+            else print -r -- "palette.names.$k"$'\t'"s"$'\t'"$v"; fi
+        done
+        for k v in "${(@kv)_THEME_ROLE}"; do print -r -- "roles.$k"$'\t'"s"$'\t'"$v"; done
+        for k in {1..16}; do print -r -- "ansi.$(( k - 1 ))"$'\t'"s"$'\t'"${_THEME_ANSI[k]}"; done
+        for k v in "${(@kv)_THEME_CONTRAST}"; do print -r -- "contrast.ratios.$k"$'\t'"n"$'\t'"$v"; done
+        print -r -- "contrast.level"$'\t'"s"$'\t'"$_THEME_LEVEL"
+        print -r -- "contrast.requested"$'\t'"s"$'\t'"${_THEME_IN[prefs.contrast]:-aaa}"
+        print -r -- "contrast.degraded"$'\t'"b"$'\t'"$(( _THEME_DEGRADED ))"
+        print -r -- "contrast.adjusted"$'\t'"a"$'\t'"${(j: :)_THEME_ADJUSTED}"
+        print -r -- "contrast.notes"$'\t'"l"$'\t'"${(pj:\x1f:)_THEME_NOTES}"
+        for k v in "${(@kv)_THEME_SIZE}"; do print -r -- "font.sizes.$k"$'\t'"n"$'\t'"$v"; done
+        for k in ui mono icon; do
+            print -r -- "font.family.$k"$'\t'"s"$'\t'"${_THEME_IN[prefs.fonts.family.$k]:-}"
+        done
+        for k v in "${(@kv)_THEME_METRIC}"; do print -r -- "metrics.$k"$'\t'"n"$'\t'"$v"; done
+        print -r -- "icons"$'\t'"s"$'\t'"${_THEME_IN[prefs.icons.$mode]:-}"
+        print -r -- "gtk"$'\t'"s"$'\t'"${_THEME_IN[prefs.gtk.$mode]:-}"
+        print -r -- "cursor.theme"$'\t'"s"$'\t'"${_THEME_IN[prefs.cursor.theme]:-}"
+        print -r -- "cursor.size"$'\t'"n"$'\t'"${_THEME_METRIC[cursor]}"
+    } | jq -Rn '
+        reduce (inputs | split("\t")) as [$p, $t, $v] ({};
+            setpath($p | split(".") | map(tonumber? // .);
+                if   $t == "n" then ($v | tonumber)
+                elif $t == "b" then ($v == "1")
+                elif $t == "a" then ($v | split(" ") | map(select(. != "")))
+                elif $t == "l" then ($v | split("\u001f") | map(select(. != "")))
+                else $v end))'
+}
+
+_theme-validate-zsh()  { zsh -n "$1"; }
+_theme-validate-json() { jq empty "$1"; }
+_theme-validate-toml() { gomplate -c "x=$1" -i '' >/dev/null; }
+
+# Validates every file in build dir $1. gomplate's own errors never reach
+# here; this catches templates that render but produce something broken.
+_theme-validate() {
+    local dir=$1 f ext fn line
+    local -a files=("$dir"/*(N.))
+    if f=$(grep -l '<no value>' "${files[@]}"); then
+        log-error "[theme] unresolved template value in: ${(f)f:t}"
+        return 1
+    fi
+    for f in "${files[@]}"; do
+        ext=${f:e}
+        fn=${_THEME_VALIDATORS[$ext]:-}
+        [[ -n "$fn" ]] || continue
+        "$fn" "$f" 2>&1 | while IFS= read -r line; do log-error "[theme] ${f:t}: $line"; done
+        (( ${pipestatus[1]} == 0 )) || { log-error "[theme] ${f:t} failed validation"; return 1; }
+    done
+}
+
+# Resolves scheme $1 (name or path) into _THEME_* without writing anything.
+# REPLY = the scheme slug.
+_theme-resolve-scheme() {
+    local file slug
+    _theme-scheme-file "$1" || return 1
+    file=$REPLY
+    _theme-load "$file" || return 1
+    slug=${_THEME_IN[scheme.slug]:-${file:t:r}}
+    _theme-resolve || { log-error "[theme] $slug: ${(j:; :)_THEME_NOTES}"; return 1; }
+    REPLY=$slug
+}
+
+# Builds scheme $1 into builds/<id>; REPLY = id. Nothing is left behind on
+# failure.
+_theme-build() {
+    local slug id tmp out
+    _theme-resolve-scheme "$1" || return 1
+    slug=$REPLY
+    _theme-new-id; id=$REPLY
+    tmp="$_THEME_STATE/builds/$id.tmp"
+    mkdir -p "$tmp" || return 1
+    if ! _theme-spec "$id" "$slug" > "$tmp/spec.json"; then
+        rm -rf -- "$tmp"; log-error "[theme] could not write spec.json"; return 1
+    fi
+    if [[ ! -d "$_THEME_TEMPLATES" ]]; then
+        rm -rf -- "$tmp"; log-error "[theme] no templates in $_THEME_TEMPLATES"; return 1
+    fi
+    if ! out=$(gomplate -c "spec=$tmp/spec.json" --input-dir "$_THEME_TEMPLATES" \
+                   --output-map "$tmp/{{ .in | strings.TrimSuffix \".tmpl\" }}" 2>&1); then
+        rm -rf -- "$tmp"
+        out=$(jq -r '.err // .' <<<"$out" 2>/dev/null || print -r -- "$out")
+        log-error "[theme] render failed: ${${out//$tmp\//}//$_THEME_TEMPLATES\//}"
+        return 1
+    fi
+    if ! _theme-validate "$tmp"; then
+        rm -rf -- "$tmp"; return 1
+    fi
+    mv -T "$tmp" "$_THEME_STATE/builds/$id" || { rm -rf -- "$tmp"; return 1; }
+    REPLY=$id
+}
+
+# Hook for the per-app reloaders, which arrive with the first consumer. Until
+# then a swap has nothing to reload, so this always succeeds.
+_theme-reload() {
+    return 0
+}
+
+# Activates build $1 (name $2) and reloads. On a failed reload rolls back to
+# the build that was current before, then to known-good. known-good advances
+# only on success.
+_theme-activate() {
+    local id=$1 name=$2 prev= kg=
+    _theme-link-id current && prev=$REPLY
+    _theme-link-id known-good && kg=$REPLY
+    _theme-link current "$id" || return 1
+    _theme-history-push "$id" "$name"
+    if _theme-reload; then
+        _theme-link known-good "$id"
+        return 0
+    fi
+    log-error "[theme] reload failed for $name ($id); rolling back"
+    _theme-history-pop
+    if [[ -n "$prev" ]] && _theme-link current "$prev" && _theme-reload; then
+        log-warning "[theme] restored the previous build $prev"
+    elif [[ -n "$kg" ]] && _theme-link current "$kg" && _theme-reload; then
+        log-warning "[theme] restored known-good $kg"
+    else
+        log-error "[theme] rollback failed too; run: theme apply default"
+    fi
+    return 1
+}
+
+# Sources the current theme.zsh into THEME_* (or nothing); returns 1 if none.
+_theme-source-current() {
+    [[ -r "$_THEME_STATE/current/theme.zsh" ]] || return 1
+    source "$_THEME_STATE/current/theme.zsh"
+}
+
+_theme-swatch-block() {
+    colour-parse "$1" || return 1
+    printf '\e[48;2;%d;%d;%dm%s\e[0m' $(( int(rint(reply[1]*255)) )) $(( int(rint(reply[2]*255)) )) \
+        $(( int(rint(reply[3]*255)) )) "${2:-      }"
+}
+
+_theme-fg-on() {
+    local fg=$1 bg=$2 text=$3
+    colour-parse "$fg"; local -a f=($reply)
+    colour-parse "$bg"; local -a b=($reply)
+    printf '\e[38;2;%d;%d;%dm\e[48;2;%d;%d;%dm%s\e[0m' \
+        $(( int(rint(f[1]*255)) )) $(( int(rint(f[2]*255)) )) $(( int(rint(f[3]*255)) )) \
+        $(( int(rint(b[1]*255)) )) $(( int(rint(b[2]*255)) )) $(( int(rint(b[3]*255)) )) "$text"
+}
+
+# ------------------------------
+# Public
+# ------------------------------
+
+theme-apply() {
+    [[ "${1:-}" == (-h|--help) ]] && { theme-help; return 0; }
+    local target=${1:-} id name t0=$EPOCHREALTIME
+    [[ -n "$target" ]] || { log-error "[theme] usage: theme apply <scheme|build-id|default>"; return 2; }
+    _theme-paths
+    _theme-lock || return 1
+    if [[ "$target" == default ]]; then
+        target=$(gomplate -c "p=$_THEME_CONFIG/prefs.toml" -i '{{ .p.default }}' 2>/dev/null)
+        [[ -n "$target" ]] || target=$_THEME_DEFAULT_SCHEME
+    fi
+    if _theme-build-ok "$target"; then
+        id=$target
+        name=$(jq -r .name "$_THEME_STATE/builds/$id/spec.json")
+    else
+        _theme-build "$target" || return 1
+        id=$REPLY
+        name=${_THEME_IN[scheme.slug]:-${target:t:r}}
+    fi
+    _theme-activate "$id" "$name" || return 1
+    _theme-prune
+    _theme-ms-since $t0
+    log-success "[theme] applied $name ($id) in ${REPLY} ms"
+}
+
+theme-current() {
+    _theme-paths
+    if ! _theme-link-id current; then
+        log-error "[theme] no theme applied (consumers fall back to $_THEME_DEFAULT_SCHEME); run: theme ensure"
+        return 1
+    fi
+    if [[ "${1:-}" == --json ]]; then
+        cat "$_THEME_STATE/current/spec.json"
+        return 0
+    fi
+    _theme-source-current
+    print -r -- "name      ${THEME_META[name]} (${THEME_META[title]})"
+    print -r -- "source    ${THEME_META[source]}"
+    print -r -- "mode      ${THEME_META[mode]}"
+    print -r -- "scale     ${THEME_SIZE[scale]}"
+    print -r -- "contrast  ${THEME_META[contrast]}${${THEME_META[degraded]:#false}:+ (degraded from ${THEME_META[requested]})}"
+    print -r -- "adjusted  ${THEME_META[adjusted]:-none}"
+    print -r -- "build     ${THEME_META[id]}"
+}
+
+theme-get() {
+    local key=${1:-} map ref
+    [[ -n "$key" && "$key" != (-h|--help) ]] || {
+        print -r -- "Usage: theme get <role|palette slot or name|size|metric|font>"
+        print -r -- "Roles: ${_THEME_ROLES[*]}"
+        [[ -n "$key" ]]; return
+    }
+    _theme-paths
+    if _theme-source-current; then
+        [[ "$key" == base[0-9a-fA-F][0-9a-fA-F] ]] && key=base${(U)key[5,6]}
+        for map in THEME_ROLE THEME_PALETTE THEME_SIZE THEME_METRIC THEME_FONT THEME_META; do
+            ref="${map}[$key]"
+            if (( ${(P)+ref} )); then
+                print -r -- "${(P)ref}"
+                return 0
+            fi
+        done
+    elif [[ -n "${_THEME_FALLBACK[$key]:-}" ]]; then
+        print -r -- "${_THEME_FALLBACK[$key]}"
+        return 0
+    fi
+    log-error "[theme] unknown key '$key'"
+    return 1
+}
+
+theme-list() {
+    local what=${1:-schemes} f name variant cur= line id
+    _theme-paths
+    case "$what" in
+        schemes)
+            _theme-source-current 2>/dev/null && cur=${THEME_META[name]:-}
+            for f in "$_THEME_CONFIG"/schemes/*.y(a|)ml(N); do
+                name=${${(M)${(f)"$(<"$f")"}:#name:*}#name: }
+                variant=${${(M)${(f)"$(<"$f")"}:#variant:*}#variant: }
+                printf '%s %-22s %-6s %s\n' "${${(M)cur:#${f:t:r}}:+*}${${cur:#${f:t:r}}:+ }" \
+                    "${f:t:r}" "${variant//\"/}" "${name//\"/}"
+            done
+            ;;
+        history)
+            [[ -s "$_THEME_STATE/history" ]] || { print -r -- "(empty)"; return 0; }
+            for line in "${(@f)$(<"$_THEME_STATE/history")}"; do
+                id=${line%%$'\t'*}
+                _theme-build-ok "$id" && print -r -- "  $line" || print -r -- "  $line (pruned)"
+            done
+            ;;
+        builds)
+            for f in "$_THEME_STATE"/builds/*(N/:t); do print -r -- "$f"; done
+            ;;
+        *) log-error "[theme] list: schemes, history or builds"; return 2 ;;
+    esac
+}
+
+theme-check() {
+    [[ "${1:-}" == (-h|--help) ]] && { theme-help; return 0; }
+    local ref=${1:-} role pair rc=0 t0=$EPOCHREALTIME
+    _theme-paths
+    if [[ -z "$ref" ]]; then
+        if _theme-source-current; then ref=${THEME_META[name]}
+        else ref=$_THEME_DEFAULT_SCHEME; fi
+    fi
+    _theme-scheme-file "$ref" || return 1
+    _theme-load "$REPLY" || return 1
+    _theme-resolve || rc=1
+    _theme-ms-since $t0
+    print -r -- "$ref: mode ${_THEME_MODE}, contrast ${_THEME_LEVEL}${${_THEME_DEGRADED:#0}:+ (DEGRADED from ${_THEME_IN[prefs.contrast]})}, resolved in ${REPLY} ms"
+    for role in "${_THEME_ROLES[@]}"; do
+        printf '  %-10s %s %s%s\n' "$role" "${_THEME_ROLE[$role]}" \
+            "$([[ -t 1 ]] && _theme-swatch-block "${_THEME_ROLE[$role]}" '    ')" \
+            "${${(M)_THEME_ADJUSTED:#$role}:+  adjusted}"
+    done
+    print -r -- "  ratios:"
+    for pair in ${(ko)_THEME_CONTRAST}; do
+        printf '    %-18s %s\n' "$pair" "${_THEME_CONTRAST[$pair]}"
+    done
+    (( ${#_THEME_NOTES} )) && print -rl -- "  notes:" "${(@)_THEME_NOTES/#/    }"
+    (( rc == 0 )) && print -r -- "  ok: every guarantee met" || print -r -- "  FAILED: a guarantee can't be met"
+    return $rc
+}
+
+theme-swatch() {
+    local ref=${1:-} role i
+    local -A roles
+    local -a ansi
+    _theme-paths
+    if [[ -n "$ref" ]]; then
+        _theme-scheme-file "$ref" || return 1
+        _theme-load "$REPLY" && _theme-resolve || return 1
+        roles=("${(@kv)_THEME_ROLE}"); ansi=("${_THEME_ANSI[@]}")
+    elif _theme-source-current; then
+        ref=${THEME_META[name]}
+        roles=("${(@kv)THEME_ROLE}"); ansi=("${THEME_ANSI[@]}")
+    else
+        ref="$_THEME_DEFAULT_SCHEME (fallback)"
+        roles=("${(@kv)_THEME_FALLBACK}")
+    fi
+    print -r -- "$ref"
+    for role in "${_THEME_ROLES[@]}"; do
+        printf '  %s %-10s %s  ' "$(_theme-swatch-block "${roles[$role]}")" "$role" "${roles[$role]}"
+        case "$role" in
+            on_accent) _theme-fg-on "${roles[on_accent]}" "${roles[accent]}" ' selected row ' ;;
+            on_urgent) _theme-fg-on "${roles[on_urgent]}" "${roles[urgent]}" ' waiting ' ;;
+            bg|bg_alt|surface|selection) _theme-fg-on "${roles[fg]}" "${roles[$role]}" ' body text ' ;;
+            *) _theme-fg-on "${roles[$role]}" "${roles[bg]}" " $role on bg " ;;
+        esac
+        print
+    done
+    if (( ${#ansi} )); then
+        printf '  ansi  '
+        for i in {1..8}; do _theme-swatch-block "${ansi[i]}" '   '; done
+        printf '\n        '
+        for i in {9..16}; do _theme-swatch-block "${ansi[i]}" '   '; done
+        print
+    fi
+}
+
+theme-ensure() {
+    local id t0=$EPOCHREALTIME
+    _theme-paths
+    _theme-link-id current && return 0
+    _theme-lock || return 1
+    _theme-link-id current && return 0
+    if _theme-link-id known-good; then
+        id=$REPLY
+        _theme-link current "$id" || return 1
+        _theme-history-push "$id" "$(jq -r .name "$_THEME_STATE/builds/$id/spec.json")"
+        _theme-ms-since $t0
+        log-warning "[theme] current was missing; re-activated known-good $id in ${REPLY} ms"
+        return 0
+    fi
+    log-warning "[theme] no usable build; rendering the default"
+    theme-apply default
+}
+
+theme-undo() {
+    local id name line t0=$EPOCHREALTIME
+    _theme-paths
+    _theme-lock || return 1
+    _theme-history-last || { log-error "[theme] no history"; return 1; }
+    _theme-history-pop
+    while _theme-history-last; do
+        id=$REPLY
+        _theme-build-ok "$id" && break
+        log-warning "[theme] skipping pruned build $id"
+        _theme-history-pop; id=
+    done
+    if [[ -z "$id" ]]; then
+        log-error "[theme] nothing to undo to"
+        # Put the current build back on the stack it was popped from.
+        _theme-link-id current && _theme-history-push "$REPLY" "$(jq -r .name "$_THEME_STATE/current/spec.json")"
+        return 1
+    fi
+    line=$(tail -n 1 "$_THEME_STATE/history")
+    name=${line#*$'\t'}
+    _theme-history-pop
+    _theme-activate "$id" "$name" || return 1
+    _theme-ms-since $t0
+    log-success "[theme] back to $name ($id) in ${REPLY} ms"
+}
+
+# Renders every scheme into a scratch state dir under ~/.cache and checks the
+# swap, undo, rollback and known-good behaviour. The real state is untouched.
+theme-self-test() {
+    local base="${XDG_CACHE_HOME:-$HOME/.cache}/theme"
+    mkdir -p "$base" || return 1
+    local scratch
+    scratch=$(mktemp -d "$base/self-test.XXXXXX") || return 1
+    ( XDG_STATE_HOME="$scratch/state" _theme-self-test-run "$scratch" )
+    local rc=$?
+    if [[ -n "${THEME_SELF_TEST_KEEP:-}" ]]; then print -r -- "scratch kept: $scratch"
+    else rm -rf -- "$scratch"; fi
+    return $rc
+}
+
+_theme-self-test-run() {
+    local scratch=$1 f slug id before after t0 kg
+    local -i pass=0 failed=0
+    local -a schemes
+    ok()  { print -r -- "  ✓ $*"; (( pass++ )) || true; }
+    bad() { print -r -- "  ✗ $*"; (( failed++ )) || true; }
+    _theme-paths
+    print -r -- "theme self-test (state: $_THEME_STATE)"
+
+    schemes=("$_THEME_CONFIG"/schemes/*.y(a|)ml(N:t:r))
+    (( ${#schemes} )) && ok "${#schemes} schemes found" || bad "no schemes in $_THEME_CONFIG/schemes"
+
+    print -r -- "  per scheme: apply time, contrast level, roles adjusted"
+    for slug in "${schemes[@]}"; do
+        t0=$EPOCHREALTIME
+        if theme-apply "$slug" 2>"$scratch/err"; then
+            _theme-ms-since $t0
+            _theme-source-current
+            printf '    %-22s %4d ms  %-3s%s  adjusted: %s\n' "$slug" $REPLY "${THEME_META[contrast]}" \
+                "${${THEME_META[degraded]:#false}:+ (AA DEGRADATION)}" "${THEME_META[adjusted]:-none}"
+            (( pass++ )) || true
+        else
+            bad "$slug: $(<"$scratch/err")"
+        fi
+    done
+
+    theme-apply catppuccin-mocha 2>/dev/null
+    [[ "$(theme-get accent)" == '#b4befe' ]] && ok "catppuccin-mocha accent is #b4befe (lavender, D3)" ||
+        bad "catppuccin-mocha accent is $(theme-get accent)"
+    local role drift=
+    _theme-source-current
+    for role in "${_THEME_ROLES[@]}"; do
+        [[ "${THEME_ROLE[$role]}" == "${_THEME_FALLBACK[$role]}" ]] || drift+=" $role=${THEME_ROLE[$role]}"
+    done
+    [[ -z "$drift" ]] && ok "fallback table matches resolved catppuccin-mocha" || bad "fallback drift:$drift"
+    [[ "${THEME_SIZE[terminal]} ${THEME_SIZE[menu]} ${THEME_SIZE[bar]} ${THEME_METRIC[gap]}" == "16.25 13.75 12.5 5" ]] &&
+        ok "sizes: terminal 16.25, menu 13.75, bar 12.5; gap 5 unscaled" ||
+        bad "sizes: ${(kv)THEME_SIZE} gap ${THEME_METRIC[gap]}"
+
+    [[ -L "$_THEME_STATE/current" && ! -e "$_THEME_STATE/current.tmp" ]] &&
+        ok "current is a symlink; no current.tmp left" || bad "current link state"
+
+    # undo
+    theme-apply nord 2>/dev/null
+    _theme-link-id current; before=$REPLY
+    theme-undo 2>/dev/null
+    _theme-source-current
+    [[ "${THEME_META[name]}" == catppuccin-mocha ]] && ok "undo: nord -> catppuccin-mocha (no re-render)" ||
+        bad "undo landed on ${THEME_META[name]}"
+    _theme-build-ok "$before" && ok "undo keeps the undone build for re-apply" || bad "undone build vanished"
+
+    # failed render: broken template syntax
+    _theme-link-id current; before=$REPLY
+    local -a bl=("$_THEME_STATE"/builds/*(N/)); local nb=${#bl}
+    mkdir -p "$scratch/bad-render" "$scratch/bad-zsh"
+    print -r -- '{{ .spec.roles.nope }}' > "$scratch/bad-render/theme.zsh.tmpl"
+    if THEME_TEMPLATE_DIR="$scratch/bad-render" theme-apply gruvbox-dark 2>"$scratch/err"; then
+        bad "a failing render was applied"
+    else
+        _theme-link-id current
+        bl=("$_THEME_STATE"/builds/*(N/)); local na=${#bl}
+        [[ "$REPLY" == "$before" && $na -eq $nb ]] &&
+            ok "failed render: current unchanged ($before), build discarded" ||
+            bad "failed render left current=$REPLY builds $nb->$na"
+        print -r -- "      error: <${$(<"$scratch/err")#*at <}"
+    fi
+
+    # failed validation: renders, but not valid zsh
+    print -r -- 'typeset -gA THEME_ROLE=( [bg]={{ .spec.roles.bg }}' > "$scratch/bad-zsh/theme.zsh.tmpl"
+    if THEME_TEMPLATE_DIR="$scratch/bad-zsh" theme-apply gruvbox-dark 2>"$scratch/err"; then
+        bad "an invalid render was applied"
+    else
+        _theme-link-id current
+        [[ "$REPLY" == "$before" && -z "$(print -l "$_THEME_STATE"/builds/*.tmp(N))" ]] &&
+            ok "failed validation (zsh -n): current unchanged, no .tmp build left" ||
+            bad "failed validation left current=$REPLY"
+    fi
+
+    # failed reload: roll back to the previous build; known-good stays
+    _theme-link-id known-good; kg=$REPLY
+    _theme-reload() { return 1; }
+    if theme-apply dracula 2>"$scratch/err"; then
+        bad "apply succeeded despite a failing reload"
+    else
+        _theme-link-id current
+        local cur=$REPLY
+        _theme-link-id known-good
+        [[ "$cur" == "$before" && "$REPLY" == "$kg" ]] &&
+            ok "failed reload: rolled back to $before, known-good unchanged" ||
+            bad "failed reload: current=$cur known-good=$REPLY"
+    fi
+    _theme-reload() { return 0; }
+
+    # ensure: missing current -> known-good; no state -> default
+    rm -f "$_THEME_STATE/current"
+    theme-ensure 2>/dev/null
+    _theme-link-id current && [[ "$REPLY" == "$kg" ]] &&
+        ok "ensure: missing current re-activated known-good" || bad "ensure did not restore known-good"
+    t0=$EPOCHREALTIME; theme-ensure; _theme-ms-since $t0
+    ok "ensure with a current theme: ${REPLY} ms (no-op)"
+    rm -rf -- "$_THEME_STATE"
+    theme-ensure 2>/dev/null
+    _theme-source-current && [[ "${THEME_META[name]}" == "$_THEME_DEFAULT_SCHEME" ]] &&
+        ok "ensure with no state rendered the default" || bad "ensure from nothing failed"
+
+    # pruning
+    local -i i
+    for (( i = 0; i < _THEME_KEEP_BUILDS + 2; i++ )); do theme-apply nord 2>/dev/null; done
+    bl=("$_THEME_STATE"/builds/*(N/)); local nbuilds=${#bl}
+    (( nbuilds <= _THEME_KEEP_BUILDS + 1 )) && ok "pruned to $nbuilds builds" || bad "$nbuilds builds kept"
+
+    theme-get accent >/dev/null && ok "theme get accent: $(theme-get accent) under nord" || bad "get failed"
+
+    # AAA -> AA degradation: on a mid-grey background 7.0 is out of reach.
+    {
+        print -r -- 'system: "base16"'; print -r -- 'name: "Self-test grey"'; print -r -- 'variant: "dark"'
+        print -r -- 'palette:'
+        local slot
+        for slot in base0{0..7}; do print -r -- "  $slot: \"#767676\""; done
+        print -rl -- '  base08: "#ff5555"' '  base09: "#ffb86c"' '  base0A: "#f1fa8c"' '  base0B: "#50fa7b"'
+        print -rl -- '  base0C: "#8be9fd"' '  base0D: "#bd93f9"' '  base0E: "#ff79c6"' '  base0F: "#993333"'
+    } > "$scratch/grey.yaml"
+    if theme-apply "$scratch/grey.yaml" 2>/dev/null && _theme-source-current &&
+       [[ "${THEME_META[contrast]} ${THEME_META[degraded]}" == "aa true" ]]; then
+        ok "unreachable AAA degrades to AA and is recorded (fg/bg $(jq '.contrast.ratios["fg/bg"]' "$_THEME_STATE/current/spec.json"))"
+    else
+        bad "grey scheme: contrast ${THEME_META[contrast]:-?} degraded ${THEME_META[degraded]:-?}"
+    fi
+
+    # overrides.json merges over prefs.toml.
+    print -r -- '{"fonts": {"scale": 1.5}, "accent": "base0E"}' > "$_THEME_STATE/overrides.json"
+    theme-apply catppuccin-mocha 2>/dev/null
+    _theme-source-current
+    [[ "${THEME_SIZE[terminal]} ${THEME_ROLE[accent]}" == "19.5 #cba6f7" ]] &&
+        ok "overrides.json: scale 1.5 -> terminal 19.5, accent base0E -> #cba6f7" ||
+        bad "overrides: terminal ${THEME_SIZE[terminal]} accent ${THEME_ROLE[accent]}"
+    rm -f "$_THEME_STATE/overrides.json"
+
+    print -r -- "self-test: $pass passed, $failed failed"
+    (( failed == 0 ))
+}
