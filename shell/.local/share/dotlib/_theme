@@ -95,9 +95,7 @@
 #                        ${XDG_CONFIG_HOME}/theme)
 #   THEME_TEMPLATE_DIR   templates only (default ${THEME_CONFIG_DIR}/templates)
 #   THEME_STATE_DIR      state (default ${XDG_STATE_HOME}/theme). Tests and
-#                        previews set this, not XDG_STATE_HOME: the zsh
-#                        dispatcher's .zshenv re-exports XDG_STATE_HOME in
-#                        every zsh it starts, so `theme` itself would ignore it
+#                        previews set this to move only the theme state
 #   THEME_WALLPAPER_DIRS colon-separated dirs that replace prefs [wallpaper]
 #                        dirs (self-test)
 #   THEME_CACHE_DIR      thumbnails and matugen output (default
