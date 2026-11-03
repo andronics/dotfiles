@@ -1,0 +1,5 @@
+# Completion functions kept in this repo (completions/_*_cmd), on fpath before
+# .zshrc runs compinit. 10-deno adds the same dir and skips it once it's here.
+if [[ -d ${ZDOTDIR}/completions ]] && (( ! ${fpath[(Ie)${ZDOTDIR}/completions]} )); then
+    fpath=("${ZDOTDIR}/completions" $fpath)
+fi
