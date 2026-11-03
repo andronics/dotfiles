@@ -1,6 +1,6 @@
-# bspc - wm restart / quit
+# bspc - wm restart / power logout (asks first)
 super + BackSpace + {_, alt}
-  bspc {wm --restart, quit}
+  {bspc wm --restart, power logout}
 
 # desktop - shroud + mute
 super + Escape + {_, alt}
