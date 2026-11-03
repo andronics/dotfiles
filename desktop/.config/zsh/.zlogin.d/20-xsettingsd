@@ -1,0 +1,14 @@
+# XSETTINGS for GTK apps: theme, icons, font and cursor from the theme.
+# xsettingsd serves ~/.local/state/theme/xsettingsd.conf, a link `theme
+# ensure` keeps on current/xsettingsd.conf, so `theme reload xsettingsd`
+# (a HUP) reaches it after every swap. One per user; detached in its own
+# session with no inherited fds, so it neither holds this shell's terminal
+# nor dies with it. Backgrounded: a fresh state renders the default first.
+[[ -n "${DISPLAY}" ]] && (( $+commands[xsettingsd] )) && {
+    {
+        _conf=~/.local/state/theme/xsettingsd.conf
+        [[ -r "${_conf}" ]] || { (( $+commands[theme] )) && theme ensure >/dev/null 2>&1 }
+        [[ -r "${_conf}" ]] && ! pgrep -x -u "${UID}" xsettingsd >/dev/null &&
+            setsid -f xsettingsd -c "${_conf}" </dev/null >/dev/null 2>&1
+    } &!
+}
