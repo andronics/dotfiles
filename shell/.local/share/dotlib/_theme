@@ -173,6 +173,7 @@ typeset -gA _THEME_VALIDATORS=(
     [rasi]=_theme-validate-rasi [ini]=_theme-validate-polybar
     [conf]=_theme-validate-dunst [xresources]=_theme-validate-xresources
     [betterlockscreen.sh]=_theme-validate-betterlockscreen
+    [css]=_theme-validate-gtk-css [xsettingsd.conf]=_theme-validate-xsettingsd
 )
 
 # reload target -> reloader, run after every swap. rofi reads the generated
@@ -1290,6 +1291,62 @@ _theme-validate-betterlockscreen() {
     for key in ringcolor insidecolor ringvercolor insidevercolor ringwrongcolor insidewrongcolor \
                verifcolor wrongcolor font; do
         (( ${+seen[$key]} )) || { print -r -- "missing $key"; return 1; }
+    done
+}
+
+# gtk.css: imported by GTK 3 and 4, which skip a rule they can't parse with
+# only a warning on stderr. Every line is a comment or `@define-color <name>
+# <value>;`; no name twice; a value is #rrggbb, rgba(r, g, b, a) or
+# alpha(#rrggbb, a), which both GTKs read; the names adw-gtk3 and libadwaita
+# draw most with are all there.
+_theme-validate-gtk-css() {
+    setopt localoptions extendedglob
+    local f=$1 line name val comment=0
+    local -A seen=()
+    local -i n=0
+    local hex='#[0-9a-fA-F]{6}' num='[0-9]+(\.[0-9]+)?'
+    for line in "${(@f)$(<"$f")}"; do
+        (( n++ ))
+        line=${${line##[[:space:]]#}%%[[:space:]]#}
+        if (( comment )); then [[ "$line" == *'*/' ]] && comment=0; continue; fi
+        [[ -z "$line" ]] && continue
+        if [[ "$line" == '/*'* ]]; then [[ "$line" == *'*/' ]] || comment=1; continue; fi
+        [[ "$line" =~ '^@define-color ([a-z0-9_]+) (.+);$' ]] ||
+            { print -r -- "line $n: not @define-color <name> <value>;: $line"; return 1; }
+        name=${match[1]} val=${match[2]}
+        (( ${+seen[$name]} )) && { print -r -- "line $n: $name defined twice"; return 1; }
+        seen[$name]=1
+        [[ "$val" =~ "^($hex|rgba\\($num, $num, $num, $num\\)|alpha\\($hex, $num\\))\$" ]] ||
+            { print -r -- "line $n: $name is not #rrggbb, rgba() or alpha(): $val"; return 1; }
+    done
+    (( ! comment )) || { print -r -- "unterminated comment"; return 1; }
+    for name in accent_bg_color accent_fg_color window_bg_color window_fg_color view_bg_color view_fg_color \
+                headerbar_bg_color headerbar_fg_color destructive_bg_color error_bg_color \
+                popover_bg_color dialog_bg_color card_bg_color; do
+        (( ${+seen[$name]} )) || { print -r -- "missing $name"; return 1; }
+    done
+}
+
+# xsettingsd.conf: every line a comment or `<Name> <value>`, the name
+# slash-separated words, the value an integer or a "quoted string" (the only
+# kinds written); no name twice (xsettingsd refuses duplicates); the font and
+# cursor are set. xsettingsd itself is never run: it would claim the
+# XSETTINGS selection from the live one.
+_theme-validate-xsettingsd() {
+    local f=$1 line name
+    local -A seen=()
+    local -i n=0
+    for line in "${(@f)$(<"$f")}"; do
+        (( n++ ))
+        [[ -z "${line//[[:space:]]/}" || "$line" == '#'* ]] && continue
+        [[ "$line" =~ '^([A-Za-z][A-Za-z0-9]*(/[A-Za-z][A-Za-z0-9]*)+) (-?[0-9]+|"([^"\\]|\\.)*")$' ]] ||
+            { print -r -- "line $n: not <Name> <integer|\"string\">: $line"; return 1; }
+        name=${match[1]}
+        (( ${+seen[$name]} )) && { print -r -- "line $n: duplicate setting $name"; return 1; }
+        seen[$name]=1
+    done
+    for name in Gtk/FontName Gtk/CursorThemeName Gtk/CursorThemeSize; do
+        (( ${+seen[$name]} )) || { print -r -- "missing $name"; return 1; }
     done
 }
 
