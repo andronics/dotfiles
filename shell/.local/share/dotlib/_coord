@@ -21,7 +21,19 @@
 # `left`/`right`, which resolves to wider or narrower from the side. The
 # session runs inside tmux (`<name>-coordinator`), so closing the window only
 # detaches it, and a session started from another terminal is attached rather
-# than duplicated.
+# than duplicated. `hide` hides whichever coordinator is shown, focused or not,
+# and gives its strip back; `hide --toggle` re-shows the last one shown when
+# none is.
+#
+# Snap back: the shown panel stays docked. Every show starts `guard`, a
+# detached singleton that follows bspwm's node events for coord windows and,
+# once they settle (COORD_GUARD_SETTLE, default 0.2s, after the last event,
+# and never while a pointer drag is still in progress), puts the shown panel
+# back to floating and re-docks it to the stored side and width. A
+# super+drag, a super+resize or a state change such as tiling therefore
+# springs back, while `width` and `side`, which write the state before
+# re-docking, leave nothing to undo. It exits once no coordinator is shown,
+# giving back the strip of one that was closed rather than hidden.
 #
 # Status: `status` is fed by Claude Code hooks in the user's Claude settings
 # (~/.claude/settings.json, not this repo), which fire in every Claude session
@@ -43,7 +55,7 @@
 #     - _common, _log
 #     - _theme (bar and pick only, sourced on first use)
 #   External:
-#     - bspwm (bspc), xprop, jq, alacritty, tmux, flock, rofi (pick)
+#     - bspwm (bspc), xprop, jq, alacritty, tmux, flock, setsid, rofi (pick)
 #     - notify-send (libnotify >= 0.7.9 for --action) and a notification
 #       daemon whose click runs the default action, e.g. dunst with
 #       mouse_left_click = do_action (status)
@@ -56,7 +68,9 @@ declare -gr COORD_LOADED=1
 source "${DOTLIB}/_common" || { echo "[ERROR] _coord requires _common" >&2; return 1; }
 source "${DOTLIB}/_log"    2>/dev/null || true
 
-declare -g _COORD_CLASS="coord"
+# COORD_CLASS points the module at other windows, e.g. a throwaway class for
+# testing that never matches the live panels.
+declare -g _COORD_CLASS="${COORD_CLASS:-coord}"
 declare -g _COORD_LAUNCH_TIMEOUT="${COORD_LAUNCH_TIMEOUT:-10}"
 declare -g _COORD_WIDTH_FILE="${XDG_STATE_HOME:-$HOME/.local/state}/coord/width"
 declare -gi _COORD_WIDTH_DEFAULT=1280 _COORD_WIDTH_MIN=640 _COORD_WIDTH_MAX=2560
@@ -68,6 +82,8 @@ typeset -ga _COORD_NAMES=(brain template folio homelab metalayerlab apps dotfile
 declare -g _COORD_ACTORS_DIR="${COORD_ACTORS_DIR:-/pool/local/actors}"
 declare -g _COORD_STATE_DIR="${XDG_RUNTIME_DIR:-$HOME/.cache}/coord/state"
 declare -gi _COORD_NOTIFY_BODY_MAX=200
+# Seconds of quiet after a coord window's last event before `guard` re-docks.
+declare -g _COORD_GUARD_SETTLE="${COORD_GUARD_SETTLE:-0.2}"
 # rofi theme for pick: a name resolves to ~/.config/rofi/themes/<name>.rasi.
 declare -g _COORD_PICK_THEME="${COORD_PICK_THEME:-coord}"
 
@@ -99,6 +115,8 @@ typeset -gA _COORD_DESCRIPTIONS=(
     [cycle]="Show the {next|prev} coordinator in the order pick lists them, wrapping and launching it if needed; with none shown, re-show the last one shown (or ${_COORD_NAMES[1]})"
     [width]="Print the dock panel's visible width (the reserved strip is that plus bspwm's window_gap), or set it with {+N|-N|N} (${_COORD_WIDTH_MIN}-${_COORD_WIDTH_MAX}) or move the inner edge with {left|right} [N] (default ${_COORD_WIDTH_STEP}), resizing a shown coordinator"
     [side]="Print the dock side, or set it with {left|right}, re-docking a shown coordinator"
+    [hide]="Hide the shown coordinator, focused or not, and give its strip back; with --toggle and none shown, re-show the last one shown (or ${_COORD_NAMES[1]})"
+    [guard]="Keep the shown coordinator docked: put it back to floating at the stored side and width after it is dragged, resized or tiled; started detached by every show, a singleton, exits once none is shown"
     [launch]="Start <name>'s window hidden, attaching to its tmux session if one exists"
     [list]="List coordinator windows and whether each is hidden or visible"
     [status]="Claude Code hook: read the hook JSON on stdin and, for a session under ${_COORD_ACTORS_DIR}/<name>, record <name> busy, idle, or waiting on a question (AskUserQuestion), permission or elicitation, notifying on waiting and refresh polybar; [event] overrides hook_event_name; always exits 0"
@@ -212,6 +230,27 @@ _coord-summon() {
     } always {
         exec {_fd}>&-
     }
+}
+
+# Runs <command> in its own session with stdio on /dev/null and no other fd
+# open, returning at once. Whatever started the caller (polybar's click
+# handler, sxhkd, a hook) may have left pipes open in it, and a long-lived
+# child holding one keeps its reader waiting on output that never ends.
+_coord-detach() {
+    (
+        local _n
+        for _n in /proc/self/fd/*(N:t); do
+            (( _n > 2 )) && exec {_n}>&-
+        done 2>/dev/null
+        exec setsid -f "$@" </dev/null >/dev/null 2>&1
+    )
+}
+
+# Starts `coord guard` unless it is already running: the guard's own lock
+# makes a second one exit at once, so this is safe to call on every show.
+_coord-guard-start() {
+    (( ${+commands[coord]} )) || { log-debug "[coord] coord not on PATH, no guard"; return 0; }
+    _coord-detach "${commands[coord]}" guard
 }
 
 # Pops a notification that <name> is waiting, unless it is the shown and
@@ -347,8 +386,53 @@ _coord-show() {
     _coord-unpad
 
     mkdir -p "${_COORD_LAST_FILE:h}" && print -r -- "$_name" >| "$_COORD_LAST_FILE"
+    _coord-guard-start
     _coord-poke
     return 0
+}
+
+# One settled look for `guard`: puts every shown coordinator back to floating
+# and re-docks it to the stored side and width on its own monitor, then gives
+# back the strip of any monitor it was dragged off. _coord-place moves and
+# resizes only what differs, so the events of a re-dock are answered by a
+# no-op, never another move. Fills the caller's _known (local -A there) with
+# every coord window, hidden or not, and returns 1 with none shown, after
+# giving every strip back and closing the caller's guard lock fd _gfd. All
+# under the switch lock, which _coord-show holds from before it hides the old
+# panel until after it shows the new one, so a guard never quits mid-swap,
+# and a show after it quits finds the guard lock free and starts a new one.
+_coord-guard-tick() {
+    local _fd _sfd _node _instance
+    local -a _shown
+    _coord-lock switch || return 0
+    _sfd=$_fd
+    {
+        _known=()
+        _coord-windows | while read -r _node _instance; do
+            _known[$_node]=1
+            bspc query -N -n "${_node}.!hidden" >/dev/null 2>&1 && _shown+=("$_node")
+        done
+        if (( ! ${#_shown} )); then
+            # A panel closed rather than hidden leaves its strip reserved.
+            _coord-unpad
+            exec {_gfd}>&-
+            _gfd=
+            return 1
+        fi
+        for _node in "${_shown[@]}"; do
+            bspc query -N -n "${_node}.!floating" >/dev/null 2>&1 && bspc node "$_node" --state floating
+        done
+        _coord-lock dock || return 0
+        {
+            _coord-redock "$(_coord-width-get)" "$(_coord-side-get)"
+            _coord-unpad
+        } always {
+            exec {_fd}>&-
+        }
+        return 0
+    } always {
+        exec {_sfd}>&-
+    }
 }
 
 # ------------------------------
@@ -573,6 +657,88 @@ coord-side() {
     } always {
         exec {_fd}>&-
     }
+}
+
+coord-hide() {
+    local _arg=${1:-} _name _node _instance _fd
+    local -i _hidden=0
+    [[ -z "$_arg" || "$_arg" == --toggle ]] || { log-error "[coord] hide: expected --toggle or nothing, got '$_arg'"; return 1; }
+
+    _coord-lock switch || return 1
+    {
+        _coord-windows '.!hidden' | while read -r _node _instance; do
+            bspc node "$_node" --flag hidden=on && _hidden=1
+        done
+        if (( _hidden )); then
+            _coord-unpad
+            _coord-poke
+        elif [[ "$_arg" == --toggle ]]; then
+            _name=$(_coord-last-get)
+            _coord-show "${_name:-${_COORD_NAMES[1]}}"
+        fi
+    } always {
+        exec {_fd}>&-
+    }
+}
+
+# Runs detached (_coord-guard-start), never from a terminal it would tie up.
+# Events are only read here; the work happens in _coord-guard-tick once a
+# coord window has had no event for _COORD_GUARD_SETTLE seconds (a deadline,
+# so other windows' events don't keep pushing it back). bspwm reports every
+# motion step of a pointer drag, and a re-dock then would fight the pointer,
+# so a drag of a coord window between its pointer_action begin and end holds
+# the tick off. Adds and removes of any window are looked at, since a new or
+# closed window may be a coordinator. bspc subscribe runs as a coprocess
+# without the guard lock, and is killed on every way out.
+coord-guard() {
+    local _lock="${XDG_RUNTIME_DIR:-${HOME}/.cache}/coord-guard.lock"
+    local _gfd _sub _line _event
+    local -F _due _wait
+    local -i _dragging=0
+    local -a _f
+    local -A _known
+
+    zmodload -F zsh/datetime p:EPOCHREALTIME || return 1
+    exec {_gfd}>"$_lock"
+    flock -n "$_gfd" || { exec {_gfd}>&-; return 0; }
+
+    coproc {
+        exec {_gfd}>&-
+        exec bspc subscribe node_add node_remove node_geometry node_state node_flag pointer_action 2>/dev/null
+    }
+    _sub=$!
+    trap 'kill "$_sub" 2>/dev/null; exit 143' TERM INT HUP
+
+    {
+        # A first look at once: fills _known, and quits if nothing is shown.
+        _due=$EPOCHREALTIME
+        while :; do
+            if (( _due && ! _dragging )); then
+                _wait=$(( _due - EPOCHREALTIME ))
+                if (( _wait <= 0 )) || ! read -r -t "$_wait" -p _line; then
+                    _coord-guard-tick || break
+                    _due=0
+                    # A failed read before the deadline is EOF: bspwm is gone.
+                    kill -0 "$_sub" 2>/dev/null || break
+                    continue
+                fi
+            else
+                read -r -p _line || break
+            fi
+            _f=(${=_line})
+            _event=${_f[1]}
+            if [[ "$_event" != node_(add|remove) ]]; then
+                (( ${+_known[${_f[4]:-}]} )) || continue
+                [[ "$_event" == pointer_action ]] && { [[ "${_f[6]}" == begin ]] && _dragging=1 || _dragging=0 }
+            fi
+            _due=$(( EPOCHREALTIME + _COORD_GUARD_SETTLE ))
+        done
+    } always {
+        kill "$_sub" 2>/dev/null
+        trap - TERM INT HUP
+        [[ -n "$_gfd" ]] && exec {_gfd}>&-
+    }
+    return 0
 }
 
 coord-list() {

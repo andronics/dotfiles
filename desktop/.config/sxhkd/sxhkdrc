@@ -58,6 +58,10 @@ super + alt + space
 super + alt + {Left, Right}
   coord cycle {prev,next}
 
+# coordinator - hide the shown one, focused or not (none shown: re-show the last)
+super + grave
+  coord hide --toggle
+
 # coordinator - dock inner edge {left, right}
 super + {bracketleft, bracketright}
   coord width {left,right}
