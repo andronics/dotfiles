@@ -17,10 +17,9 @@
 #   swap     builds/<id>.tmp -> builds/<id>, then `current` is replaced by a
 #            rename (ln -sfn current.tmp + mv -T), so readers see the old
 #            build or the new one, never neither
-#   reload   _theme-reload; on failure `current` rolls back to the previous
-#            build, then to known-good. known-good only advances after a
-#            successful reload. There are no consumers yet, so reload is a
-#            no-op that always succeeds.
+#   reload   _theme-reload runs each target's reloader (_THEME_RELOADERS);
+#            on failure `current` rolls back to the previous build, then to
+#            known-good. known-good only advances after a successful reload.
 #
 # State (never tracked) in ${XDG_STATE_HOME}/theme:
 #   current -> builds/<id>     known-good -> builds/<id>
@@ -55,6 +54,10 @@
 #   THEME_CONFIG_DIR     prefs, schemes, templates (default
 #                        ${XDG_CONFIG_HOME}/theme)
 #   THEME_TEMPLATE_DIR   templates only (default ${THEME_CONFIG_DIR}/templates)
+#   THEME_STATE_DIR      state (default ${XDG_STATE_HOME}/theme). Tests and
+#                        previews set this, not XDG_STATE_HOME: the zsh
+#                        dispatcher's .zshenv re-exports XDG_STATE_HOME in
+#                        every zsh it starts, so `theme` itself would ignore it
 #
 # Dependencies:
 #   Required:
@@ -120,6 +123,15 @@ typeset -gA _THEME_FALLBACK=(
 typeset -gA _THEME_VALIDATORS=(
     [zsh]=_theme-validate-zsh [sh]=_theme-validate-zsh
     [json]=_theme-validate-json [toml]=_theme-validate-toml
+    [rasi]=_theme-validate-rasi
+)
+
+# reload target -> reloader, run after every swap. rofi reads the generated
+# file per launch, so its reloader is a no-op, listed so `theme reload rofi`
+# knows it. alacritty live-reloads, but see _theme-reload-alacritty.
+typeset -gA _THEME_RELOADERS=(
+    [rofi]=_theme-reload-rofi
+    [alacritty]=_theme-reload-alacritty
 )
 
 typeset -gA _THEME_DESCRIPTIONS=(
@@ -131,6 +143,7 @@ typeset -gA _THEME_DESCRIPTIONS=(
     [swatch]="Print the current theme, or [scheme], as truecolour blocks"
     [ensure]="Make sure a current theme exists: keep it, else re-activate known-good, else render the default"
     [undo]="Re-activate the previous build from history (no re-render)"
+    [reload]="Run the reloaders for [target...] (default all): rofi, alacritty"
 )
 
 theme-help() {
@@ -152,6 +165,8 @@ Commands:
   ensure                            Guarantee a current theme (fast no-op
                                     when one exists)
   undo                              Back to the previous build
+  reload [target...]                Re-run reloaders (default all; targets:
+                                    rofi, alacritty)
   self-test                         Render every scheme into a scratch state
                                     dir under ~/.cache and validate
 
@@ -173,7 +188,7 @@ EOF
 _theme-paths() {
     _THEME_CONFIG=${THEME_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/theme}
     _THEME_TEMPLATES=${THEME_TEMPLATE_DIR:-$_THEME_CONFIG/templates}
-    _THEME_STATE=${XDG_STATE_HOME:-$HOME/.local/state}/theme
+    _THEME_STATE=${THEME_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/theme}
 }
 
 # REPLY = a new build id: timestamp, then milliseconds and one random hex
@@ -615,7 +630,19 @@ _theme-spec() {
 
 _theme-validate-zsh()  { zsh -n "$1"; }
 _theme-validate-json() { jq empty "$1"; }
-_theme-validate-toml() { gomplate -c "x=$1" -i '' >/dev/null; }
+# The template must reference the datasource, or gomplate never parses it;
+# and an empty -i makes gomplate read its template from stdin.
+_theme-validate-toml() { gomplate -c "x=$1" -i '{{ $x := .x }}' </dev/null >/dev/null; }
+
+# rofi parses a theme without a display; skipped where rofi isn't installed.
+# On a parse error -dump-theme warns and dumps its default theme with status
+# 0 (and -rasi-validate crashes), so any stderr is the failure.
+_theme-validate-rasi() {
+    (( $+commands[rofi] )) || return 0
+    local err
+    err=$(DISPLAY= WAYLAND_DISPLAY= rofi -no-config -theme "$1" -dump-theme 2>&1 </dev/null >/dev/null)
+    [[ -z "$err" ]] || { print -r -- "$err"; return 1; }
+}
 
 # Validates every file in build dir $1. gomplate's own errors never reach
 # here; this catches templates that render but produce something broken.
@@ -676,10 +703,37 @@ _theme-build() {
     REPLY=$id
 }
 
-# Hook for the per-app reloaders, which arrive with the first consumer. Until
-# then a swap has nothing to reload, so this always succeeds.
+_theme-reload-rofi() { return 0; }
+
+# alacritty (0.17, config/monitor.rs) watches the canonical path of each
+# import, i.e. builds/<old id>/alacritty.toml behind `current`, so swapping
+# `current` alone never reaches it. A metadata change on the old file does:
+# alacritty reloads, re-reads the import through `current`, and restarts its
+# watcher on the new build. Every build is touched, so a terminal that missed
+# a swap catches up; the files' contents never change. A terminal started
+# before any theme existed watches nothing here and needs a restart.
+_theme-reload-alacritty() {
+    local -a files=("$_THEME_STATE"/builds/*/alacritty.toml(N.))
+    (( ${#files} )) || return 0
+    touch -c -- "${files[@]}"
+}
+
+# Runs the reloaders for targets $@ (default: every target); non-zero if any
+# fails or is unknown.
 _theme-reload() {
-    return 0
+    local t rc=0
+    local -a targets=("$@")
+    (( ${#targets} )) || targets=(${(ko)_THEME_RELOADERS})
+    for t in "${targets[@]}"; do
+        if (( ! ${+_THEME_RELOADERS[$t]} )); then
+            log-error "[theme] unknown reload target '$t' (${(kj:, :)_THEME_RELOADERS})"
+            rc=1
+        elif ! "${_THEME_RELOADERS[$t]}"; then
+            log-error "[theme] reload $t failed"
+            rc=1
+        fi
+    done
+    return $rc
 }
 
 # Activates build $1 (name $2) and reloads. On a failed reload rolls back to
@@ -799,6 +853,13 @@ theme-get() {
     fi
     log-error "[theme] unknown key '$key'"
     return 1
+}
+
+theme-reload() {
+    [[ "${1:-}" == (-h|--help) ]] && { theme-help; return 0; }
+    _theme-paths
+    _theme-reload "$@" || return 1
+    log-success "[theme] reloaded ${${*:-all}// /, }"
 }
 
 theme-list() {
@@ -942,7 +1003,7 @@ theme-self-test() {
     mkdir -p "$base" || return 1
     local scratch
     scratch=$(mktemp -d "$base/self-test.XXXXXX") || return 1
-    ( XDG_STATE_HOME="$scratch/state" _theme-self-test-run "$scratch" )
+    ( XDG_STATE_HOME="$scratch/state" THEME_STATE_DIR="$scratch/state/theme" _theme-self-test-run "$scratch" )
     local rc=$?
     if [[ -n "${THEME_SELF_TEST_KEEP:-}" ]]; then print -r -- "scratch kept: $scratch"
     else rm -rf -- "$scratch"; fi
@@ -1003,7 +1064,7 @@ _theme-self-test-run() {
     # failed render: broken template syntax
     _theme-link-id current; before=$REPLY
     local -a bl=("$_THEME_STATE"/builds/*(N/)); local nb=${#bl}
-    mkdir -p "$scratch/bad-render" "$scratch/bad-zsh"
+    mkdir -p "$scratch/bad-render" "$scratch/bad-zsh" "$scratch/bad-toml"
     print -r -- '{{ .spec.roles.nope }}' > "$scratch/bad-render/theme.zsh.tmpl"
     if THEME_TEMPLATE_DIR="$scratch/bad-render" theme-apply gruvbox-dark 2>"$scratch/err"; then
         bad "a failing render was applied"
@@ -1025,6 +1086,16 @@ _theme-self-test-run() {
         [[ "$REPLY" == "$before" && -z "$(print -l "$_THEME_STATE"/builds/*.tmp(N))" ]] &&
             ok "failed validation (zsh -n): current unchanged, no .tmp build left" ||
             bad "failed validation left current=$REPLY"
+    fi
+
+    # failed validation: TOML that doesn't parse
+    print -r -- '[font' > "$scratch/bad-toml/alacritty.toml.tmpl"
+    if THEME_TEMPLATE_DIR="$scratch/bad-toml" theme-apply gruvbox-dark 2>"$scratch/err"; then
+        bad "an invalid TOML render was applied"
+    else
+        _theme-link-id current
+        [[ "$REPLY" == "$before" ]] && ok "failed validation (TOML): current unchanged" ||
+            bad "failed TOML validation left current=$REPLY"
     fi
 
     # failed reload: roll back to the previous build; known-good stays
