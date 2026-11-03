@@ -28,10 +28,8 @@
 # bar's monitor in polybar's bars/base, inherited by its scripts), else the
 # focused one; one bar per monitor gives one strip per monitor.
 #
-# Desktops are also managed by `bsp desktops-daemon` (_bsp), which keeps one
-# spare empty desktop at the end; `prune` removes that spare when it isn't
-# focused and the daemon re-adds it on a later node event. Names don't
-# matter here: cells and clicks use desktop ids.
+# `new` and `prune` own desktop creation and removal. Names don't matter
+# here: cells and clicks use desktop ids.
 #
 # Usage:
 #   source "${DOTLIB}/_desk"

@@ -1359,6 +1359,7 @@ _bsp-balance-tree() {
     _bsp-emit "$BSP_EVENT_BALANCE_TICK"
 }
 
+# No longer started at login: desk (_desk) replaced it, creating and pruning desktops.
 # Auto-manage desktop count on a monitor: always keep exactly one spare
 #
 # Function: bsp-desktops-daemon
