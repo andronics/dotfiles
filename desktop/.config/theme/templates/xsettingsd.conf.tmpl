@@ -1,7 +1,9 @@
 {{- /*
-  Served by xsettingsd (.zlogin.d/20-xsettingsd) through
-  ~/.local/state/theme/xsettingsd.conf, a link `theme ensure` keeps on
-  current/xsettingsd.conf. `theme reload xsettingsd` HUPs it. XSETTINGS
+  Served by xsettingsd (.zlogin.d/20-xsettingsd) as
+  ~/.local/state/theme/xsettingsd.conf, which `theme ensure` and `theme
+  reload xsettingsd` write from this file with Net/ThemeName swapped for the
+  GTK theme slot holding that theme and this build's gtk.css (see
+  _theme-xsettingsd-serve in dotlib/_theme); the reloader then HUPs it. XSETTINGS
   outrank gtk-3.0/settings.ini, which keeps every other GTK setting and is the
   fallback while xsettingsd isn't running.
 
