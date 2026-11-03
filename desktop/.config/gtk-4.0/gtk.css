@@ -1,0 +1,5 @@
+/* The generated theme's colours (libadwaita named colours, for adw-gtk3 and
+   libadwaita): theme.css is a link `theme ensure` keeps on
+   ~/.local/state/theme/current/gtk.css. Relative, so it resolves beside this
+   file. @import must come before any rule. */
+@import url("theme.css");
