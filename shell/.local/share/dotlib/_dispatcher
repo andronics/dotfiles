@@ -192,6 +192,11 @@ dispatcher-init() {
     export DISPATCHER_ROUTE_MODE
     export DISPATCHER_FUNCTION_PREFIX
 
+    # Function mode: register the aliases the module declares, so the
+    # wrapper doesn't have to list them. Explicit dispatcher-register-alias
+    # calls (before or after this) keep working; a later call wins.
+    [[ "$route_mode" == "function" ]] && _dispatcher-load-module-aliases
+
     log-debug "Dispatcher initialized: $name (mode: $DISPATCHER_ROUTE_MODE, prefix: $DISPATCHER_FUNCTION_PREFIX, bin: $bin_dir, version: $version)"
 }
 
@@ -344,6 +349,29 @@ dispatcher-register-alias() {
 
     _DISPATCHER_ALIASES[$alias_name]="$actual_command"
     log-debug "Registered alias: $alias_name -> $actual_command"
+}
+
+# Register the aliases a function-mode module declares in its
+# _<UPPER_PREFIX>_ALIASES associative array (alias -> command; underscores
+# replace hyphens in the prefix, as for _<UPPER_PREFIX>_DESCRIPTIONS).
+# Called by dispatcher-init. Does nothing if the array isn't declared.
+#
+# Example (in the module):
+#   typeset -gA _PLAYER_ALIASES=( [toggle]=play-pause [prev]=previous )
+#
+_dispatcher-load-module-aliases() {
+    local upper="${(U)DISPATCHER_FUNCTION_PREFIX//-/_}"
+    local var_name="_${upper}_ALIASES"
+    (( ${(P)+var_name} )) || return 0
+    if [[ "${(Pt)var_name}" != association* ]]; then
+        log-warn "${var_name} is not an associative array; ignoring it"
+        return 0
+    fi
+    local -A module_aliases=("${(@Pkv)var_name}")
+    local alias_name
+    for alias_name in ${(k)module_aliases}; do
+        dispatcher-register-alias "$alias_name" "${module_aliases[$alias_name]}"
+    done
 }
 
 # Resolve alias to actual command
@@ -1076,6 +1104,44 @@ dispatcher-self-test() {
         ((tests_passed++)) || true
     else
         echo "FAIL (${(j:; :)help_failures})"
+        ((tests_failed++)) || true
+    fi
+
+    # Test 8: a module's _<PREFIX>_ALIASES array is registered at init, sits
+    # alongside explicit dispatcher-register-alias calls, routes, shows in
+    # completion and resolves for a command's --help.
+    echo -n "Test 8: Module alias array... "
+    typeset -gA _DISPATCHERSELFTEST_DESCRIPTIONS=([alpha]="Alpha does a thing")
+    typeset -gA _DISPATCHERSELFTEST_ALIASES=([al]=alpha [first]=alpha)
+    dispatcherselftest-alpha() { echo "RAN:alpha"; }
+    local -A saved_aliases=("${(@kv)_DISPATCHER_ALIASES}")
+    saved_dry_run="$DISPATCHER_DRY_RUN"
+    _DISPATCHER_ALIASES=() DISPATCHER_DRY_RUN=false
+    dispatcher-init "dispatcherselftest" --route=function
+    dispatcher-register-alias "a" "alpha"
+    local -a array_failures=()
+    for cmd in al first a; do
+        [[ "$(dispatcher-resolve-alias $cmd)" == alpha ]] || array_failures+=("$cmd not an alias")
+        [[ "$(dispatcher-execute $cmd 2>&1)" == *RAN:alpha* ]] || array_failures+=("'$cmd' didn't run alpha")
+        out=$(dispatcher-execute $cmd --help 2>&1)
+        [[ "$out" == *"Alpha does a thing"* && "$out" != *RAN:* ]] || array_failures+=("'$cmd --help' wrong")
+        [[ "$(dispatcher-generate-completion zsh)" == *"'${cmd}:alias for alpha'"* ]] || array_failures+=("$cmd not in completion")
+    done
+    [[ " $(dispatcher-get-commands) " == *" al "* ]] && array_failures+=("al listed as a command")
+    _DISPATCHER_ALIASES=()
+    unset _DISPATCHERSELFTEST_ALIASES
+    typeset -ga _DISPATCHERSELFTEST_ALIASES=(al alpha)
+    dispatcher-init "dispatcherselftest" --route=function 2>/dev/null
+    (( ${#_DISPATCHER_ALIASES} == 0 )) || array_failures+=("a plain array was read as aliases")
+    unfunction dispatcherselftest-alpha
+    unset _DISPATCHERSELFTEST_DESCRIPTIONS _DISPATCHERSELFTEST_ALIASES
+    _DISPATCHER_ALIASES=("${(@kv)saved_aliases}")
+    DISPATCHER_DRY_RUN="$saved_dry_run"
+    if (( ${#array_failures} == 0 )); then
+        echo "PASS"
+        ((tests_passed++)) || true
+    else
+        echo "FAIL (${(j:; :)array_failures})"
         ((tests_failed++)) || true
     fi
 

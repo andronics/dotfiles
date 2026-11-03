@@ -45,6 +45,27 @@ declare -g AUDIO_LOADED=1
 declare -r AUDIO_VERSION="1.0.0"
 
 # ------------------------------
+# Command Aliases
+# ------------------------------
+
+# alias -> command, registered by _dispatcher's dispatcher-init for the
+# `audio` wrapper (dotlib/README.md, "Command aliases").
+typeset -gA _AUDIO_ALIASES=(
+    [device-name]=device-get-name
+    [device-icon]=device-get-icon
+    [level-name]=level-get-name
+    [level-icon]=level-get-icon
+    [restart]=server-restart
+    [sink-next]=sink-set-next
+    [sink-prev]=sink-set-prev
+    [sink-previous]=sink-set-prev
+    [spectrum]=spectrum-show
+    [volume-query]=volume-get
+    [mute]=mute-enable
+    [unmute]=mute-disable
+)
+
+# ------------------------------
 # Dependency Loading
 # ------------------------------
 

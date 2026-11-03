@@ -8,31 +8,6 @@ dispatcher-init "player" \
     --route=function \
     --description="Media player control via playerctl (MPRIS)"
 
-dispatcher-register-alias "list"             "list-all"
-dispatcher-register-alias "active"           "get-active"
-dispatcher-register-alias "toggle"           "play-pause"
-dispatcher-register-alias "prev"             "previous"
-dispatcher-register-alias "title"            "get-title"
-dispatcher-register-alias "artist"           "get-artist"
-dispatcher-register-alias "album"            "get-album"
-dispatcher-register-alias "metadata"         "get-metadata"
-dispatcher-register-alias "metadata-json"    "get-metadata-json"
-dispatcher-register-alias "artwork"          "get-artwork"
-dispatcher-register-alias "position"         "get-position"
-dispatcher-register-alias "position-formatted" "get-position-formatted"
-dispatcher-register-alias "position-percent" "get-position-percent"
-dispatcher-register-alias "duration"         "get-duration"
-dispatcher-register-alias "length"           "get-duration"
-dispatcher-register-alias "status"           "get-status"
-dispatcher-register-alias "status-json"      "get-status-json"
-dispatcher-register-alias "state"            "get-state-icon"
-dispatcher-register-alias "playing"          "is-playing"
-dispatcher-register-alias "instance"         "get-instance-name"
-dispatcher-register-alias "instance-name"    "get-instance-name"
-dispatcher-register-alias "icon"             "get-instance-icon"
-dispatcher-register-alias "instance-icon"    "get-instance-icon"
-dispatcher-register-alias "format"           "format-output"
-
 player-init || { echo "ERROR: Failed to initialize player library" >&2; exit 1; }
 trap player-cleanup EXIT
 
