@@ -144,6 +144,11 @@ _coord_cmd() {
                     local -a dir=('next:the next coordinator, wrapping' 'prev:the previous coordinator, wrapping')
                     _describe -t directions 'direction' dir && ret=0
                     ;;
+                hide)
+                    (( CURRENT == 2 )) || return 1
+                    local -a hopt=('--toggle:with none shown, re-show the last one shown')
+                    _describe -t options 'option' hopt && ret=0
+                    ;;
                 side)
                     (( CURRENT == 2 )) || return 1
                     _coord_cmd_load side
