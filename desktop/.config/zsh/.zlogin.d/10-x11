@@ -1,7 +1,13 @@
 [[ -n "${DISPLAY}" || "${WAYLAND_DISPLAY}" ]] && {
     setxkbmap -layout gb > /dev/null
-    xsetroot -cursor_name left_ptr  > /dev/null
     xset s off  > /dev/null
     xset s -dpms  > /dev/null
-    xrdb ~/.Xresources  > /dev/null
+    # The theme's colours and cursor over ~/.Xresources: one load, one merge
+    # (-nocpp: the generated file has no directives). Without a theme, the
+    # file alone; `theme ensure` in bspwmrc renders one and merges it.
+    xrdb -load ~/.Xresources  > /dev/null
+    [[ -r ~/.local/state/theme/current/xresources ]] &&
+        xrdb -nocpp -merge ~/.local/state/theme/current/xresources > /dev/null
+    # After the merge, so the root cursor takes Xcursor.theme and size.
+    xsetroot -cursor_name left_ptr  > /dev/null
 }
