@@ -3,3 +3,19 @@
 if [[ -d ${ZDOTDIR}/completions ]] && (( ! ${fpath[(Ie)${ZDOTDIR}/completions]} )); then
     fpath=("${ZDOTDIR}/completions" $fpath)
 fi
+
+# The brain's generated completions (andronics/brain), regenerated in place, so
+# the dir is referenced, not copied. Only on hosts that mount the brain. It goes
+# right after the repo's dir: compinit and autoload take the first file of a
+# name on fpath, so the repo's hand-written _vault-query_cmd wins over the
+# generated one. .zshrc rebuilds the dump when a file here changes.
+: ${BRAIN_COMPLETIONS:=/mnt/brain/completions}
+if [[ -d $BRAIN_COMPLETIONS ]] && (( ! ${fpath[(Ie)$BRAIN_COMPLETIONS]} )); then
+    integer _bc_i=${fpath[(Ie)${ZDOTDIR}/completions]}
+    if (( _bc_i )); then
+        fpath[_bc_i+1,_bc_i]=("$BRAIN_COMPLETIONS")
+    else
+        fpath=("$BRAIN_COMPLETIONS" $fpath)
+    fi
+    unset _bc_i
+fi
