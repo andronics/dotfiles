@@ -1,0 +1,11 @@
+#!/bin/sh
+# The repo-local core.hooksPath (.githooks) hides the global hooks dir
+# (core.hooksPath in ~/.gitconfig), so hand each hook on to its global
+# namesake, if there is one.
+name=${HOOK:-$(basename "$0")}
+dir=$(git config --global --get core.hooksPath) || exit 0
+# shellcheck disable=SC2088  # matching a literal "~/" in the config value
+case ${dir} in "~/"*) dir="${HOME}/${dir#"~/"}" ;; esac
+[ "$(cd "${dir}" 2>/dev/null && pwd -P)" = "$(cd "$(dirname "$0")" && pwd -P)" ] && exit 0
+[ -x "${dir}/${name}" ] && exec "${dir}/${name}" "$@"
+exit 0

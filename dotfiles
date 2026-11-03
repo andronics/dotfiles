@@ -18,7 +18,7 @@ ok()   { printf '\033[0;32m✓\033[0m %s\n' "$*"; }
 _dotfiles() {
 
    [[ $# -eq 0 ]] && {
-        info "usage: $(basename $0) [i|install|r|reinstall|u|uninstall|c|completions] "
+        info "usage: $(basename $0) [i|install|r|reinstall|u|uninstall|c|completions|check-crypt] "
         return 1
    }
 
@@ -27,12 +27,15 @@ _dotfiles() {
 
    pushd "${dotfiles_source_root}" > /dev/null
 
+   _rc=0
+
    case ${_command} in
       
       i|install) _dotfiles_install "$@" ;;
       r|reinstall) _dotfiles_reinstall "$@" ;;
       u|uninstall) _dotfiles_uninstall "$@" ;;
       c|completions) _dotfiles_completions "$@" ;;
+      check-crypt) "${dotfiles_source_root}/.githooks/check-crypt" "$@"; _rc=$? ;;
       
       *) printf "command '%s' unknown" "${_command}" && return ;;
 
@@ -40,6 +43,7 @@ _dotfiles() {
 
    popd > /dev/null
 
+   return ${_rc}
 
 }
 
@@ -64,6 +68,8 @@ _dotfiles_install() {
          warn "package '${_pkg}' prefixed with a period... ignoring"
          continue
       }
+
+      [[ ${_pkg} == docs ]] && continue   # design records, not a stow package
 
       _dotfiles_pre_install
 
@@ -165,6 +171,8 @@ _dotfiles_uninstall() {
          warn "package '${_pkg}' prefixed with a period... ignoring"
          continue
       }
+
+      [[ ${_pkg} == docs ]] && continue   # design records, not a stow package
 
       _dotfiles_pre_uninstall
          

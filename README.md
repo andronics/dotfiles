@@ -83,7 +83,7 @@ Two private secrets repos are tracked as submodules:
 
 `shell/.preinstall` validates they are populated before stow runs and will attempt `git submodule update --init --recursive` to fetch them. If that fails, you almost certainly need to `gh auth login` first.
 
-`shell/.postinstall` enforces `chmod 700` on `~/.ssh` and `~/.gnupg` (sshd and gpg refuse loose-perm dirs) and runs `gpg-connect-agent reloadagent` so any newly-imported keys are picked up.
+`shell/.postinstall` enforces `chmod 700` on `~/.ssh` and `~/.gnupg` (sshd and gpg refuse loose-perm dirs) and runs `gpg-connect-agent reloadagent` so any newly-imported keys are picked up, then sets up git-crypt in this repo: it points `core.hooksPath` at `.githooks/` and unlocks a fresh clone with the key from `pass` (see [Secrets architecture](#secrets-architecture)).
 
 ## Secrets architecture
 
@@ -93,24 +93,30 @@ Three layered tiers. Compromise of any tier leaks nothing without the one above 
 GPG key             ← shell/.gnupg submodule (private)
    │ decrypts
 pass entries        ← github.com/andronics/password-store (private)
-   │ pass show git/crypt-key
-git-crypt key       ← 32-byte symmetric key, never on disk in plaintext
+   │ pass show hosts/desktop/dotfiles-git-crypt-key-official
+git-crypt key       ← symmetric key (base64 of `git-crypt export-key`), on disk only in tmpfs while unlocking
    │ AES via git clean/smudge
-encrypted files     ← *.env, remote service-account keys (tracked in this public repo)
+encrypted files     ← *.env (tracked in this public repo)
 ```
 
-Patterns under git-crypt are declared in `.gitattributes` at the repo root. The clean/smudge filters are wired automatically by `shell/.postinstall` on first install — it runs `./shell/.local/bin/git-crypt init` if `.gitattributes` declares the filter and `.git/config` doesn't yet have it.
+Encryption is the official [git-crypt](https://www.agwa.name/projects/git-crypt/) (`pacman -S git-crypt`). Patterns are declared in `.gitattributes` at the repo root. The repo has two ways in: the symmetric key in `pass`, and Stephen's GPG key, added as a git-crypt user (its wrapped copy of the key is in `.git-crypt/keys/`, encrypted to that GPG key). `shell/.postinstall` unlocks a fresh clone from `pass` on first install, and warns (without failing the install) if it can't.
 
-To wire manually (after `pass` and the key are available):
+To unlock by hand, from a clean working tree:
 
 ```sh
-cd ~/.dotfiles && ./shell/.local/bin/git-crypt init
-git checkout HEAD -- .       # re-checkout to materialize decrypted contents
+cd ~/.dotfiles && git-crypt unlock          # with your GPG key
+
+key=$(mktemp -p "$XDG_RUNTIME_DIR")         # or with the key in pass
+pass show hosts/desktop/dotfiles-git-crypt-key-official | base64 -d > "$key" \
+   && git-crypt unlock "$key"; shred -u "$key"
 ```
 
-Currently encrypted: `*.env` and the `remote` service-account key files under `shell/.config/remote/keys/`. To encrypt more, add a pattern to `.gitattributes` and re-add the matching files (`git rm --cached <file>; git add <file>`).
+To encrypt more, add a pattern to `.gitattributes` and re-add the matching files (`git rm --cached <file>; git add <file>`).
 
-> The `git-crypt` script in this repo is a custom openssl-based implementation, not Andrew Ayer's upstream `git-crypt` Arch package. Same clean/smudge concept; symmetric-only; deliberate.
+Because the repo is public, a plaintext secret must never reach a commit. In a locked clone git-crypt's filter isn't configured and git would commit a matching file as-is, so two checks guard it:
+
+- `.githooks/pre-commit` (installed by `shell/.postinstall` through `core.hooksPath`) refuses a commit if any staged file marked `filter=git-crypt` doesn't start with git-crypt's `\0GITCRYPT\0` header. The other hooks in `.githooks/` hand on to your global hooks dir, which a repo-local `core.hooksPath` would otherwise hide.
+- `./dotfiles check-crypt` checks every committed file the same way and runs `git-crypt status -e`.
 
 ## Conventions
 
