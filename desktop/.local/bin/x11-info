@@ -1,40 +1,27 @@
 #!/usr/bin/env zsh
+# x11-info - read-only X window queries.
 
-name=$(basename $0)
+source "${DOTLIB}/_log" || { echo "missing _log" >&2; exit 1; }
 
-# ------------------------------
+name=${0:t}
 
-source "$(which _log)"
+_x11_info_usage() {
+    print -r -- "usage: ${name} <command> [window-id]
 
-# ------------------------------
-
-_x11_info() {
-  
-    [[ $# -eq 0 ]] && {
-        log-error "command not specified"
-        return 1
-    }
-
-    _command=$1
-    shift 2>/dev/null
-
-    case "${_command}" in
-
-        children) xwininfo -id "$id" -children | sed -n '/[0-9]\+ \(child\|children\):/,$s/ \+\(0x[0-9a-z]\+\).*/\1/p' ;;
-        class) _x11_info_xprop $* | sed -n '/WM_CLASS/s/.*, "\(.*\)"/\1/p' ;;
-        name) _x11_info_xprop $* | grep -P "^WM_NAME\((UTF8_)?STRING\)" | awk '{print $3}' | tr -d '"' ;;
-
-        *) log-warning "command '%s' unsupported" "${_command}" ;;
-
-
-    esac
-
+commands:
+  children [id]   ids of the window's children (default: the root window)
+  class [id]      WM_CLASS class (no id: click a window)
+  name [id]       WM_NAME (no id: click a window)"
 }
 
-_x11_info_xprop() {
-    [[ -z "$1" ]] && xprop || xprop -id "$1"
-}
+_x11_info_xprop() { [[ -z "$1" ]] && xprop || xprop -id "$1"; }
 
-# ------------------------------
-
-_x11_info "$@"
+case "$1" in
+    -h|--help|help) _x11_info_usage ;;
+    children) if [[ -n "$2" ]]; then xwininfo -id "$2" -children; else xwininfo -root -children; fi \
+        | sed -n '/[0-9]\+ \(child\|children\):/,$s/^ \+\(0x[0-9a-f]\+\).*/\1/p' ;;
+    class) _x11_info_xprop "$2" | sed -n '/^WM_CLASS/s/.*, "\(.*\)"/\1/p' ;;
+    name) _x11_info_xprop "$2" | grep -P '^WM_NAME\((UTF8_)?STRING\)' | sed 's/^[^=]*= "\(.*\)"$/\1/' ;;
+    "") log-error "command not specified (see --help)"; exit 1 ;;
+    *) log-error "unknown command: $1 (see --help)"; exit 1 ;;
+esac

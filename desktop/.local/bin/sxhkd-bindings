@@ -1,46 +1,24 @@
 #!/usr/bin/env zsh
+# sxhkd-bindings - show the sxhkd key bindings in rofi, each with the comment above it.
 
-name=$(basename $0)
+source "${DOTLIB}/_log" || { echo "missing _log" >&2; exit 1; }
 
-# ------------------------------
+sxhkdrc="${XDG_CONFIG_HOME:-$HOME/.config}/sxhkd/sxhkdrc"
 
-source $(which _log)
-source $(which _rofi)
-source "$(which _xdg)" >/dev/null 2>&1 || true
+case "$1" in
+    -h|--help)
+        print -r -- "usage: ${0:t} [-h|--help]"
+        print -r -- "Lists the bindings in ${sxhkdrc} in rofi (bound to super+F1)."
+        exit 0 ;;
+    "") ;;
+    *) log-error "unknown option: $1 (see --help)"; exit 2 ;;
+esac
 
-# ------------------------------
+[[ -r "$sxhkdrc" ]] || { log-error "cannot read ${sxhkdrc}"; exit 1; }
 
-# Backward-compatible aliases
-bindings_cache_dir="${XDG_CACHE_DIR}"
-bindings_config_dir="${XDG_CONFIG_DIR}"
-bindings_data_dir="${XDG_DATA_DIR}"
-
-# ------------------------------
-
-bindings_config=$(cat "${XDG_CONFIG_HOME}/sxhkd/sxhkdrc")
-
-# ------------------------------
-
-rofi_config="${bindings_data_dir}/theme.rasi"
-
-# ------------------------------
-
-source "$(which _args)"
-
-# ------------------------------
-
-_bindings() {
-
-    export LC_ALL=C
-
-    echo "${bindings_config}" \
-        | awk '/^[a-zA-Z]/ && last {print $0,"\t",last} {last=""} /^#/{last=$0}' \
-        | column -t -s $'\t' \
-        | sort -f \
-        | rofi-dmenu "sxhkd bindings:"
-
-}
-
-# ------------------------------
-
-_bindings "$@"
+# rofi directly, not _rofi's rofi-dmenu: that passes -lines, which rofi 1.7+ rejects.
+LC_ALL=C awk '/^[a-zA-Z]/ && last {print $0 "\t" last} {last=""} /^#/{last=$0}' "$sxhkdrc" \
+    | LC_ALL=C column -t -s $'\t' \
+    | LC_ALL=C sort -f \
+    | rofi -dmenu -i -p "sxhkd bindings" >/dev/null
+exit 0
