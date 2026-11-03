@@ -10,7 +10,9 @@
         pgrep -x bspwm   >/dev/null || exit 1
         pgrep -x polybar >/dev/null && exit 0
 
+        # polybar-reload runs `theme ensure` first: the bar's include-file
+        # (~/.local/state/theme/current/polybar.ini) is fatal when missing.
         export HOST_MONITOR="$(bspc query -M --names | head -1)"
-        polybar -q -r "${POLYBAR_BAR:-main}" &
+        polybar-reload "${POLYBAR_BAR:-main}"
     ) &
 }
