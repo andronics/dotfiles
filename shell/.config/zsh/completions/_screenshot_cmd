@@ -5,6 +5,7 @@
 _screenshot_cmd() {
     local -a commands
     commands=(
+        'delayed:Wait a delay, then capture a region, a clicked window or the whole desktop'
         'fullscreen:Capture the whole screen immediately'
         'fullscreen_wait:Prompt for a delay, then capture the whole screen'
         'geometry:Capture an explicit WxH+X+Y region'

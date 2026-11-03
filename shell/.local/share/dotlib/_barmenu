@@ -74,6 +74,7 @@ typeset -ga _BARMENU_ROWS=(
     screenshot $'\xEE\xA9\xBA' 'GEOMETRY'        'screenshot geometry'
     screenshot $'\xEE\xA9\xBA' 'SELECTION'       'screenshot selection'
     screenshot $'\xEE\xA9\xBA' 'WINDOW'          'screenshot window'
+    screenshot $'\xEE\xA9\xBA' 'DELAYED…'        'screenshot delayed'
 
     settings   ''        'BSPWM'           'code ~/.config/bspwm'
     settings   ''        'POLYBAR'         'code ~/.config/polybar'
