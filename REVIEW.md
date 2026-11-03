@@ -2,6 +2,8 @@
 
 **Status: implemented.** All items in the [decisions table](#proposed-decisions-keep--merge--discard) and the recommendation list have been applied to the working tree (not committed). Left as a record of what was found and why, not a pending plan.
 
+**Later (2026-11-03):** the `remote` wrapper and its modules (`_remote`, `_remote_config`, `_remote_patterns`, `_remote_pool`, `_rclone`) were retired; ferryman on nfs-01 replaced them. Mentions of them below are historical.
+
 Scope: the 32 modules under `shell/.local/share/dotlib/` (~31,500 lines) plus how they're actually consumed by `~/.local/bin/` wrappers and the `desktop/` scripts. This follows the earlier cleanup pass (deleted `_ui`, `_patterns`, `_tour`, `_args`/`_async`/`_rules`/`_server`, `_template`/`_schema`/`_actions`/`_plugins`, `_docker`/`_acpi`/`_git`/`_dryrun`/`_http`, `_ai_core`/`_ai_claude`/`_vpn`/`_wifi`/`_crypto` — ~20 modules, ~8,900+ lines of zero-consumer code). That pass proved dead-module deletion works. This review asks whether what's *left* still has the same disease at a finer grain.
 
 ## Bottom line

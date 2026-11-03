@@ -255,7 +255,7 @@ _log-output() {
 
     # Every level goes to stderr, never stdout, in every mode below: stdout is
     # reserved for functions that return data via command substitution
-    # (jq-query, _remote-config-*, and anything else that does `x=$(fn)`).
+    # (jq-query and anything else that does `x=$(fn)`).
     # Levels used to split by severity - error/fatal/warning to stderr,
     # debug/info/trace to stdout - which meant any function that logged
     # internally AND returned a value via echo silently corrupted its own
@@ -644,7 +644,6 @@ log-disable-function-names() {
 log-is-dry-run() {
     [[ "${DRY_RUN:-false}" == "true" ]] || \
     [[ "${TORRENT_DRY_RUN:-false}" == "true" ]] || \
-    [[ "${REMOTE_DRY_RUN:-false}" == "true" ]] || \
     [[ "${DOCKER_DRY_RUN:-false}" == "true" ]]
 }
 

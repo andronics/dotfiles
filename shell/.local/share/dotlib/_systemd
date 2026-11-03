@@ -171,7 +171,7 @@ systemd-exists() {
 # Usage: systemd-start [--no-block] "myservice" [--user|--system]
 # --no-block returns as soon as the job is queued instead of waiting for it
 # to complete - required for Type=oneshot units whose ExecStart is expected
-# to run long (e.g. remote-sync@.service), otherwise systemctl start blocks
+# to run long, otherwise systemctl start blocks
 # the caller for the unit's entire runtime.
 # Exit codes:
 #   0 - Success
