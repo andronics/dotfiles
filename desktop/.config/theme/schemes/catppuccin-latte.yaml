@@ -1,0 +1,87 @@
+# Source: https://github.com/catppuccin/catppuccin (palette: catppuccin/palette)
+# Palette from tinted-theming/schemes base24/catppuccin-latte.yaml (MIT, Copyright (c) 2022 Tinted Theming)
+# Licence: MIT, Copyright (c) 2021 Catppuccin
+# x-* keys are local extensions read by dotlib/_theme: x-accent (slot, name or hex),
+# x-pair (light/dark twin), x-roles (role -> slot, name or hex), x-ansi (index -> same),
+# x-names (named colours, e.g. Catppuccin's).
+system: "base24"
+name: "Catppuccin Latte"
+author: "https://github.com/catppuccin/catppuccin"
+variant: "light"
+palette:
+  base00: "#eff1f5" # base
+  base01: "#e6e9ef" # mantle
+  base02: "#ccd0da" # surface0
+  base03: "#bcc0cc" # surface1
+  base04: "#acb0be" # surface2
+  base05: "#4c4f69" # text
+  base06: "#dc8a78" # rosewater
+  base07: "#7287fd" # lavender
+  base08: "#d20f39" # red
+  base09: "#fe640b" # peach
+  base0A: "#df8e1d" # yellow
+  base0B: "#40a02b" # green
+  base0C: "#179299" # teal
+  base0D: "#1e66f5" # blue
+  base0E: "#8839ef" # mauve
+  base0F: "#dd7878" # flamingo
+  base10: "#e6e9ef" # mantle - darker background
+  base11: "#dce0e8" # crust - darkest background
+  base12: "#e64553" # maroon - bright red
+  base13: "#dc8a78" # rosewater - bright yellow
+  base14: "#40a02b" # green - bright green
+  base15: "#04a5e5" # sky - bright cyan
+  base16: "#209fb5" # sapphire - bright blue
+  base17: "#ea76cb" # pink - bright purple
+slug: "catppuccin-latte"
+x-accent: "base07"   # lavender
+x-pair: "catppuccin-mocha"
+# Catppuccin's own UI roles: subtext0 for secondary text, overlay0 for inactive.
+x-roles:
+  fg_dim: "subtext0"
+  dim: "overlay0"
+# Catppuccin's terminal palette (catppuccin/alacritty), not the base24 default mapping.
+x-ansi:
+  0: "surface1"
+  1: "red"
+  2: "green"
+  3: "yellow"
+  4: "blue"
+  5: "pink"
+  6: "teal"
+  7: "subtext1"
+  8: "surface2"
+  9: "red"
+  10: "green"
+  11: "yellow"
+  12: "blue"
+  13: "pink"
+  14: "teal"
+  15: "subtext0"
+x-names:
+  rosewater: "#dc8a78"
+  flamingo: "#dd7878"
+  pink: "#ea76cb"
+  mauve: "#8839ef"
+  red: "#d20f39"
+  maroon: "#e64553"
+  peach: "#fe640b"
+  yellow: "#df8e1d"
+  green: "#40a02b"
+  teal: "#179299"
+  sky: "#04a5e5"
+  sapphire: "#209fb5"
+  blue: "#1e66f5"
+  lavender: "#7287fd"
+  text: "#4c4f69"
+  subtext1: "#5c5f77"
+  subtext0: "#6c6f85"
+  overlay2: "#7c7f93"
+  overlay1: "#8c8fa1"
+  overlay0: "#9ca0b0"
+  surface2: "#acb0be"
+  surface1: "#bcc0cc"
+  surface0: "#ccd0da"
+  base: "#eff1f5"
+  mantle: "#e6e9ef"
+  crust: "#dce0e8"

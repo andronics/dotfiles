@@ -1,0 +1,61 @@
+# Source: https://github.com/enkia/tokyo-night-vscode-theme (terminal colours: folke/tokyonight.nvim)
+# Palette from tinted-theming/schemes base24/tokyo-night-dark.yaml (MIT, Copyright (c) 2022 Tinted Theming)
+# Licence: MIT, Copyright (c) 2018-present Enkia; tokyonight.nvim MIT, Copyright (c) 2021 Folke Lemaitre
+# x-* keys are local extensions read by dotlib/_theme: x-accent (slot, name or hex),
+# x-pair (light/dark twin), x-roles (role -> slot, name or hex), x-ansi (index -> same),
+# x-names (named colours, e.g. Catppuccin's).
+system: "base24"
+name: "Tokyo Night Dark"
+author: "Michaël Ball, based on Tokyo Night by enkia (https://github.com/enkia/tokyo-night-vscode-theme)"
+variant: "dark"
+palette:
+  base00: "#1a1b26" # Background
+  base01: "#16161e" # Lighter background (terminal black)
+  base02: "#2f3549" # Selection background
+  base03: "#444b6a" # Comments, invisibles
+  base04: "#787c99" # Dark foreground
+  base05: "#a9b1d6" # Default foreground
+  base06: "#cbccd1" # Light foreground
+  base07: "#d5d6db" # Lightest foreground
+  base08: "#c0caf5" # Variables, XML tags
+  base09: "#a9b1d6" # Integers, booleans
+  base0A: "#0db9d7" # Classes, search text bg
+  base0B: "#9ece6a" # Strings
+  base0C: "#b4f9f8" # Regex, escape chars
+  base0D: "#2ac3de" # Functions, methods
+  base0E: "#bb9af7" # Keywords, storage
+  base0F: "#f7768e" # Deprecated, special
+  base10: "#16161e" # Darker background
+  base11: "#0f0f14" # Darkest background
+  base12: "#ff7a93" # Bright red
+  base13: "#ff9e64" # Bright orange
+  base14: "#73daca" # Bright green/teal
+  base15: "#7dcfff" # Bright cyan
+  base16: "#89ddff" # Bright blue
+  base17: "#bb9af7" # Bright magenta
+slug: "tokyo-night"
+x-accent: "#7aa2f7"   # blue
+# The base24 mapping follows syntax roles (base08 is a near-white), so the
+# status and terminal colours come from Tokyo Night's terminal palette.
+x-roles:
+  urgent: "#f7768e"
+  busy: "#ff9e64"
+  warn: "#e0af68"
+  info: "#7dcfff"
+x-ansi:
+  0: "#15161e"
+  1: "#f7768e"
+  2: "#9ece6a"
+  3: "#e0af68"
+  4: "#7aa2f7"
+  5: "#bb9af7"
+  6: "#7dcfff"
+  7: "#a9b1d6"
+  8: "#414868"
+  9: "#f7768e"
+  10: "#9ece6a"
+  11: "#e0af68"
+  12: "#7aa2f7"
+  13: "#bb9af7"
+  14: "#7dcfff"
+  15: "#c0caf5"
