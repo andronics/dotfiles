@@ -30,6 +30,8 @@
 #   overrides.json knobs merged over prefs.toml (written by a later `set`)
 #   lockscreen.cached  "<wallpaper>\t<mtime>" betterlockscreen's cache was
 #                  last made from; lockscreen.lock and lockscreen.log beside it
+#   xsettingsd.conf -> current/xsettingsd.conf, what xsettingsd is started
+#                  on (see _theme-reload-xsettingsd)
 #
 # Wallpaper: every build records one (spec.wallpaper, THEME_META[wallpaper]).
 # A new build keeps the current build's wallpaper, so `apply <scheme>` never
@@ -103,8 +105,10 @@
 #     - gomplate (YAML/TOML -> JSON, rendering), jq, GNU mv (-T)
 #     - matugen 4.x (image and colour sources only), sha256sum; magick
 #       (ImageMagick) for thumbnails, else matugen reads the full image
-#     - feh (wallpaper), betterlockscreen (lock cache), file (image check);
-#       each only where its reloader runs, and skipped when missing
+#     - feh (wallpaper), betterlockscreen (lock cache), file (image check),
+#       xsettingsd and dump_xsettings, gsettings; each only where its
+#       reloader runs, and skipped when missing
+#     - adw-gtk-theme (adw-gtk3, adw-gtk3-dark), the GTK theme gtk.css colours
 
 [[ -n "${THEME_LOADED:-}" ]] && return 0
 declare -gr THEME_LOADED=1
@@ -188,6 +192,8 @@ typeset -gA _THEME_RELOADERS=(
     [xresources]=_theme-reload-xresources
     [wallpaper]=_theme-reload-wallpaper
     [lockscreen]=_theme-reload-lockscreen
+    [xsettingsd]=_theme-reload-xsettingsd
+    [gsettings]=_theme-reload-gsettings
 )
 
 # Image files `theme wallpaper` and `theme list wallpapers` consider.
@@ -202,6 +208,17 @@ declare -g _THEME_POLYBAR_STATE='~/.local/state/theme'
 # The dunst drop-in `theme ensure` and the dunst reloader keep linked to the
 # current build. dunst reads dunstrc.d/*.conf after the dunstrc beside it.
 declare -g _THEME_DUNST_DROPIN='dunst/dunstrc.d/90-theme.conf'
+
+# GTK: each gtk.css (stowed) starts with @import url("theme.css"), and
+# `theme ensure` links theme.css beside it to current/gtk.css. xsettingsd
+# (.zlogin.d/20-xsettingsd) is started on the state link xsettingsd.conf,
+# which points at current/xsettingsd.conf, except for the moment the
+# xsettingsd reloader points it at a copy with another theme name.
+typeset -ga _THEME_GTK_DIRS=(gtk-3.0 gtk-4.0)
+declare -g _THEME_XSETTINGSD_LINK=xsettingsd.conf
+# How long GTK apps get to see the toggled theme name before it goes back;
+# both changes inside one event-loop pass would look like no change.
+declare -g _THEME_XSETTINGSD_TOGGLE_WAIT=${THEME_XSETTINGSD_TOGGLE_WAIT:-0.5}
 
 # Hue anchoring: the OKLCH hue window (degrees, lo hi, wrapping past 360)
 # each state colour must sit in to read as red, orange/amber or green. A
@@ -251,7 +268,7 @@ typeset -gA _THEME_DESCRIPTIONS=(
     [swatch]="Print the current theme, or [source], as truecolour blocks"
     [ensure]="Make sure a current theme exists: keep it, else re-activate known-good, else render the default"
     [undo]="Re-activate the previous build from history (no re-render)"
-    [reload]="Run the reloaders for [target...] (default all): rofi, alacritty, polybar, bspwm, dunst, xresources, wallpaper, lockscreen"
+    [reload]="Run the reloaders for [target...] (default all): rofi, alacritty, polybar, bspwm, dunst, xresources, wallpaper, lockscreen, xsettingsd, gsettings"
     [wallpaper]="Set the wallpaper and generate the colours from it: <image|name|number> [--keep-palette] (recorded in the theme, kept by apply), or restore (login)"
 )
 
@@ -312,7 +329,8 @@ Commands:
                                     changed (.zlogin.d/90-feh)
   reload [target...]                Re-run reloaders (default all; targets:
                                     rofi, alacritty, polybar, bspwm, dunst,
-                                    xresources, wallpaper, lockscreen)
+                                    xresources, wallpaper, lockscreen,
+                                    xsettingsd, gsettings)
   self-test                         Render every scheme into a scratch state
                                     dir under ~/.cache and validate
 
@@ -1441,16 +1459,31 @@ _theme-live() {
     [[ "${_THEME_STATE:A}" == "${live:A}" ]]
 }
 
-# Points the dunst drop-in at current/dunst.conf, so every swap reaches it.
-# Only where dunst is configured (~/.config/dunst exists) and for the live
-# state. dunstrc.d is a real directory, never stowed.
+# Points link $1 at $2 unless it already does; by rename, so it is never
+# missing.
+_theme-link-to() {
+    [[ -L "$1" && "$(readlink -- "$1")" == "$2" ]] && return 0
+    ln -sfn -- "$2" "$1.tmp" && mv -Tf -- "$1.tmp" "$1"
+}
+
+# Points the dunst drop-in at current/dunst.conf, and gtk-3.0/theme.css and
+# gtk-4.0/theme.css at current/gtk.css, so every swap reaches them. Each only
+# where its app is configured (~/.config/dunst, a gtk.css to import it) and
+# for the live state; these are real directories, never stowed. Also the
+# state's xsettingsd.conf link, back on current/xsettingsd.conf.
 _theme-link-dropins() {
     _theme-live || return 0
-    local link="${XDG_CONFIG_HOME:-$HOME/.config}/$_THEME_DUNST_DROPIN"
-    local target="$_THEME_STATE/current/dunst.conf"
-    [[ -d "${link:h:h}" ]] || return 0
-    [[ -L "$link" && "$(readlink -- "$link")" == "$target" ]] && return 0
-    mkdir -p -- "${link:h}" && ln -sfn -- "$target" "$link"
+    local cfg=${XDG_CONFIG_HOME:-$HOME/.config} d rc=0
+    local link="$cfg/$_THEME_DUNST_DROPIN"
+    if [[ -d "${link:h:h}" ]]; then
+        mkdir -p -- "${link:h}" && _theme-link-to "$link" "$_THEME_STATE/current/dunst.conf" || rc=1
+    fi
+    for d in "${_THEME_GTK_DIRS[@]}"; do
+        [[ -e "$cfg/$d/gtk.css" ]] || continue
+        _theme-link-to "$cfg/$d/theme.css" "$_THEME_STATE/current/gtk.css" || rc=1
+    done
+    [[ -d "$_THEME_STATE" ]] && { _theme-link-to "$_THEME_STATE/$_THEME_XSETTINGSD_LINK" current/xsettingsd.conf || rc=1; }
+    return $rc
 }
 
 # bspwm: sources current/bspwm.sh (border colours and width, window_gap,
@@ -1488,6 +1521,90 @@ _theme-reload-xresources() {
     _theme-live || return 0
     [[ -n "${DISPLAY:-}" ]] && whence xrdb >/dev/null || return 0
     timeout 5 xrdb -nocpp -merge "$_THEME_STATE/current/xresources"
+}
+
+# True when theme $2 of kind $1 (themes: a GTK 3 theme; icons: an icon
+# theme) is installed in an XDG data dir or the legacy ~/.themes, ~/.icons.
+# The same lookup as xsettingsd.conf.tmpl's.
+_theme-installed() {
+    local kind=$1 name=$2 d file
+    [[ -n "$name" ]] || return 1
+    [[ "$kind" == themes ]] && file=gtk-3.0/gtk.css || file=index.theme
+    for d in "${XDG_DATA_HOME:-$HOME/.local/share}" ${(s.:.)${XDG_DATA_DIRS:-/usr/local/share:/usr/share}}; do
+        [[ -r "$d/$kind/$name/$file" ]] && return 0
+    done
+    [[ -r "$HOME/.$kind/$name/$file" ]]
+}
+
+# REPLY = the value of setting $1 in xsettingsd.conf $2, unquoted.
+_theme-xsettingsd-get() {
+    local line
+    line=$(grep -m1 "^$1 " "$2" 2>/dev/null) || return 1
+    REPLY=${${${line#$1 }#\"}%\"}
+}
+
+# xsettingsd re-reads its config on SIGHUP and announces what changed. GTK 3
+# applies a new font, icon or cursor theme at once, but re-reads gtk.css (so
+# the new colours) only when Net/ThemeName changes. When the name stays the
+# same (dark to dark), the link goes to a copy with the name's other variant
+# (adw-gtk3-dark <-> adw-gtk3: the colours come from gtk.css either way, so
+# the flash is slight), HUP, a pause, then back and HUP again. A mode change
+# changes the name, so one HUP does. Live state and a running xsettingsd only;
+# the login hook starts it. A failed signal only warns: rolling the theme
+# back wouldn't reach xsettingsd either.
+_theme-reload-xsettingsd() {
+    _theme-live || return 0
+    _theme-link-dropins || log-warning "[theme] couldn't link the GTK and xsettingsd files"
+    pgrep -x -u $UID xsettingsd >/dev/null || return 0
+    local conf="$_THEME_STATE/current/xsettingsd.conf" link="$_THEME_STATE/$_THEME_XSETTINGSD_LINK"
+    local tmp="$_THEME_STATE/xsettingsd.toggle.conf" name live= other
+    [[ -r "$conf" ]] || { log-error "[theme] no $conf"; return 1; }
+    if _theme-xsettingsd-get Net/ThemeName "$conf"; then
+        name=$REPLY
+        [[ -n "${DISPLAY:-}" ]] && whence dump_xsettings >/dev/null &&
+            live=$(timeout 2 dump_xsettings 2>/dev/null | sed -n 's/^Net\/ThemeName "\(.*\)"$/\1/p')
+        if [[ -z "$live" || "$live" == "$name" ]]; then
+            [[ "$name" == *-dark ]] && other=${name%-dark} || other=$name-dark
+            sed "s|^Net/ThemeName .*|Net/ThemeName \"$other\"|" "$conf" > "$tmp" &&
+                _theme-link-to "$link" "${tmp:t}" &&
+                pkill -HUP -x -u $UID xsettingsd && sleep $_THEME_XSETTINGSD_TOGGLE_WAIT
+        fi
+    fi
+    _theme-link-to "$link" current/xsettingsd.conf || return 1
+    rm -f -- "$tmp"
+    pkill -HUP -x -u $UID xsettingsd || log-warning "[theme] couldn't signal xsettingsd"
+    return 0
+}
+
+# GNOME's interface settings, read by libadwaita (color-scheme, through the
+# settings portal), xdg-desktop-portal-gtk, Firefox and Chromium: the mode,
+# the GTK and icon themes (when installed), the UI font, the cursor. Only
+# keys that differ are written. Live state and a writable dconf only;
+# skipped quietly otherwise. A failed write only warns.
+_theme-reload-gsettings() {
+    _theme-live || return 0
+    whence gsettings >/dev/null || return 0
+    local schema=org.gnome.desktop.interface spec="$_THEME_STATE/current/spec.json" k v cur
+    gsettings writable $schema color-scheme >/dev/null 2>&1 || return 0
+    [[ -r "$spec" ]] || { log-error "[theme] no $spec"; return 1; }
+    local -a vals=("${(@f)$(jq -r '.mode, .gtk, .icons, "\(.font.family.ui) \(.font.sizes.gtk)", .cursor.theme, .cursor.size' "$spec")}")
+    local -A want=(
+        [color-scheme]=${${vals[1]:#light}:+prefer-dark}
+        [font-name]=${vals[4]}
+        [cursor-theme]=${vals[5]}
+        [cursor-size]=${vals[6]}
+    )
+    [[ -n "${want[color-scheme]}" ]] || want[color-scheme]=default
+    _theme-installed themes "${vals[2]}" && want[gtk-theme]=${vals[2]}
+    _theme-installed icons "${vals[3]}" && want[icon-theme]=${vals[3]}
+    for k in ${(ok)want}; do
+        v=${want[$k]}
+        [[ "$k" == cursor-size ]] || v="'$v'"
+        cur=$(gsettings get $schema $k 2>/dev/null)
+        [[ "$cur" == "$v" ]] && continue
+        gsettings set $schema $k "$v" 2>/dev/null || log-warning "[theme] gsettings set $schema $k $v failed"
+    done
+    return 0
 }
 
 # ------------------------------
