@@ -92,7 +92,7 @@ typeset -gA _COORD_DESCRIPTIONS=(
     [side]="Print the dock side, or set it with {left|right}, re-docking a shown coordinator"
     [launch]="Start <name>'s window hidden, attaching to its tmux session if one exists"
     [list]="List coordinator windows and whether each is hidden or visible"
-    [status]="Claude Code hook: read the hook JSON on stdin and, for a session under ${_COORD_ACTORS_DIR}/<name>, record <name> busy, waiting or idle (notifying on waiting) and refresh polybar; [event] overrides hook_event_name; always exits 0"
+    [status]="Claude Code hook: read the hook JSON on stdin and, for a session under ${_COORD_ACTORS_DIR}/<name>, record <name> busy, idle, or waiting on a question (AskUserQuestion), permission or elicitation, notifying on waiting and refresh polybar; [event] overrides hook_event_name; always exits 0"
     [bar]="Print the polybar strip: one clickable icon per coordinator styled not running, idle, busy, waiting or shown; [key=#rrggbb ...] sets ${(kj:, :)_COORD_BAR_COLORS}"
 )
 
@@ -517,13 +517,19 @@ coord-list() {
 # substring test before jq is spawned. Only a change of state is written
 # (atomically, by rename) or pokes polybar, so the per-tool events cost a
 # read when nothing changes. Event to state:
-#   UserPromptSubmit, PostToolUse, PostToolUseFailure  busy (a granted
+#   UserPromptSubmit, PostToolUse, PostToolUseFailure  busy (an answered
+#                                                      question or granted
 #                                                      permission clears waiting)
-#   Notification (needs-input types)                   waiting
+#   PreToolUse for AskUserQuestion                     waiting (the question
+#                                                      is the notification)
+#   Notification (permission and elicitation types)    waiting
 #   Stop, StopFailure, SessionStart                    idle
 #   SessionEnd                                         state removed
+# idle_prompt is not waiting: coordinators run self-paced /loops that end a
+# turn every tick, so it would fire about 60s after each one and keep the
+# strip red.
 coord-status() {
-    local _json _cwd _event _type _message _name _rest _state _old _file _tmp
+    local _json _cwd _event _type _tool _message _name _rest _state _old _file _tmp
     [[ -t 0 ]] && return 0
     read -r -d '' _json || :
     [[ "$_json" == *"\"cwd\""*"\"${_COORD_ACTORS_DIR}/"* ]] || return 0
@@ -533,8 +539,10 @@ coord-status() {
         read -r _cwd
         read -r _event
         read -r _type
+        read -r _tool
         read -r -d '' _message
-    } < <(jq -r '.cwd // "", .hook_event_name // "", .notification_type // "", (.message // "" | gsub("\\s+"; " "))' <<< "$_json" 2>/dev/null)
+    } < <(jq -r '.cwd // "", .hook_event_name // "", .notification_type // "", .tool_name // "",
+        (.message // (.tool_input.questions[0].question)? // "" | tostring | gsub("\\s+"; " "))' <<< "$_json" 2>/dev/null)
     _event=${1:-$_event} _message=${_message%$'\n'}
 
     _rest=${_cwd#${_COORD_ACTORS_DIR}/}
@@ -544,8 +552,11 @@ coord-status() {
 
     case "$_event" in
         UserPromptSubmit|PostToolUse|PostToolUseFailure) _state=busy ;;
+        PreToolUse)
+            [[ "$_tool" == AskUserQuestion ]] || return 0
+            _state=waiting ;;
         Notification)
-            [[ "$_type" == (|permission_prompt|idle_prompt|elicitation_dialog|elicitation_url_dialog|agent_needs_input) ]] || return 0
+            [[ "$_type" == (permission_prompt|elicitation_dialog|elicitation_url_dialog|agent_needs_input) ]] || return 0
             _state=waiting ;;
         Stop|StopFailure|SessionStart) _state=idle ;;
         SessionEnd) _state= ;;
