@@ -3,7 +3,9 @@
 # and print what was picked instead of acting on it. Themes, _coord and _power
 # come from the checkout this script lives in (stow links resolve back to it),
 # so a worktree previews its own, uninstalled themes. Besides one variant per
-# theme, `confirm` shows power's Yes/No question (themes/prompt.rasi).
+# theme, `confirm` shows power's Yes/No question (themes/prompt.rasi), and
+# `barmenu-<menu>` each bar menu from _barmenu (themes/bar-menu.rasi; the
+# `bar-menu` variant is barmenu-layout), placed at the pointer as from the bar.
 #
 # THEME_STATE_DIR=<dir> previews against that theme state (e.g. one made by
 # `THEME_STATE_DIR=<dir> theme apply nord`) instead of ~/.local/state/theme:
@@ -12,7 +14,9 @@
 
 _repo=${0:A:h:h:h:h}
 _themes="${_repo}/desktop/.config/rofi/themes"
-_variants=(${_themes}/*.rasi(N:t:r) confirm)
+export DOTLIB="${_repo}/shell/.local/share/dotlib"
+source "${DOTLIB}/_barmenu" || exit 1
+_variants=(${_themes}/*.rasi(N:t:r) confirm barmenu-${^${(ok)_BARMENU_MENUS}})
 
 # REPLY = the theme file for variant $1, wrapped when THEME_STATE_DIR is set.
 _theme_file() {
@@ -32,7 +36,9 @@ if [[ -z "$_variant" || ${_variants[(Ie)$_variant]} -eq 0 ]]; then
     exit 2
 fi
 
-_theme_file "${_variant/#confirm/prompt}"
+_theme_name=${_variant/#confirm/prompt}
+[[ "$_variant" == barmenu-* ]] && _theme_name=bar-menu
+_theme_file "$_theme_name"
 _args=(-dmenu -i -no-custom -theme "$REPLY")
 _rows=()
 
@@ -80,6 +86,14 @@ case "$_variant" in
             _power-confirm-ask suspend \
                 && print -r -- "confirm: picked 'Yes'" || print -r -- "confirm: No or cancelled"
         fi
+        exit 0 ;;
+    bar-menu|barmenu-*)
+        # The real menu from _barmenu, minus the acting.
+        _menu=${_variant#barmenu-}
+        [[ "$_menu" == bar-menu ]] && _menu=layout
+        _BARMENU_THEME=$REPLY
+        _barmenu-choose "$_menu" -mesg "${_menu} (preview: nothing runs)" \
+            && print -r -- "${_variant}: would run '${REPLY}'" || print -r -- "${_variant}: cancelled"
         exit 0 ;;
     prompt)
         _args=(${_args:#-no-custom} -p "Rename") ;;
