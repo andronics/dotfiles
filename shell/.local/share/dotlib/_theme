@@ -51,11 +51,31 @@
 #   busy, urgent, accent    pairwise ΔE_OK >= 0.08 (the strip states)
 #   bg_alt vs bg            ΔL_OK >= 0.03 (two-tone bar segments)
 #
+# Hue anchoring (before the floors): urgent must read red, busy orange or
+# amber, ok green (_THEME_HUE_WINDOW). One outside its window is replaced by
+# the mode's anchor turned a quarter of the way (at most 15°) toward the source's hue
+# (x-source, else the colour it replaces), recorded in contrast.anchored.
+# busy keeps to its window when it is turned to stay distinct; if it can't,
+# accent turns instead.
+#
+# Generated sources (image:<img>, colour:#hex): matugen JSON (`--json hex
+# --dry-run`, both modes in one run) cached in ${XDG_CACHE_HOME}/theme as
+# sources/<sha256(image)>-<variant>-<contrast>.json (colour-<hex>-... for a
+# colour), from a 512px thumbnail thumbs/<sha256>.png. The adapter turns
+# the mode's Material roles into a scheme: surface -> bg,
+# surface_container_high -> bg_alt, on_surface -> fg, primary -> accent,
+# error -> urgent, tertiary -> info; busy, ok, warn and the terminal's six
+# hues are Catppuccin anchors turned toward the source colour within
+# _THEME_ANSI_SPREAD degrees, at >= _THEME_MIN_ANSI on bg. Material roles
+# are kept as m3-* palette names. Knobs: --mode/--variant/--contrast, else
+# prefs mode and [matugen] variant/contrast (overrides.json merged).
+#
 # Scheme extensions (all optional): x-accent (slot, name or hex for the
 # accent when prefs accent = "scheme"), x-pair (light/dark twin), x-roles
 # (role -> slot, name or hex, replacing the default slot), x-ansi (index ->
 # same), x-names (named colours, emitted so `@lavender`-style references keep
-# resolving).
+# resolving). Generated sources also set x-source (the colour busy, ok and
+# urgent are harmonised toward) and x-notes (lines for `theme check`).
 #
 # Usage:
 #   source "${DOTLIB}/_theme"
@@ -174,28 +194,78 @@ declare -g _THEME_POLYBAR_STATE='~/.local/state/theme'
 # current build. dunst reads dunstrc.d/*.conf after the dunstrc beside it.
 declare -g _THEME_DUNST_DROPIN='dunst/dunstrc.d/90-theme.conf'
 
+# Hue anchoring: the OKLCH hue window (degrees, lo hi, wrapping past 360)
+# each state colour must sit in to read as red, orange/amber or green. A
+# role outside its window, or too grey (chroma below _THEME_MIN_CHROMA) to
+# read as any hue, is replaced by the anchor for the mode (Catppuccin Mocha /
+# Latte) turned _THEME_HARMONISE of the way toward the source's hue, and
+# kept inside the window. orange is busy for generated sources: Material's
+# dark error is a pale salmon, too near Mocha's peach (ΔE_OK 0.05), so it is
+# deeper and more saturated, and harmonised only within _THEME_BUSY_GEN.
+typeset -gA _THEME_HUE_WINDOW=( [urgent]='330 40' [busy]='35 85' [ok]='100 170' )
+typeset -gA _THEME_ANCHOR_DARK=(
+    [urgent]='#f38ba8' [busy]='#fab387' [ok]='#a6e3a1'
+    [red]='#f38ba8' [yellow]='#f9e2af' [green]='#a6e3a1' [cyan]='#94e2d5' [blue]='#89b4fa' [magenta]='#f5c2e7'
+    [orange]='#f5a05a'
+)
+typeset -gA _THEME_ANCHOR_LIGHT=(
+    [urgent]='#d20f39' [busy]='#fe640b' [ok]='#40a02b'
+    [red]='#d20f39' [yellow]='#df8e1d' [green]='#40a02b' [cyan]='#179299' [blue]='#1e66f5' [magenta]='#ea76cb'
+    [orange]='#fe640b'
+)
+# The turn is capped, as Material's harmonise caps it at 15°: a blue
+# wallpaper should warm an orange slightly, not turn it red.
+declare -gr _THEME_HARMONISE=0.25 _THEME_HARMONISE_MAX=15 _THEME_MIN_CHROMA=0.03
+# A generated terminal colour stays within this many degrees of its anchor,
+# so red, yellow, green, cyan, blue and magenta never meet.
+declare -gr _THEME_ANSI_SPREAD=22
+# Terminal colours on bg: readable as text, not just visible.
+declare -gr _THEME_MIN_ANSI=4.5
+declare -gr _THEME_BUSY_GEN='50 85'
+
+# matugen's scheme types (`-t`); prefs [matugen] variant may drop "scheme-".
+typeset -ga _THEME_MATUGEN_VARIANTS=(
+    content expressive fidelity fruit-salad monochrome neutral rainbow tonal-spot vibrant
+)
+
 typeset -gA _THEME_DESCRIPTIONS=(
-    [apply]="Resolve, render, validate and swap in <scheme|build-id|default>; keeps the current theme on any failure"
+    [apply]="Resolve, render, validate and swap in <scheme|colour:#hex|image:<img>|build-id|default> [--mode m] [--variant v] [--contrast c]; keeps the current theme on any failure"
+    [mode]="Show the mode, or set it: dark, light or toggle (recorded in overrides.json; a scheme follows its x-pair, a wallpaper or colour is generated again)"
+    [next]="Next wallpaper with its own colours (default), or next scheme of the current mode: [wallpapers|schemes] [--keep-palette]; wraps"
+    [previous]="Previous wallpaper with its own colours (default), or previous scheme: [wallpapers|schemes] [--keep-palette]; wraps"
+    [random]="A random other wallpaper with its own colours (default), or scheme of the current mode: [wallpapers|schemes] [--keep-palette]"
     [current]="Show the applied theme's name, source, mode, scale and contrast; --json prints spec.json"
     [get]="Print one value: a role (accent, fg, ...), palette slot or name, size, metric or font"
     [roles]="Print <key>=<role> ... as '<key> <value>' lines, each role (or palette name, size, metric) from the current theme or the built-in fallback; in zsh, theme-roles <assoc> <key>=<role> ... fills an assoc instead"
     [list]="List [schemes|wallpapers|history|builds] (default schemes)"
-    [check]="Resolve [scheme] (default: the current one) without applying; print roles, contrast and adjustments; non-zero if a guarantee can't be met"
-    [swatch]="Print the current theme, or [scheme], as truecolour blocks"
+    [check]="Resolve [source] (default: the current one) without applying; print roles, contrast, adjustments and hue anchoring; non-zero if a guarantee can't be met"
+    [swatch]="Print the current theme, or [source], as truecolour blocks"
     [ensure]="Make sure a current theme exists: keep it, else re-activate known-good, else render the default"
     [undo]="Re-activate the previous build from history (no re-render)"
     [reload]="Run the reloaders for [target...] (default all): rofi, alacritty, polybar, bspwm, dunst, xresources, wallpaper, lockscreen"
-    [wallpaper]="Set the wallpaper: <image|name|number> [--keep-palette] (recorded in the theme, kept by apply), or restore (login)"
+    [wallpaper]="Set the wallpaper and generate the colours from it: <image|name|number> [--keep-palette] (recorded in the theme, kept by apply), or restore (login)"
 )
 
 theme-help() {
     cat <<'EOF'
-theme - desktop theme from a scheme: resolve, render, swap
+theme - desktop theme from a scheme, wallpaper or colour: resolve, render, swap
 
 Usage: theme <command> [args]
 
+Sources (apply, check, swatch):
+  <scheme>                          a named scheme (theme list schemes)
+  image:<image|name|number>         colours generated from a picture by
+                                    matugen (an image path works without
+                                    the prefix)
+  colour:#rrggbb                    colours generated from one colour by
+                                    matugen ('#rrggbb' works too)
+  Generated sources take --mode dark|light, --variant <matugen type> and
+  --contrast <-1..1>, else prefs mode and [matugen] variant/contrast.
+
 Commands:
-  apply <scheme|build-id|default>   Build and activate a theme
+  apply <source|build-id|default> [--mode m] [--variant v] [--contrast c]
+                                    Build and activate a theme (an image
+                                    source also becomes the wallpaper)
   current [--json]                  Show the applied theme
   get <key>                         One value: role, palette slot/name, size,
                                     metric or font (e.g. accent, base0D,
@@ -452,9 +522,12 @@ _theme-distinct() {
 }
 
 # Turns role $1's hue in growing steps, alternating direction, until it is
-# distinct from the roles after it and still meets the indicator floor.
+# distinct from the roles after it and still meets the indicator floor. A
+# role with a hue window (busy, ...) only takes hues inside it. Returns 1,
+# with the role as it was, when no step works; the caller notes it.
 _theme-separate() {
     local role=$1 orig=${_THEME_ROLE[$1]} step sign cand
+    local -a win=(${=_THEME_HUE_WINDOW[$1]:-})
     shift
     _theme-distinct $role "$@" && return 0
     for step in 15 30 45 60 90 120 150 180; do
@@ -462,6 +535,10 @@ _theme-separate() {
             colour-rotate "$orig" $(( sign * step ))
             colour-ensure-contrast "$REPLY" "${_THEME_ROLE[bg]}" $_THEME_MIN_INDICATOR || continue
             cand=$REPLY
+            if (( ${#win} )); then
+                colour-to-oklch "$cand"
+                _theme-hue-in ${reply[3]} $win || continue
+            fi
             _THEME_ROLE[$role]=$cand
             if _theme-distinct $role "$@"; then
                 _theme-adjusted $role "$orig -> $cand (hue turned $(( sign * step ))° to stay distinct from ${(j:, :)@})"
@@ -470,17 +547,94 @@ _theme-separate() {
         done
     done
     _THEME_ROLE[$role]=$orig
-    _THEME_NOTES+=("$role: cannot be made distinct from ${(j:, :)@}")
     return 1
+}
+
+# True when hue $1 (degrees) is inside window $2..$3, which may wrap past
+# 360 (330 40) or reach outside 0..360 (-19 25).
+_theme-hue-in() {
+    local -F h=$1 lo=$2 hi=$3
+    (( lo < 0 )) && (( lo += 360 )); (( lo >= 360 )) && (( lo -= 360 ))
+    (( hi < 0 )) && (( hi += 360 )); (( hi > 360 )) && (( hi -= 360 ))
+    if (( lo <= hi )); then (( h >= lo && h <= hi ))
+    else (( h >= lo || h <= hi )); fi
+}
+
+# REPLY = the signed shortest turn (degrees, -180..180) from hue $1 to $2.
+_theme-hue-diff() {
+    local -F d=$(( $2 - $1 ))
+    while (( d > 180 )); do (( d -= 360 )); done
+    while (( d <= -180 )); do (( d += 360 )); done
+    REPLY=$d
+}
+
+# REPLY = hue $1 moved to the nearer edge of window $2..$3 if outside it.
+_theme-hue-clamp() {
+    local -F h=$1 lo=$2 hi=$3 dlo dhi
+    _theme-hue-in $h $lo $hi && { REPLY=$h; return 0; }
+    _theme-hue-diff $h $lo; dlo=${REPLY#-}
+    _theme-hue-diff $h $hi; dhi=${REPLY#-}
+    (( dlo <= dhi )) && h=$lo || h=$hi
+    (( h < 0 )) && (( h += 360 )); (( h >= 360 )) && (( h -= 360 ))
+    REPLY=$h
+}
+
+# _theme-harmonise <anchor> <toward> [lo hi]: REPLY = <anchor> with its
+# OKLCH hue turned _THEME_HARMONISE of the way toward <toward>'s, at most
+# _THEME_HARMONISE_MAX degrees (matugen's "harmonise": the colour keeps its
+# meaning but sits with the palette), then kept inside window lo..hi.
+# Lightness and chroma are the anchor's.
+# A grey <toward> has no hue to lean to, so the anchor stays as it is.
+_theme-harmonise() {
+    local anchor=$1 toward=$2 lo=${3:-} hi=${4:-}
+    local -F L C h
+    colour-to-oklch "$anchor"; L=${reply[1]} C=${reply[2]} h=${reply[3]}
+    colour-to-oklch "$toward"
+    if (( reply[2] >= 0.02 )); then
+        _theme-hue-diff $h ${reply[3]}
+        local -F turn=$(( REPLY * _THEME_HARMONISE ))
+        (( turn > _THEME_HARMONISE_MAX )) && turn=$_THEME_HARMONISE_MAX
+        (( turn < -_THEME_HARMONISE_MAX )) && turn=-$_THEME_HARMONISE_MAX
+        (( h += turn ))
+        (( h < 0 )) && (( h += 360 ))
+        (( h >= 360 )) && (( h -= 360 ))
+    fi
+    if [[ -n "$lo" ]]; then _theme-hue-clamp $h $lo $hi; h=$REPLY; fi
+    colour-from-oklch $L $C $h
+}
+
+# Hue anchoring for urgent, busy and ok (see the header). Needs _THEME_MODE.
+_theme-anchor-hues() {
+    local role c toward
+    local -a win
+    local -F C h
+    local -A anchors
+    if [[ "$_THEME_MODE" == light ]]; then anchors=("${(@kv)_THEME_ANCHOR_LIGHT}")
+    else anchors=("${(@kv)_THEME_ANCHOR_DARK}"); fi
+    for role in urgent busy ok; do
+        c=${_THEME_ROLE[$role]}
+        win=(${=_THEME_HUE_WINDOW[$role]})
+        colour-to-oklch "$c"; C=${reply[2]} h=${reply[3]}
+        (( C >= _THEME_MIN_CHROMA )) && _theme-hue-in $h $win && continue
+        toward=${_THEME_IN[scheme.x-source]:-$c}
+        _theme-harmonise "${anchors[$role]}" "$toward" $win
+        _THEME_ROLE[$role]=$REPLY
+        _THEME_ANCHORED+=($role)
+        if (( C < _THEME_MIN_CHROMA )); then
+            _THEME_NOTES+=("$role: $c is too grey to read as a hue; anchored to $REPLY")
+        else
+            _THEME_NOTES+=("$role: $c (hue $(( int(rint(h)) ))°) is outside ${win[1]}-${win[2]}°; anchored to $REPLY")
+        fi
+    done
 }
 
 # Resolves _THEME_IN into _THEME_ROLE, _THEME_ANSI, _THEME_CONTRAST (pair ->
 # ratio or distance), _THEME_LEVEL (aaa|aa), _THEME_DEGRADED, _THEME_ADJUSTED,
-# _THEME_NOTES, _THEME_SIZE, _THEME_METRIC, _THEME_MODE. Returns 1 if a
-# guarantee can't be met.
+# _THEME_NOTES, _THEME_ANCHORED, _THEME_SIZE, _THEME_METRIC, _THEME_MODE.
+# Returns 1 if a guarantee can't be met.
 _theme-resolve() {
     typeset -gA _THEME_ROLE=() _THEME_CONTRAST=() _THEME_SIZE=() _THEME_METRIC=()
-    typeset -ga _THEME_ANSI=() _THEME_ADJUSTED=() _THEME_NOTES=()
+    typeset -ga _THEME_ANSI=() _THEME_ADJUSTED=() _THEME_NOTES=() _THEME_ANCHORED=()
     typeset -g _THEME_LEVEL _THEME_MODE
     typeset -gi _THEME_DEGRADED=0
     local role k v accent orig body fail=0
@@ -512,6 +666,8 @@ _theme-resolve() {
         colour-luminance "${_THEME_ROLE[fg]}"; lfg=$REPLY
         (( lbg < lfg )) && _THEME_MODE=dark || _THEME_MODE=light
     fi
+
+    _theme-anchor-hues
 
     # bg_alt: base01, else base02, else nudged away from bg toward fg.
     colour-delta-l "${_THEME_ROLE[bg_alt]}" "${_THEME_ROLE[bg]}"
@@ -573,9 +729,15 @@ _theme-resolve() {
         _theme-floor $role $_THEME_MIN_INDICATOR || fail=1
     done
 
-    # The three strip states: urgent keeps its colour, accent moves before busy.
-    _theme-separate accent urgent || fail=1
-    _theme-separate busy urgent accent || fail=1
+    # The three strip states: urgent keeps its colour, accent moves before
+    # busy. busy stays in its hue window; when that leaves no room (an
+    # orange accent from an orange wallpaper), accent moves instead.
+    if ! _theme-separate accent urgent; then
+        _THEME_NOTES+=("accent: cannot be made distinct from urgent"); fail=1
+    fi
+    if ! _theme-separate busy urgent accent && ! _theme-separate accent urgent busy; then
+        _THEME_NOTES+=("busy: cannot be made distinct from urgent, accent"); fail=1
+    fi
 
     _THEME_ROLE[focused]=${_THEME_ROLE[accent]}
     for role in accent urgent; do
@@ -681,6 +843,7 @@ _theme-spec() {
         print -r -- "contrast.requested"$'\t'"s"$'\t'"${_THEME_IN[prefs.contrast]:-aaa}"
         print -r -- "contrast.degraded"$'\t'"b"$'\t'"$(( _THEME_DEGRADED ))"
         print -r -- "contrast.adjusted"$'\t'"a"$'\t'"${(j: :)_THEME_ADJUSTED}"
+        print -r -- "contrast.anchored"$'\t'"a"$'\t'"${(j: :)_THEME_ANCHORED}"
         print -r -- "contrast.notes"$'\t'"l"$'\t'"${(pj:\x1f:)_THEME_NOTES}"
         for k v in "${(@kv)_THEME_SIZE}"; do print -r -- "font.sizes.$k"$'\t'"n"$'\t'"$v"; done
         for k in ui mono icon; do
@@ -1394,6 +1557,7 @@ theme-current() {
     print -r -- "scale     ${THEME_SIZE[scale]}"
     print -r -- "contrast  ${THEME_META[contrast]}${${THEME_META[degraded]:#false}:+ (degraded from ${THEME_META[requested]})}"
     print -r -- "adjusted  ${THEME_META[adjusted]:-none}"
+    print -r -- "anchored  ${THEME_META[anchored]:-none}"
     print -r -- "build     ${THEME_META[id]}"
 }
 

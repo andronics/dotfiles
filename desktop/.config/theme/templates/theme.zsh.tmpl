@@ -11,6 +11,7 @@ typeset -gA THEME_META=(
     [requested]={{ .spec.contrast.requested | strings.ShellQuote }}
     [degraded]={{ .spec.contrast.degraded }}
     [adjusted]={{ join .spec.contrast.adjusted " " | strings.ShellQuote }}
+    [anchored]={{ if has .spec.contrast "anchored" }}{{ join .spec.contrast.anchored " " | strings.ShellQuote }}{{ else }}''{{ end }}
     [icons]={{ .spec.icons | strings.ShellQuote }}
     [gtk]={{ .spec.gtk | strings.ShellQuote }}
     [cursor]={{ .spec.cursor.theme | strings.ShellQuote }}
