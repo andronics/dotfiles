@@ -1,28 +1,35 @@
 #!/usr/bin/env zsh
 
-# _desk - polybar desktop strip: one cell per non-empty bspwm desktop, showing
-# the icons of the apps on it, in the coordinator strip's visual language.
+# _desk - polybar desktop strip: one fixed-width cell per non-empty bspwm
+# desktop, showing the icon of an app on it (rotating through them when it
+# holds several), in the coordinator strip's visual language.
 #
 # `bar` draws the bar monitor's desktops in bspwm's order. A desktop is empty
 # when it has no visible window once coordinator panels (class `coord`,
 # sticky, so they ride along on the focused desktop) are set aside; empty
 # desktops are hidden, except the focused one, which shows a placeholder so
 # the strip never loses track of where you are. Each window's WM_CLASS (class,
-# then instance, case-insensitively) picks a glyph from _DESK_ICONS; repeats
-# of one glyph collapse to it plus a superscript count and a cell shows at
-# most _DESK_MAX_ICONS glyphs, then +N. The focused desktop is underlined, an
-# urgent one is a filled pill, a mode glyph follows for a monocle desktop or
-# a floating, fullscreen or sticky focused window, and a dim + cell ends the
-# strip. Left-click focuses a desktop, middle-click sends the focused window
-# there; on the + cell they run `new` and `new --take`.
+# then instance, case-insensitively) picks a glyph from _DESK_ICONS. A cell
+# holds one glyph, so it keeps a fixed width: a desktop whose windows map to
+# several distinct glyphs (in order of first appearance in the tree) shows
+# them one at a time, rotating every _DESK_ROTATE seconds. The index is
+# floor(now / _DESK_ROTATE) mod the glyph count, taken from the clock, so
+# every desktop ticks together and `bar` keeps no state. The focused desktop
+# is underlined, an urgent one is a filled pill, a mode glyph follows for a
+# monocle desktop or a floating, fullscreen or sticky focused window, and a
+# dim + cell ends the strip. Left-click focuses a desktop, middle-click
+# sends the focused window there; on the + cell they run `new` and
+# `new --take`.
 #
 # `watch` is the polybar custom/script (tail = true) loop: it prints `bar`,
 # then reprints after each burst of bspc events (lines arriving within
 # _DESK_SETTLE of each other), only when the line changed. Bursts that
 # include a desktop focus, node removal or node transfer run `prune` first,
-# so leaving an empty desktop removes it. After _DESK_IDLE quiet seconds it
-# repeats the line so a vanished reader is noticed; TERM, PIPE and the end of
-# `bspc subscribe` all end it and its subscribe process.
+# so leaving an empty desktop removes it. While some desktop rotates it also
+# wakes on each _DESK_ROTATE boundary to redraw; otherwise, and whenever the
+# line has gone _DESK_IDLE seconds unprinted, it repeats the line so a
+# vanished reader is noticed. TERM, PIPE and the end of `bspc subscribe` all
+# end it and its subscribe process.
 #
 # The monitor is the argument, else $DESK_MONITOR, else $HOST_MONITOR (the
 # bar's monitor in polybar's bars/base, inherited by its scripts), else the
@@ -39,12 +46,14 @@
 #     - _common, _log
 #   External:
 #     - bspwm (bspc), jq, xprop (windows bspwm saw before they set WM_CLASS)
-#     - polybar, Symbols Nerd Font Mono (bar font-0); a text font carrying
-#       superscript digits for the counts (Roboto Mono has ¹-⁴, Adwaita Mono
-#       the rest, both polybar fallbacks)
+#     - polybar, Symbols Nerd Font Mono (bar font-0); every glyph here is
+#       in it, and a mono font gives them one advance, so a cell's width
+#       doesn't change as it rotates
 
 [[ -n "${DESK_LOADED:-}" ]] && return 0
 declare -gr DESK_LOADED=1
+
+zmodload -F zsh/datetime p:EPOCHREALTIME p:EPOCHSECONDS
 
 source "${DOTLIB}/_common" || { echo "[ERROR] _desk requires _common" >&2; return 1; }
 source "${DOTLIB}/_log"    2>/dev/null || true
@@ -52,11 +61,15 @@ source "${DOTLIB}/_log"    2>/dev/null || true
 # Mirrors _coord's _COORD_CLASS; sourcing _coord just for it would drag in
 # its dependencies.
 declare -g _DESK_SKIP_CLASS="coord"
-declare -gi _DESK_MAX_ICONS=3
 declare -g _DESK_GAP="%{O8}"   # polybar offset between desktop cells
 declare -g _DESK_KEEP_NAME="0"
 declare -g _DESK_SETTLE="${DESK_SETTLE:-0.05}"
 declare -gi _DESK_IDLE="${DESK_IDLE:-10}"
+# Seconds per icon on a rotating cell; fractions work (1.5).
+declare -g _DESK_ROTATE="${DESK_ROTATE:-1}"
+[[ "$_DESK_ROTATE" == (<->|<->.<->|.<->) ]] && (( _DESK_ROTATE > 0 )) || _DESK_ROTATE=1
+# Set by _desk-render: 1 when some cell has more than one glyph to rotate.
+declare -gi _DESK_ROTATING=0
 # Urgency has no event of its own; bspwm only reports it through `report`.
 typeset -ga _DESK_EVENTS=(
     desktop_add desktop_remove desktop_rename desktop_swap desktop_transfer
@@ -136,7 +149,6 @@ typeset -gA _DESK_MODE_ICONS=(
     [fullscreen]=$''             # fa-window_maximize
     [sticky]=$''                 # fa-sticky_note
 )
-typeset -ga _DESK_SUPERSCRIPTS=('' '²' '³' '⁴' '⁵' '⁶' '⁷' '⁸' '⁹')
 
 # Colours for `bar`. These mirror polybar's [colors] (lavender, red, crust,
 # text, overlay0) because polybar can't interpolate references inside a
@@ -146,8 +158,8 @@ typeset -gA _DESK_BAR_COLORS=(
 )
 
 typeset -gA _DESK_DESCRIPTIONS=(
-    [bar]="Print the polybar strip for [monitor] (default \$DESK_MONITOR, \$HOST_MONITOR, else focused): one cell of app icons per non-empty desktop, focused underlined, urgent as a pill, then the focused desktop's mode and a + cell; [key=#rrggbb ...] overrides the built-in colours: ${(kj:, :)_DESK_BAR_COLORS}"
-    [watch]="Print the strip, then reprint it after each burst of bspc events when it changed, pruning first after desktop focus, node removal or node transfer, and repeat it after ${_DESK_IDLE}s quiet (DESK_IDLE); for a polybar custom/script with tail = true, exits when its reader goes away"
+    [bar]="Print the polybar strip for [monitor] (default \$DESK_MONITOR, \$HOST_MONITOR, else focused): one fixed-width cell per non-empty desktop showing one app icon, rotating through its distinct apps every ${_DESK_ROTATE}s (DESK_ROTATE), focused underlined, urgent as a pill, then the focused desktop's mode and a + cell; [key=#rrggbb ...] overrides the built-in colours: ${(kj:, :)_DESK_BAR_COLORS}"
+    [watch]="Print the strip, then reprint it after each burst of bspc events and on each rotation tick when it changed, pruning first after desktop focus, node removal or node transfer, and repeat it after ${_DESK_IDLE}s unprinted (DESK_IDLE); for a polybar custom/script with tail = true, exits when its reader goes away"
     [new]="Create a desktop named the lowest free integer right after the focused one on the focused monitor and focus it; --take moves the focused window there and follows (not a ${_DESK_SKIP_CLASS} panel)"
     [prune]="Remove every desktop with no nodes at all (hidden windows count) that isn't its monitor's focused desktop, never desktop '${_DESK_KEEP_NAME}' nor a monitor's last; prints the names removed"
 )
@@ -211,19 +223,19 @@ _desk-is-prune-event() {
     [[ "$1" == (desktop_focus|node_remove|node_transfer)(| *) ]]
 }
 
-# ------------------------------
-# Public Functions
-# ------------------------------
-
+# Sets REPLY to the strip and _DESK_ROTATING to whether any cell rotates.
+# Runs in the caller's shell (watch needs _DESK_ROTATING); one tree query.
 # Cell styles stack as in coord-bar: urgent fills the cell, focused adds an
 # underline. Polybar action tags wrap each cell; right-click and scroll are
 # the module's own handlers.
-desk-bar() {
+_desk-render() {
     local _arg _monitor= _tree _line _id _focused _urgent _layout _state _sticky
-    local _win _icon _cell _actions _mode= _out=
-    local -A _color=("${(@kv)_DESK_BAR_COLORS}") _count
-    local -a _f _w _order _icons _cells _modes
+    local _win _icon _cell _mode=
+    local -i _tick
+    local -A _color=("${(@kv)_DESK_BAR_COLORS}")
+    local -a _f _w _order _cells _modes
 
+    _DESK_ROTATING=0
     for _arg in "$@"; do
         if [[ "$_arg" =~ '^([a-z]+)=(#[0-9A-Fa-f]{6,8})$' ]]; then
             (( ${+_color[${match[1]}]} )) && _color[${match[1]}]=${match[2]}
@@ -233,32 +245,31 @@ desk-bar() {
     done
 
     _tree=$(_desk-tree "$_monitor") || { log-error "[desk] bspwm not reachable"; return 1; }
+    (( _tick = EPOCHREALTIME / _DESK_ROTATE ))
 
     for _line in ${(f)"$(jq -r --arg skip "$_DESK_SKIP_CLASS" "$_DESK_JQ_BAR" <<<"$_tree")"}; do
         _f=("${(@ps:\t:)_line}")
         _id=$(_desk-hex "${_f[1]}")
         _focused=${_f[2]} _urgent=${_f[3]} _layout=${_f[4]} _state=${_f[5]} _sticky=${_f[6]}
 
-        _order=() _count=() _icons=()
+        # Distinct glyphs in first-appearance order, so the rotation is
+        # stable while the desktop's windows don't change.
+        _order=()
         for _win in "${(@)_f[7,-1]}"; do
             _w=("${(@ps:\x1f:)_win}")
             _desk-icon "${_w[1]}" "${_w[2]}" "${_w[3]}"
-            (( ${+_count[$REPLY]} )) || _order+=("$REPLY")
-            (( ++_count[$REPLY] ))
+            (( ${_order[(Ie)$REPLY]} )) || _order+=("$REPLY")
         done
 
-        if (( ${#_order} == 0 )); then
-            (( _focused )) || continue
-            _icons=("$_DESK_ICON_EMPTY")
-        else
-            # Guarded: a quoted range of an empty array is one empty word.
-            for _icon in "${(@)_order[1,_DESK_MAX_ICONS]}"; do
-                _icons+=("${_icon}${_DESK_SUPERSCRIPTS[${_count[$_icon]}]-⁹⁺}")
-            done
-        fi
-        (( ${#_order} > _DESK_MAX_ICONS )) && _icons+=("+$(( ${#_order} - _DESK_MAX_ICONS ))")
+        case ${#_order} in
+            0) (( _focused )) || continue
+               _icon=$_DESK_ICON_EMPTY ;;
+            1) _icon=${_order[1]} ;;
+            *) _icon=${_order[_tick % ${#_order} + 1]}
+               _DESK_ROTATING=1 ;;
+        esac
 
-        _cell=" ${(j: :)_icons} "
+        _cell=" ${_icon} "
         (( _urgent )) && _cell="%{B${_color[urgent]}}%{F${_color[ink]}}${_cell}%{F-}%{B-}"
         (( _focused )) && _cell="%{u${_color[focused]}}%{+u}${_cell}%{-u}"
         _cells+=("%{A1:bspc desktop -f ${_id}:}%{A2:bspc node -d ${_id}:}${_cell}%{A}%{A}")
@@ -272,9 +283,17 @@ desk-bar() {
         fi
     done
 
-    _out="${(pj:$_DESK_GAP:)_cells}${_mode}"
-    _out+="%{A1:desk new:}%{A2:desk new --take:}%{F${_color[dim]}} ${_DESK_ICON_NEW} %{F-}%{A}%{A}"
-    print -r -- "$_out"
+    REPLY="${(pj:$_DESK_GAP:)_cells}${_mode}"
+    REPLY+="%{A1:desk new:}%{A2:desk new --take:}%{F${_color[dim]}} ${_DESK_ICON_NEW} %{F-}%{A}%{A}"
+}
+
+# ------------------------------
+# Public Functions
+# ------------------------------
+
+desk-bar() {
+    _desk-render "$@" || return 1
+    print -r -- "$REPLY"
 }
 
 desk-prune() {
@@ -328,8 +347,12 @@ desk-new() {
     fi
 }
 
+# Each redraw, event burst or rotation tick alike, costs one `bspc query -T`
+# and one jq; a rotation tick happens once per _DESK_ROTATE seconds and only
+# while some desktop has two or more glyphs.
 desk-watch() {
-    local _pid _event _line _last= _prune
+    local _pid _event _last= _prune _wait
+    local -i _printed
 
     coproc bspc subscribe "${_DESK_EVENTS[@]}"
     _pid=$!
@@ -338,29 +361,39 @@ desk-watch() {
     trap "kill $_pid 2>/dev/null" EXIT
     trap "kill $_pid 2>/dev/null; exit 0" TERM INT HUP PIPE
 
-    _last=$(desk-bar "$@") || return 1
+    _desk-render "$@" || return 1
+    _last=$REPLY _printed=$EPOCHSECONDS
     print -r -- "$_last" 2>/dev/null || return 0
 
     while :; do
-        if ! read -r -p -t "$_DESK_IDLE" _event; then
-            # Timeout or subscribe gone. A closed stdout only shows on a
-            # write and an unchanged bar never writes, so a quiet spell
-            # rewrites the same line: a reader that went away (polybar
-            # killed with SIGKILL can't signal us) ends us within
-            # _DESK_IDLE seconds instead of on the next change.
-            kill -0 "$_pid" 2>/dev/null || return 0
-            print -r -- "$_last" 2>/dev/null || return 0
-            continue
-        fi
+        _wait=$_DESK_IDLE
+        # Sleep to just past the next tick boundary, so the clock-derived
+        # index has moved on when we redraw.
+        (( _DESK_ROTATING )) && (( _wait = _DESK_ROTATE - EPOCHREALTIME % _DESK_ROTATE + 0.01 ))
         _prune=0
-        _desk-is-prune-event "$_event" && _prune=1
-        while read -r -p -t "$_DESK_SETTLE" _event; do
+        if read -r -p -t "$_wait" _event; then
             _desk-is-prune-event "$_event" && _prune=1
-        done
+            while read -r -p -t "$_DESK_SETTLE" _event; do
+                _desk-is-prune-event "$_event" && _prune=1
+            done
+        else
+            # Timeout or subscribe gone. Without a rotation, a timeout is
+            # only the _DESK_IDLE repeat below and needs no fresh query.
+            kill -0 "$_pid" 2>/dev/null || return 0
+            if (( ! _DESK_ROTATING )); then
+                print -r -- "$_last" 2>/dev/null || return 0
+                _printed=$EPOCHSECONDS
+                continue
+            fi
+        fi
         (( _prune )) && desk-prune >/dev/null
-        _line=$(desk-bar "$@") || continue
-        [[ "$_line" == "$_last" ]] && continue
-        print -r -- "$_line" 2>/dev/null || return 0
-        _last=$_line
+        _desk-render "$@" || continue
+        # A closed stdout only shows on a write and an unchanged bar never
+        # writes, so a line unprinted for _DESK_IDLE seconds is repeated: a
+        # reader that went away (polybar killed with SIGKILL can't signal
+        # us) ends us then instead of on the next change.
+        [[ "$REPLY" == "$_last" ]] && (( EPOCHSECONDS - _printed < _DESK_IDLE )) && continue
+        print -r -- "$REPLY" 2>/dev/null || return 0
+        _last=$REPLY _printed=$EPOCHSECONDS
     done
 }
