@@ -4,8 +4,7 @@
 #
 # Audio profile detection and device metadata (battery, RSSI, type, alias) -
 # split out of _bluetooth because it's a self-contained "parse bluetoothctl
-# info output" concern with no coupling to the rest of the module, the same
-# way _remote's config/filters/patterns are split out of _remote.
+# info output" concern with no coupling to the rest of the module.
 #
 # Not meant to be sourced standalone: every function here calls
 # _bluetooth-init/_bluetooth-exec/bluetooth-validate-mac/bluetooth-device-info,
