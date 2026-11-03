@@ -2373,6 +2373,206 @@ _theme-wallpaper-restore() {
     log-success "[theme] wallpaper ${wall/#$HOME/~}"
 }
 
+# Generated sources, with the matugen stub first on PATH (theme-self-test):
+# the fixture's shape, colour and image sources, the cache, the knobs,
+# mode, --keep-palette, hue anchoring, next/previous/random and failures.
+# Called from _theme-self-test-run, whose ok/bad and counters it uses.
+_theme-self-test-generated() {
+    local scratch=$1 calls="$1/matugen-calls" fx=$THEME_SELFTEST_FIXTURE raw out id before k rc
+    local w1="$scratch/walls/0001.png" w2="$scratch/walls/0002.png" w10="$scratch/walls/0010.png" wbeach="$scratch/pics/beach.png"
+    local -i n
+    local -a bl args
+    print -r -- "  generated sources (matugen stub: $fx)"
+    _theme-cache-dir
+    [[ "$REPLY" == "$scratch/cache" && "$(whence -p matugen)" == "$scratch/mbin/matugen" ]] ||
+        { bad "matugen stub or scratch cache not in place; generated sources not exercised"; return 0; }
+
+    # The installed matugen gives what the fixture (captured from 4.2.0) has.
+    if [[ -x "${THEME_SELFTEST_REAL_MATUGEN:-}" ]]; then
+        out=$(PATH="${THEME_SELFTEST_REAL_MATUGEN:h}:$PATH" _THEME_SRC_VARIANT=scheme-tonal-spot _THEME_SRC_CONTRAST=0 \
+              _theme-matugen-run "$scratch/real.json" color hex '#6750a4' 2>&1 && jq -c . "$scratch/real.json")
+        [[ -n "$out" && "$out" == "$(_THEME_SRC_VARIANT=scheme-tonal-spot _THEME_SRC_CONTRAST=0 \
+                 _theme-matugen-run "$scratch/stub.json" color hex '#6750a4' && jq -c . "$scratch/stub.json")" ]] &&
+            ok "installed $("$THEME_SELFTEST_REAL_MATUGEN" --version) matches the 4.2 fixture for #6750a4 (every role, both modes)" ||
+            bad "installed matugen differs from the 4.2 fixture: ${out[1,300]}"
+        rm -f -- "$calls"
+    else
+        ok "matugen not installed: real-output check skipped (the stub covers the rest)"
+    fi
+
+    # colour: roles from the fixture's dark scheme; a full ANSI set.
+    theme-apply colour:#6750a4 2>"$scratch/err"; rc=$?
+    _theme-source-current
+    [[ $rc == 0 && "${THEME_META[name]} ${THEME_META[source]} ${THEME_META[mode]}" == "colour:#6750a4 colour:#6750a4 dark" &&
+       "${THEME_ROLE[bg]} ${THEME_ROLE[fg]} ${THEME_ROLE[accent]} ${THEME_ROLE[urgent]}" == \
+       "$(jq -r '.colors | [.surface, .on_surface, .primary, .error] | map(.dark.color) | join(" ")' "$fx")" &&
+       "${THEME_PALETTE[m3-primary]}" == "${THEME_ROLE[accent]}" ]] &&
+        ok "apply colour:#6750a4: bg/fg/accent/urgent = surface/on_surface/primary/error (dark), m3-* names kept" ||
+        bad "apply colour: rc $rc, ${THEME_META[name]} ${THEME_META[source]}, roles ${THEME_ROLE[bg]} ${THEME_ROLE[fg]} ${THEME_ROLE[accent]} ${THEME_ROLE[urgent]}: $(<"$scratch/err")"
+    local -a weak=()
+    local -F hue
+    # THEME_ANSI is 1-based: [2] is ansi 1 (red), [3] green, [5] blue.
+    local -A win=([2]='330 40' [3]='100 170' [5]='235 285')
+    for k in {2..7} {10..15}; do
+        colour-contrast "${THEME_ANSI[k]}" "${THEME_ROLE[bg]}"
+        (( REPLY >= _THEME_MIN_ANSI )) || weak+=("ansi$(( k - 1 ))=${THEME_ANSI[k]}")
+    done
+    for k in 2 3 5; do
+        colour-to-oklch "${THEME_ANSI[k]}"; hue=${reply[3]}
+        _theme-hue-in $hue ${=win[$k]} || weak+=("ansi$(( k - 1 )) hue $hue")
+    done
+    (( ${#THEME_ANSI} == 16 && ! ${#weak} )) &&
+        ok "colour source ANSI: 16 colours; 1-6 and 9-14 >= $_THEME_MIN_ANSI on bg; red, green and blue keep their hues" ||
+        bad "colour source ANSI (${#THEME_ANSI}): ${weak[*]}"
+
+    # The cache: the same colour and knobs never run matugen again.
+    n=$(wc -l < "$calls")
+    theme-apply colour:#6750a4 2>/dev/null
+    theme-check '#6750A4' >/dev/null 2>&1
+    (( $(wc -l < "$calls") == n )) && [[ "$(<"$calls")" == *"color hex #6750a4 -t scheme-tonal-spot --contrast 0 --json hex --dry-run"* ]] &&
+        ok "colour cache hit: apply and check again (#6750A4 too) run matugen 0 more times; first run had -t scheme-tonal-spot --contrast 0 --json hex --dry-run" ||
+        bad "colour cache: $n -> $(wc -l < "$calls") matugen runs: $(<"$calls")"
+    theme-apply colour:#6750a4 --variant vibrant --contrast 0.5 2>/dev/null
+    (( $(wc -l < "$calls") == n + 1 )) && [[ "$(tail -n 1 "$calls")" == *"-t scheme-vibrant --contrast 0.5 "* &&
+       "$(jq -r '[.source.variant, .source.contrast] | join(" ")' "$_THEME_STATE/current/spec.json")" == "scheme-vibrant 0.5" ]] &&
+        ok "--variant vibrant --contrast 0.5: a new matugen run, recorded in spec.source" ||
+        bad "variant/contrast knobs: $(tail -n 1 "$calls")"
+    rc=
+    for args in "colour:#12345" "colour:#123456 --variant bogus" "colour:#123456 --contrast 3" "colour:#123456 --mode dusk"; do
+        theme-apply ${=args} 2>/dev/null; rc+="$? "
+    done
+    theme-apply colour:#123456 --hue 3 2>/dev/null; rc+="$?"
+    [[ "$rc" == "1 1 1 1 2" ]] && ok "bad colour, variant, contrast, mode and an unknown option fail before matugen runs" ||
+        bad "bad generated inputs: exit codes $rc"
+
+    # image: theme wallpaper generates the colours; a 512px thumbnail; the
+    # cache is keyed by content, so an identical file under another name hits.
+    _theme-link-id current; before=$REPLY
+    n=$(wc -l < "$calls")
+    theme-wallpaper 2 2>"$scratch/err"; rc=$?
+    _theme-source-current
+    local sha=${"$(sha256sum "$w2")"%% *}
+    [[ $rc == 0 && "${THEME_META[source]}" == "image:$w2" && "${THEME_META[wallpaper]}" == "$w2" &&
+       "${THEME_META[name]}" == image:0002 && -s "$scratch/cache/thumbs/$sha.png" &&
+       -s "$scratch/cache/sources/$sha-tonal-spot-0.json" && "$(tail -n 1 "$calls")" == *" image $scratch/cache/thumbs/$sha.png --source-color-index 0 "* ]] &&
+        ok "wallpaper 2: colours from the image (image:0002), thumbs/<sha256>.png, sources/<sha256>-tonal-spot-0.json" ||
+        bad "wallpaper 2 with palette: rc $rc, ${THEME_META[source]}, $(tail -n 1 "$calls"): $(<"$scratch/err")"
+    theme-wallpaper 10 2>/dev/null; theme-wallpaper 2 2>/dev/null
+    _theme-source-current
+    (( $(wc -l < "$calls") == n + 1 )) && [[ "${THEME_META[source]}" == "image:$w2" ]] &&
+        ok "image cache hit: 0010 (same pixels as 0002) and 0002 again run matugen 0 more times" ||
+        bad "image cache: $n -> $(wc -l < "$calls") runs"
+    theme-wallpaper 2 2>/dev/null
+    (( $(wc -l < "$calls") == n + 1 )) && ok "wallpaper 2 again with its own colours: nothing rebuilt" || bad "wallpaper 2 again re-ran matugen"
+    theme-wallpaper beach 2>/dev/null
+    (( $(wc -l < "$calls") == n + 2 )) && ok "beach (other pixels): one new matugen run" || bad "beach: $(wc -l < "$calls") runs"
+
+    # --keep-palette over an image build: same colours and source.
+    local roles=$(jq -c '[.roles, .source]' "$_THEME_STATE/current/spec.json")
+    theme-wallpaper 1 --keep-palette 2>/dev/null
+    [[ "$(jq -c '[.roles, .source]' "$_THEME_STATE/current/spec.json")" == "$roles" && "$(theme-get wallpaper)" == "$w1" ]] &&
+        ok "wallpaper 1 --keep-palette: beach's colours and source kept, wallpaper 0001" ||
+        bad "--keep-palette over an image build: $(jq -c .source "$_THEME_STATE/current/spec.json")"
+
+    # mode: overrides.json, the light scheme, the wallpaper kept; toggle back.
+    theme-mode light 2>/dev/null
+    _theme-source-current
+    [[ "${THEME_META[mode]} ${THEME_ROLE[bg]}" == "light $(jq -r .colors.surface.light.color "$fx")" &&
+       "$(jq -r .mode "$_THEME_STATE/overrides.json")" == light && "${THEME_META[wallpaper]}" == "$w1" &&
+       "${THEME_META[source]}" == "image:$wbeach" && "$(theme-mode)" == light ]] &&
+        ok "mode light: beach regenerated light (bg = light surface), wallpaper 0001 kept, overrides.json mode light" ||
+        bad "mode light: ${THEME_META[mode]} bg ${THEME_ROLE[bg]} wallpaper ${THEME_META[wallpaper]}"
+    theme-apply colour:#6750a4 2>/dev/null
+    [[ "$(theme-get mode)" == light ]] && ok "a new colour source follows the mode preference (light)" ||
+        bad "colour after mode light: $(theme-get mode)"
+    theme-mode toggle 2>/dev/null
+    [[ "$(theme-get mode)" == dark ]] && ok "mode toggle: back to dark" || bad "mode toggle: $(theme-get mode)"
+    theme-apply catppuccin-mocha 2>/dev/null; theme-mode light 2>/dev/null
+    [[ "$(theme-get name)" == catppuccin-latte ]] && ok "mode light on catppuccin-mocha follows x-pair to catppuccin-latte" ||
+        bad "mode light on mocha: $(theme-get name)"
+    theme-apply nord 2>/dev/null; theme-mode light 2>/dev/null; rc=$?
+    [[ $rc == 0 && "$(theme-get name)" == nord ]] && ok "mode light on nord (no x-pair): nord stays" || bad "mode light on nord: rc $rc $(theme-get name)"
+    theme-mode purple 2>/dev/null; rc=$?
+    (( rc == 2 )) && ok "mode purple: usage error" || bad "mode purple: rc $rc"
+    rm -f -- "$_THEME_STATE/overrides.json"
+
+    # Hue anchoring: a scheme whose red is blue, orange grey and green pink.
+    sed -e 's/^  base08: .*/  base08: "#5c7cfa"/' -e 's/^  base09: .*/  base09: "#8a8a8a"/' \
+        -e 's/^  base0B: .*/  base0B: "#f06595"/' -e '/^slug:/d' "$_THEME_CONFIG/schemes/catppuccin-mocha.yaml" > "$scratch/off-hue.yaml"
+    theme-check "$scratch/off-hue.yaml" > "$scratch/check" 2>&1; rc=$?
+    _theme-load-source "$scratch/off-hue.yaml" && _theme-resolve
+    local -a bad_hue=()
+    for k in urgent busy ok; do
+        colour-to-oklch "${_THEME_ROLE[$k]}"
+        _theme-hue-in ${reply[3]} ${=_THEME_HUE_WINDOW[$k]} || bad_hue+=("$k ${_THEME_ROLE[$k]} ${reply[3]}")
+    done
+    [[ $rc == 0 && "${_THEME_ANCHORED[*]}" == "urgent busy ok" && ${#bad_hue} -eq 0 ]] &&
+       grep -q 'anchored: urgent, busy, ok' "$scratch/check" && grep -q 'busy: #8a8a8a is too grey' "$scratch/check" &&
+        ok "anchoring: blue urgent, grey busy, pink ok -> red ${_THEME_ROLE[urgent]}, orange ${_THEME_ROLE[busy]}, green ${_THEME_ROLE[ok]} (in their windows, noted)" ||
+        bad "anchoring: rc $rc anchored '${_THEME_ANCHORED[*]}' ${bad_hue[*]}"
+    _theme-load-source catppuccin-mocha && _theme-resolve
+    (( ! ${#_THEME_ANCHORED} )) && ok "anchoring leaves catppuccin-mocha alone" || bad "mocha anchored: ${_THEME_ANCHORED[*]}"
+
+    # next/previous/random over the images (fake.png skipped), with wrap;
+    # schemes of the current mode.
+    theme-wallpaper 10 --keep-palette 2>/dev/null
+    local walk=
+    theme-next --keep-palette 2>/dev/null;     walk+="${$(theme-get wallpaper):t:r} "
+    theme-next --keep-palette 2>/dev/null;     walk+="${$(theme-get wallpaper):t:r} "
+    theme-previous --keep-palette 2>/dev/null; walk+="${$(theme-get wallpaper):t:r} "
+    theme-previous --keep-palette 2>/dev/null; walk+="${$(theme-get wallpaper):t:r}"
+    [[ "$walk" == "beach 0001 beach 0010" ]] && ok "next/previous wallpapers from 0010: beach, 0001 (wrapped past fake.png), beach, 0010" ||
+        bad "wallpaper walk: $walk"
+    theme-next 2>/dev/null
+    [[ "$(theme-get source)" == "image:$wbeach" ]] && ok "next without --keep-palette: beach with its own colours" ||
+        bad "next with palette: $(theme-get source)"
+    local seen=
+    for k in 1 2 3 4 5 6; do
+        before=$(theme-get wallpaper)
+        theme-random --keep-palette 2>/dev/null
+        [[ "$(theme-get wallpaper)" == "$before" ]] && seen+="repeat "
+    done
+    [[ -z "$seen" ]] && ok "random: never the current wallpaper (6 tries)" || bad "random repeated: $seen"
+    theme-apply catppuccin-mocha 2>/dev/null
+    walk=
+    theme-next schemes 2>/dev/null;     walk+="$(theme-get name) "
+    theme-apply tokyo-night 2>/dev/null
+    theme-next schemes 2>/dev/null;     walk+="$(theme-get name) "
+    theme-previous schemes 2>/dev/null; walk+="$(theme-get name) "
+    theme-apply gruvbox-light 2>/dev/null
+    theme-next schemes 2>/dev/null;     walk+="$(theme-get name)"
+    [[ "$walk" == "dracula catppuccin-frappe tokyo-night rose-pine-dawn" ]] &&
+        ok "next/previous schemes keep to the mode: mocha -> dracula, tokyo-night -> frappe (wrap) -> tokyo-night; gruvbox-light -> rose-pine-dawn" ||
+        bad "scheme walk: $walk"
+    theme-next schemes --keep-palette 2>/dev/null; rc=$?
+    theme-next sideways 2>/dev/null; rc+=" $?"
+    [[ "$rc" == "2 2" ]] && ok "next schemes --keep-palette and next sideways: usage errors" || bad "walk usage: $rc"
+
+    # matugen failing or missing: nothing is swapped in.
+    _theme-link-id current; before=$REPLY
+    bl=("$_THEME_STATE"/builds/*(N/)); n=${#bl}
+    THEME_SELFTEST_MATUGEN_FAIL=1 theme-apply colour:#abcdef 2>"$scratch/err"; rc=$?
+    THEME_MATUGEN="$scratch/none/matugen" theme-apply colour:#fedcba 2>>"$scratch/err"; rc+=" $?"
+    _theme-link-id current
+    bl=("$_THEME_STATE"/builds/*(N/))
+    [[ "$rc" == "1 1" && "$REPLY" == "$before" && ${#bl} -eq $n ]] && grep -q 'matugen failed: stub failure' "$scratch/err" &&
+       grep -q "matugen isn't installed" "$scratch/err" &&
+        ok "matugen failing, or not installed: apply fails with a message, current unchanged" ||
+        bad "matugen failure: rc $rc, current $REPLY (was $before): $(<"$scratch/err")"
+
+    # A generated build missing an output is re-rendered from its source,
+    # with its mode and knobs, on apply <id>.
+    theme-apply colour:#6750a4 --mode light --variant vibrant 2>/dev/null
+    _theme-link-id current; id=$REPLY
+    rm -f -- "$_THEME_STATE/builds/$id/polybar.ini"
+    theme-apply nord 2>/dev/null; theme-apply "$id" 2>/dev/null
+    _theme-source-current
+    [[ "$(jq -r '[.source.kind, .source.ref, .mode, .source.variant] | join(" ")' "$_THEME_STATE/current/spec.json")" == "colour #6750a4 light scheme-vibrant" &&
+       "${THEME_META[id]}" != "$id" && -r "$_THEME_STATE/current/polybar.ini" ]] &&
+        ok "apply <id> of an incomplete colour build re-renders it as colour #6750a4, light, vibrant" ||
+        bad "re-render of a generated build: $(jq -c .source "$_THEME_STATE/current/spec.json")"
+}
+
 # Renders every scheme into a scratch state dir under ~/.cache and checks the
 # swap, undo, rollback and known-good behaviour. The real state is untouched.
 theme-self-test() {
@@ -2387,8 +2587,21 @@ theme-self-test() {
         print -rn -- 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==' |
             base64 -d > "$scratch/$f" || return 1
     done
+    # beach.png has other pixels, so it has its own matugen cache entry.
+    print -rn -- 'iVBORw0KGgoAAAANSUhEUgAAAAIAAAABAQMAAADO7O3JAAAAA1BMVEXAOSuU7d9gAAAACklEQVQI12NgAAAAAgAB4iG8MwAAAABJRU5ErkJggg==' |
+        base64 -d > "$scratch/pics/beach.png" || return 1
     print -r -- 'not an image' > "$scratch/pics/fake.png"
-    ( XDG_STATE_HOME="$scratch/state" THEME_STATE_DIR="$scratch/state/theme" \
+    # matugen is a stub that logs its arguments and prints a captured 4.2
+    # result (tests/), so no test depends on the installed version or an
+    # image; the real one, if any, is checked against the same fixture.
+    _theme-paths
+    local fixture="$_THEME_CONFIG/tests/matugen-4.2-color-6750a4.json"
+    mkdir -p "$scratch/mbin" || return 1
+    print -rl -- '#!/bin/sh' "printf '%s\\n' \"\$*\" >> '$scratch/matugen-calls'" \
+        '[ -n "$THEME_SELFTEST_MATUGEN_FAIL" ] && { echo "stub failure" >&2; exit 1; }' \
+        "cat '$fixture'" > "$scratch/mbin/matugen" && chmod +x "$scratch/mbin/matugen" || return 1
+    ( XDG_STATE_HOME="$scratch/state" THEME_STATE_DIR="$scratch/state/theme" THEME_CACHE_DIR="$scratch/cache" \
+      THEME_SELFTEST_REAL_MATUGEN="$(whence -p matugen)" THEME_SELFTEST_FIXTURE="$fixture" \
       THEME_WALLPAPER_DIRS="$scratch/walls:$scratch/pics:$scratch/missing" _theme-self-test-run "$scratch" )
     local rc=$?
     if [[ -n "${THEME_SELF_TEST_KEEP:-}" ]]; then print -r -- "scratch kept: $scratch"
@@ -2402,6 +2615,7 @@ _theme-self-test-run() {
     local -a schemes
     ok()  { print -r -- "  ✓ $*"; (( pass++ )) || true; }
     bad() { print -r -- "  ✗ $*"; (( failed++ )) || true; }
+    path=("$scratch/mbin" $path)
     _theme-paths
     print -r -- "theme self-test (state: $_THEME_STATE)"
 
@@ -2561,12 +2775,12 @@ _theme-self-test-run() {
         bad "betterlockscreen.sh validator"
     roles_before=$(jq -c '[.roles, .palette, .font, .metrics, .name]' "$cur/spec.json")
     _theme-link-id current; before=$REPLY
-    theme-wallpaper 2 2>/dev/null
+    theme-wallpaper 2 --keep-palette 2>/dev/null
     _theme-link-id current
     [[ "$REPLY" != "$before" && "$(theme-get wallpaper)" == "$w2" &&
        "$(jq -c '[.roles, .palette, .font, .metrics, .name]' "$cur/spec.json")" == "$roles_before" &&
        "$(jq -r .wallpaper "$_THEME_STATE/builds/$before/spec.json")" == "$w1" ]] &&
-        ok "wallpaper 2: a new build with walls/0002.png (first dir over pics/), colours, sizes and name unchanged" ||
+        ok "wallpaper 2 --keep-palette: a new build with walls/0002.png (first dir over pics/), colours, sizes and name unchanged" ||
         bad "wallpaper 2: current $REPLY (was $before), wallpaper $(theme-get wallpaper)"
     grep -qx 'ringcolor=b4befeff' "$cur/betterlockscreen.sh" && grep -qxF "    [wallpaper]='$w2'" "$cur/theme.zsh" &&
         ok "wallpaper 2: betterlockscreen.sh unchanged, theme.zsh THEME_META[wallpaper] updated" ||
@@ -2574,12 +2788,12 @@ _theme-self-test-run() {
     theme-apply nord 2>/dev/null
     [[ "$(theme-get wallpaper)" == "$w2" && "$(jq -r .name "$cur/spec.json")" == nord ]] &&
         ok "apply nord keeps the wallpaper (0002)" || bad "apply nord: wallpaper $(theme-get wallpaper)"
-    theme-wallpaper beach 2>/dev/null; wb=$(theme-get wallpaper)
-    theme-wallpaper 0010.png 2>/dev/null
+    theme-wallpaper beach --keep-palette 2>/dev/null; wb=$(theme-get wallpaper)
+    theme-wallpaper 0010.png --keep-palette 2>/dev/null
     [[ "$wb" == "$wbeach" && "$(theme-get wallpaper)" == "$w10" ]] &&
         ok "wallpaper by name from the second dir (beach) and by file name (0010.png)" ||
         bad "wallpaper beach -> $wb, 0010.png -> $(theme-get wallpaper)"
-    theme-wallpaper "$w1" 2>/dev/null && [[ "$(theme-get wallpaper)" == "$w1" ]] &&
+    theme-wallpaper "$w1" --keep-palette 2>/dev/null && [[ "$(theme-get wallpaper)" == "$w1" ]] &&
         ok "wallpaper by absolute path" || bad "wallpaper by path: $(theme-get wallpaper)"
     _theme-link-id current; before=$REPLY
     bl=("$_THEME_STATE"/builds/*(N/)); nb=${#bl}
@@ -2653,10 +2867,10 @@ _theme-self-test-run() {
             ok "restore again: feh only, the lock cache is already from this wallpaper" ||
             bad "second restore calls: ${(f)$(<"$calls")}"
         : >| "$calls"
-        theme-wallpaper 2 >/dev/null 2>&1; _wait-cached "$w2"
+        theme-wallpaper 2 --keep-palette >/dev/null 2>&1; _wait-cached "$w2"
         out=$(<"$calls")
         [[ "$out" == "feh --no-fehbg --bg-fill $w2"$'\n'"betterlockscreen -u $w2" ]] &&
-            ok "wallpaper 2: feh and one lock cache refresh; no other target reloaded" ||
+            ok "wallpaper 2 --keep-palette: feh and one lock cache refresh; no other target reloaded" ||
             bad "wallpaper 2 calls: ${(f)out}"
         : >| "$calls"
         theme-apply dracula >/dev/null 2>&1; sleep 0.3
@@ -2669,6 +2883,9 @@ _theme-self-test-run() {
     )
     local -a wcounts=(${=$(<"$scratch/wall-counts")})
     (( pass += wcounts[1], failed += wcounts[2] )) || true
+    theme-apply catppuccin-mocha 2>/dev/null
+
+    _theme-self-test-generated "$scratch"
     theme-apply catppuccin-mocha 2>/dev/null
 
     # polybar includes ~/.local/state/theme only; a scratch state never restarts it.
