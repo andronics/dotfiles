@@ -1,7 +1,0 @@
-# The brain's tool wrappers (andronics/brain bin/), only on hosts that mount
-# the brain. Appended, so ~/.local/bin (put first by /etc/profile.d) and the
-# system dirs win: the ~/.local/bin/vault-query link stays the one that runs.
-export BRAIN_BIN="${BRAIN_BIN:-/mnt/brain/bin}"
-if [[ -d $BRAIN_BIN ]] && (( ! ${path[(Ie)$BRAIN_BIN]} )); then
-    path+=("$BRAIN_BIN")
-fi
