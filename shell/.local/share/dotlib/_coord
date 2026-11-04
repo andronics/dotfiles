@@ -301,24 +301,25 @@ _coord-wait() {
 }
 
 _coord-width-clamp() {
+    [[ "$1" =~ '^-?[0-9]+$' ]] || { log-error "[coord] width-clamp: not a number: '$1'"; return 1; }
     local -i _width=$1
     (( _width < _COORD_WIDTH_MIN )) && _width=_COORD_WIDTH_MIN
     (( _width > _COORD_WIDTH_MAX )) && _width=_COORD_WIDTH_MAX
-    print -r -- "$_width"
+    print -r -- "$_width" || { log-error "[coord] width-clamp: could not write ${_width} to stdout"; return 1; }
 }
 
 _coord-width-get() {
     local _width
     _width=$(<"$_COORD_WIDTH_FILE") 2>/dev/null
     [[ "$_width" =~ '^[0-9]+$' ]] || _width=$_COORD_WIDTH_DEFAULT
-    _coord-width-clamp "$_width"
+    _coord-width-clamp "$_width" || { log-error "[coord] width-get: could not print the width (${_width})"; return 1; }
 }
 
 _coord-side-get() {
     local _side
     _side=$(<"$_COORD_SIDE_FILE") 2>/dev/null
     [[ "$_side" == (left|right) ]] || _side=$_COORD_SIDE_DEFAULT
-    print -r -- "$_side"
+    print -r -- "$_side" || { log-error "[coord] side-get: could not write ${_side} to stdout"; return 1; }
 }
 
 # Prints the last coordinator shown, if it is still in _COORD_NAMES under
@@ -347,10 +348,11 @@ _coord-current() {
 # stale one. Sets the caller's _fd; the caller closes it.
 _coord-lock() {
     local _lock="${_COORD_LOCK_DIR}/coord-$1.lock"
-    exec {_fd}>"$_lock"
+    { exec {_fd}>"$_lock" } 2>/dev/null || { _fd=; log-error "[coord] lock: cannot open $_lock"; return 1; }
     flock -w "$_COORD_LAUNCH_TIMEOUT" "$_fd" && return 0
     exec {_fd}>&-
-    log-error "[coord] $1 lock busy"
+    _fd=
+    log-error "[coord] $1 lock busy after ${_COORD_LAUNCH_TIMEOUT}s ($_lock)"
     return 1
 }
 
@@ -431,9 +433,13 @@ _coord-place() {
     local _node=$1 _width=$2 _side=$3 _mon=${4:-} _other _layout _gapless
     local -i _mx _my _mw _mh _top _bottom _dtop _dbottom _gap _bw _fx _fy _fw _fh _x _y _w _h
 
-    [[ -n "$_mon" ]] || _mon=$(bspc query -M -m focused) || return 1
+    if [[ -z "$_mon" ]]; then
+        _mon=$(bspc query -M -m focused) && [[ -n "$_mon" ]] \
+            || { log-error "[coord] place: no focused monitor for $_node"; return 1; }
+    fi
     if [[ "$(bspc query -M -n "$_node")" != "$_mon" ]]; then
-        bspc node "$_node" --to-monitor "$_mon" || return 1
+        bspc node "$_node" --to-monitor "$_mon" \
+            || { log-error "[coord] place: cannot move $_node to monitor $_mon"; return 1; }
     fi
 
     read -r _mx _my _mw _mh <<< "$(bspc query -T -m "$_mon" \
@@ -463,24 +469,41 @@ _coord-place() {
     _w=$(( _width - 2 * _bw ))
     _h=$(( _mh - _top - _bottom - _dtop - _dbottom - 2 * _gap - 2 * _bw ))
 
+    # A failed move or resize leaves the panel off its strip until the guard's
+    # next re-dock, so it is logged but not fatal; the padding is what keeps
+    # tiled windows out of the strip.
     if (( _w != _fw || _h != _fh )); then
-        bspc node "$_node" --resize bottom_right $(( _w - _fw )) $(( _h - _fh ))
+        bspc node "$_node" --resize bottom_right $(( _w - _fw )) $(( _h - _fh )) \
+            || log-warn "[coord] place: cannot resize $_node to ${_w}x${_h}"
     fi
     if (( _x != _fx || _y != _fy )); then
-        bspc node "$_node" --move $(( _x - _fx )) $(( _y - _fy ))
+        bspc node "$_node" --move $(( _x - _fx )) $(( _y - _fy )) \
+            || log-warn "[coord] place: cannot move $_node to ${_x},${_y}"
     fi
     # The new side is padded before the old one is released, so re-docking
     # never lets tiled windows reflow through the full monitor width.
-    bspc config -m "$_mon" "${_side}_padding" $(( _width + _gap ))
-    [[ "$(bspc config -m "$_mon" "${_other}_padding")" == 0 ]] || bspc config -m "$_mon" "${_other}_padding" 0
+    bspc config -m "$_mon" "${_side}_padding" $(( _width + _gap )) \
+        || { log-error "[coord] place: cannot set ${_side}_padding $(( _width + _gap )) on $_mon"; return 1; }
+    if [[ "$(bspc config -m "$_mon" "${_other}_padding")" != 0 ]]; then
+        bspc config -m "$_mon" "${_other}_padding" 0 \
+            || { log-error "[coord] place: cannot release ${_other}_padding on $_mon"; return 1; }
+    fi
+    return 0
 }
 
 # Re-places every shown coordinator on its own monitor.
 _coord-redock() {
-    local _width=$1 _side=$2 _node _instance
+    local _width=$1 _side=$2 _node _instance _mon
+    local -i _failed=0
+    # The loop is the pipeline's last element, so it runs in this shell and
+    # _failed survives it.
     _coord-windows '.!hidden' | while read -r _node _instance; do
-        _coord-place "$_node" "$_width" "$_side" "$(bspc query -M -n "$_node")"
+        _mon=$(bspc query -M -n "$_node")
+        [[ -n "$_mon" ]] || { log-error "[coord] redock: no monitor for $_instance ($_node)"; _failed=1; continue; }
+        _coord-place "$_node" "$_width" "$_side" "$_mon" \
+            || { log-error "[coord] redock: cannot place $_instance ($_node) at ${_width} on the ${_side}"; _failed=1; }
     done
+    (( ! _failed ))
 }
 
 # Gives the strip back to tiled windows on every monitor no coordinator is
@@ -1144,10 +1167,10 @@ coord-width() {
             [[ "$_arg" =~ '^[+-]?[0-9]+$' ]] || { log-error "[coord] width: expected +N, -N, N, left [N] or right [N], got '$_arg'"; return 1; } ;;
     esac
 
-    _coord-lock dock || return 1
+    _coord-lock dock || { log-error "[coord] width: cannot take the dock lock"; return 1; }
     {
-        _width=$(_coord-width-get)
-        _side=$(_coord-side-get)
+        _width=$(_coord-width-get) || { log-error "[coord] width: cannot read the width"; return 1; }
+        _side=$(_coord-side-get) || { log-error "[coord] width: cannot read the side"; return 1; }
         case "$_arg" in
             left|right)
                 if [[ "$_arg" == "$_side" ]]; then
@@ -1158,12 +1181,17 @@ coord-width() {
             [+-]*) _width=$(( _width + _arg )) ;;
             *)     _width=$_arg ;;
         esac
-        _width=$(_coord-width-clamp "$_width")
+        _width=$(_coord-width-clamp "$_width") || { log-error "[coord] width: cannot clamp '$_width'"; return 1; }
 
-        mkdir -p "${_COORD_WIDTH_FILE:h}" && print -r -- "$_width" >| "$_COORD_WIDTH_FILE" || return 1
+        { mkdir -p "${_COORD_WIDTH_FILE:h}" && print -r -- "$_width" >| "$_COORD_WIDTH_FILE" } 2>/dev/null \
+            || { log-error "[coord] width: cannot write ${_width} to $_COORD_WIDTH_FILE"; return 1; }
 
-        _coord-redock "$_width" "$_side"
-        print -r -- "$_width"
+        _coord-redock "$_width" "$_side" || { log-error "[coord] width: set to ${_width}, but a shown coordinator was not re-docked"; return 1; }
+        # The new width is printed for a terminal; sxhkd's stdout can be a
+        # pty that has gone away (EIO), and the width is set by then, so a
+        # failed print is not a failed command.
+        print -r -- "$_width" 2>/dev/null || log-debug "[coord] width: stdout not writable, ${_width} not printed"
+        return 0
     } always {
         exec {_fd}>&-
     }
@@ -1179,9 +1207,12 @@ coord-side() {
 
     _coord-lock dock || return 1
     {
-        mkdir -p "${_COORD_SIDE_FILE:h}" && print -r -- "$_side" >| "$_COORD_SIDE_FILE" || return 1
-        _coord-redock "$(_coord-width-get)" "$_side"
-        print -r -- "$_side"
+        { mkdir -p "${_COORD_SIDE_FILE:h}" && print -r -- "$_side" >| "$_COORD_SIDE_FILE" } 2>/dev/null \
+            || { log-error "[coord] side: cannot write ${_side} to $_COORD_SIDE_FILE"; return 1; }
+        _coord-redock "$(_coord-width-get)" "$_side" || { log-error "[coord] side: set to ${_side}, but a shown coordinator was not re-docked"; return 1; }
+        # As in coord-width: sxhkd's stdout may be a dead pty.
+        print -r -- "$_side" 2>/dev/null || log-debug "[coord] side: stdout not writable, ${_side} not printed"
+        return 0
     } always {
         exec {_fd}>&-
     }
