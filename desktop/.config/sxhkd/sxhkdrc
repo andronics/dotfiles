@@ -50,7 +50,7 @@ super + b + {_, alt}
 super + shift + c
   for win in `bspc query -n -n ".leaf.\!window"`; do bspc node $win -k; done
 
-# coordinator - menu: pick one (first letter filters) or Stop all, then show/hide, start, stop, restart
+# coordinator - menu: pick one (type its first letter, or two where one is shared: pl platform, pe personal) or Stop all, then show/hide, start, stop, restart
 super + c
   coord menu
 

@@ -10,7 +10,7 @@
 # vault-query) offers nothing and isn't cached, so it's retried next time.
 #
 # --where values compare links by name (`centre=🧠 Brain`), not by actor
-# slug: `owner=dotfiles-coordinator` matches nothing, so owner= offers actor
+# slug: `owner=desktop-coordinator` matches nothing, so owner= offers actor
 # note names, read with a query. --owner, inbox, prompt and mode take slugs
 # and short names, which --list actors gives.
 

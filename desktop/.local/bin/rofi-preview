@@ -65,6 +65,10 @@ case "$_variant" in
         export DOTLIB="${_repo}/shell/.local/share/dotlib"
         source "${DOTLIB}/_coord" || exit 1
         _coord-colors
+        # Every name in the switchboard's order, home or not, so the preview
+        # shows the full width the menu will need once each has moved.
+        _COORD_NAMES=("${_COORD_LIST[@]}")
+        _coord-keys
         _states=(idle busy waiting off idle off off)
         for _i in {1..${#_COORD_NAMES}}; do
             _shown=

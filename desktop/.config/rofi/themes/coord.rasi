@@ -1,9 +1,11 @@
 /**
  * Coordinator menu, first level (coord menu: super + c, the coord strip's
- * right-click): the launcher's look, sized for eight cells in a row and a
- * second row holding Stop all. Each cell is pango markup from _coord: a large
+ * right-click): the launcher's look, sized for the nine coordinators in a
+ * row and Stop all after them (a second row once all nine have homes; until
+ * then a coordinator not yet moved shows under its former name, and
+ * security, which has none, not at all). Each cell is pango markup from _coord: a large
  * Nerd Font glyph coloured as on the strip (dim not running, peach busy, red
- * pill waiting), the name, and a faint state. Shown coordinators are marked
+ * pill waiting), the name with its filter key underlined, and a faint state. Shown coordinators are marked
  * active: a lavender ring in the selection's shape with a heavier bottom
  * edge, the strip's underline. The second level is themes/prompt.rasi.
  */
@@ -22,14 +24,14 @@ configuration {
 }
 
 /*
- * Cells are (width - 64 padding - 84 spacing) / 8 = 175px, the spacing
- * being seven 12px gaps between eight columns, so 1548px is 64 + 84 + 8 x
+ * Cells are (width - 64 padding - 96 spacing) / 9 = 175px, the spacing
+ * being eight 12px gaps between nine columns, so 1735px is 64 + 96 + 9 x
  * 175 and still fits a 2560px screen. Each cell is 155px inside the
- * element's padding and border: room for "metalayerlab" (132px at 12pt) and
- * "waiting · shown" (135px small).
+ * element's padding and border: room for "network-tools" (143px at 12pt,
+ * measured with pango at 108 dpi) and "waiting · visible" (153px small).
  */
 window {
-    width:               1548px;
+    width:               1735px;
 }
 
 entry {
@@ -37,7 +39,7 @@ entry {
 }
 
 listview {
-    columns:             8;
+    columns:             9;
     lines:               2;
 }
 

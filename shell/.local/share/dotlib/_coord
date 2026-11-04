@@ -3,10 +3,17 @@
 # _coord - coordinator switchboard: one hidden floating terminal per Claude
 # Code coordinator, summoned one at a time.
 #
-# The switchboard order is _COORD_NAMES (brain, template, folio, homelab,
-# metalayerlab, apps, dotfiles, ideas): `menu` lists it in a rofi menu and `cycle`
-# steps through it, wrapping. `toggle`, `stop` and `restart` accept any valid
-# name.
+# The switchboard order is _COORD_LIST (brain, platform, personal, homelab,
+# network-tools, media, desktop, incubator, security): `menu` lists it in a
+# rofi menu, `cycle` steps through it, wrapping, and `bar` draws it. Each
+# coordinator is named after its knowledge centre (the brain's design record
+# 0018), and its home moves to the new name one coordinator at a time, so a
+# name is shown only once it has a home in the actors dir; until then it is
+# shown, run and stopped under its former name if that has one (desktop as
+# dotfiles), and hidden if not (security). _COORD_NAMES is the list as shown.
+# `toggle`, `launch`, `stop`, `restart` and `stopped` accept any valid name,
+# and either of a coordinator's two names acts on the one shown
+# (_COORD_ALIASES; the former names go on 2026-12-04).
 #
 # Menu: `menu` (super + c) is two levels. The first lists every coordinator
 # with its state, as the strip shows it, and a "Stop all" cell; the second
@@ -115,8 +122,33 @@ declare -g _COORD_LAST_FILE="${XDG_STATE_HOME:-$HOME/.local/state}/coord/last"
 # COORD_NAMES, COORD_STATE_DIR and COORD_LOCK_DIR are for tests: .zshenv.d's
 # 05-xdg resets the XDG dirs in every zsh, so moving those alone would still
 # reach the live state and locks.
-typeset -ga _COORD_NAMES=(${=COORD_NAMES:-brain template folio homelab metalayerlab apps dotfiles ideas})
+typeset -ga _COORD_LIST=(${=COORD_NAMES:-brain platform personal homelab network-tools media desktop incubator security})
 declare -g _COORD_ACTORS_DIR="${COORD_ACTORS_DIR:-/pool/local/actors}"
+# Former name -> name (record 0018 §2), for the 30 days its §5 gives them:
+# remove on 2026-12-04, with 55-coordinators' _COORDINATOR_ALIASES. Never
+# listed in the menu, the bar or completions.
+typeset -gA _COORD_ALIASES=(
+    [dotfiles]=desktop
+    [apps]=media
+    [ideas]=incubator
+    [metalayerlab]=network-tools
+    [template]=platform
+    [folio]=personal
+)
+typeset -gA _COORD_FORMER=()
+typeset -ga _COORD_NAMES=()
+() {
+    local _old _new
+    for _old _new in "${(@kv)_COORD_ALIASES}"; do _COORD_FORMER[$_new]=$_old; done
+    for _new in "${_COORD_LIST[@]}"; do
+        _old=${_COORD_FORMER[$_new]:-}
+        if [[ -d "${_COORD_ACTORS_DIR}/${_new}" ]]; then
+            _COORD_NAMES+=("$_new")
+        elif [[ -n "$_old" && -d "${_COORD_ACTORS_DIR}/${_old}" ]]; then
+            _COORD_NAMES+=("$_old")
+        fi
+    done
+}
 declare -g _COORD_STATE_DIR="${COORD_STATE_DIR:-${XDG_RUNTIME_DIR:-$HOME/.cache}/coord/state}"
 declare -g _COORD_LOCK_DIR="${COORD_LOCK_DIR:-${XDG_RUNTIME_DIR:-$HOME/.cache}}"
 declare -gi _COORD_NOTIFY_BODY_MAX=200
@@ -134,14 +166,49 @@ declare -g _COORD_STOP_ICON=$'\U000F0667'   # md-stop_circle_outline
 # Symbols Nerd Font Mono (polybar font-0) Material Design glyphs.
 typeset -gA _COORD_ICONS=(
     [brain]=$'\U000F09D1'          # md-brain
-    [template]=$'\U000F1517'       # md-file_document_multiple
-    [folio]=$'\U000F00D6'          # md-briefcase
+    [platform]=$'\U000F1517'       # md-file_document_multiple
+    [personal]=$'\U000F00D6'       # md-briefcase
     [homelab]=$'\U000F048D'        # md-server_network
-    [metalayerlab]=$'\U000F0F58'   # md-layers_triple
-    [apps]=$'\U000F003B'           # md-apps
-    [dotfiles]=$'\U000F0493'       # md-cog
-    [ideas]=$'\U000F0335'          # md-lightbulb
+    [network-tools]=$'\U000F0F58'  # md-layers_triple
+    [media]=$'\U000F003B'          # md-apps
+    [desktop]=$'\U000F0493'        # md-cog
+    [incubator]=$'\U000F0335'      # md-lightbulb
+    [security]=$'\U000F0306'       # md-key
 )
+# A former name, shown until its home moves, keeps the icon it has now.
+() {
+    local _old
+    for _old in "${(@k)_COORD_ALIASES}"; do
+        _COORD_ICONS[$_old]=${_COORD_ICONS[${_COORD_ALIASES[$_old]}]}
+    done
+}
+
+# What to type in the menu to filter to each shown coordinator: its first
+# letter, or as many as make it unique (pl platform, pe personal).
+typeset -gA _COORD_KEYS=()
+# Fills _COORD_KEYS for the names given (default: those shown) and sets REPLY
+# to them as "b brain, pl platform, ..." for help text.
+_coord-keys() {
+    local _name _other _key
+    local -i _len
+    local -a _names=("${@:-${_COORD_NAMES[@]}}") _list
+    _COORD_KEYS=()
+    for _name in "${_names[@]}"; do
+        [[ -n "$_name" ]] || continue
+        for (( _len = 1; _len <= ${#_name}; _len++ )); do
+            _key=${_name[1,_len]}
+            for _other in "${_names[@]}"; do
+                [[ "$_other" != "$_name" && "$_other" == "${_key}"* ]] && continue 2
+            done
+            break
+        done
+        _COORD_KEYS[$_name]=$_key
+        _list+=("${_key} ${_name}")
+    done
+    REPLY=${(j:, :)_list}
+}
+_coord-keys
+declare -g _COORD_KEYS_HELP=${REPLY:-none shown}
 
 # Colours for `bar` and `menu`: key=theme role. polybar can't interpolate
 # references inside a command, so the hook is a plain `coord bar`, and `bar`
@@ -155,7 +222,7 @@ typeset -gA _COORD_BAR_COLORS=()
 
 typeset -gA _COORD_DESCRIPTIONS=(
     [toggle]="Show <name>'s window docked on the dock side's edge (launching it if needed), or hide it if it is focused"
-    [menu]="Two-level rofi menu: pick one of ${(j:, :)_COORD_NAMES} (shown with its state; type its first letter to filter) or Stop all, then show/hide, start, stop or restart it; Escape on the second level goes back"
+    [menu]="Two-level rofi menu: pick a coordinator (shown with its state; type its key to filter: ${_COORD_KEYS_HELP}; its key is underlined) or Stop all, then show/hide, start, stop or restart it; Escape on the second level goes back"
     [stop]="Stop <name>, or with --all every running coordinator, through the brain's stop script (${_COORD_STOP_SCRIPT:t}), which ends its tmux session; one whose resume notes aren't clean is asked about first with the script's reason, unless --yes (which forces it); what it won't end, such as a session outside tmux, is shown in a notification; a running brain coordinator is always asked about, even with --yes"
     [restart]="Stop <name> as stop does, through the brain's stop script (asking unless --yes or its notes are clean, and always for the brain coordinator), then start it again: shown if it was shown, else hidden"
     [stopped]="The desktop half of a stop, run by the stop script after it ends <name>'s session: drop its strip state, wait for its window to close, give the dock strip back and refresh the bar; works without DISPLAY"
@@ -178,6 +245,17 @@ _coord-check-name() {
     [[ "$1" =~ '^[a-z0-9][a-z0-9-]*$' ]] && return 0
     log-error "[coord] invalid coordinator name: '$1'"
     return 1
+}
+
+# Sets REPLY to the name coordinator $1 is shown and run under: $1 if it is
+# shown, else its other name if that one is (a former name once its home has
+# moved, a new name before it has), else $1 as given.
+_coord-resolve() {
+    REPLY=$1
+    (( ${_COORD_NAMES[(Ie)$1]} )) && return 0
+    local _other=${_COORD_ALIASES[$1]:-${_COORD_FORMER[$1]:-}}
+    [[ -n "$_other" ]] && (( ${_COORD_NAMES[(Ie)$_other]} )) && REPLY=$_other
+    return 0
 }
 
 # Prints "<node> <instance>" for each coord window bspwm manages, narrowed by
@@ -237,11 +315,14 @@ _coord-side-get() {
     print -r -- "$_side"
 }
 
-# Prints the last coordinator shown, if it is still in _COORD_NAMES.
+# Prints the last coordinator shown, if it is still in _COORD_NAMES under
+# either of its names.
 _coord-last-get() {
     local _name
     _name=$(<"$_COORD_LAST_FILE") 2>/dev/null
-    (( ${_COORD_NAMES[(Ie)$_name]} )) && print -r -- "$_name"
+    [[ -n "$_name" ]] || return 0
+    _coord-resolve "$_name"
+    (( ${_COORD_NAMES[(Ie)$REPLY]} )) && print -r -- "$REPLY"
 }
 
 # Prints the shown coordinator, if one in _COORD_NAMES is shown.
@@ -492,9 +573,16 @@ _coord-guard-tick() {
 # Public
 # ------------------------------
 
+# A name with no home launches nothing, rather than a window whose
+# _coordinator says so.
 coord-launch() {
     local _name=$1
     _coord-check-name "$_name" || return 1
+    _coord-resolve "$_name"; _name=$REPLY
+    [[ -d "${_COORD_ACTORS_DIR}/${_name}" ]] || {
+        log-error "[coord] ${_name}: no home yet at ${_COORD_ACTORS_DIR}/${_name}"
+        return 1
+    }
 
     # `; exec zsh -i`: if claude exits or fails to start (e.g. 55-coordinators
     # isn't loaded), the window keeps a shell showing why instead of vanishing.
@@ -512,6 +600,7 @@ coord-launch() {
 coord-toggle() {
     local _name=$1 _node _fd
     _coord-check-name "$_name" || return 1
+    _coord-resolve "$_name"; _name=$REPLY
 
     _coord-lock switch || return 1
     {
@@ -539,7 +628,10 @@ _coord-colors() {
 _coord-scan() {
     local _name _node _instance
     for _name in ${(f)"$("${_COORD_TMUX[@]}" list-sessions -F '#S' 2>/dev/null)"}; do
-        [[ "$_name" == *-coordinator ]] && _running[${_name%-coordinator}]=1
+        [[ "$_name" == *-coordinator ]] || continue
+        # A session started under the other name is the same coordinator.
+        _coord-resolve "${_name%-coordinator}"
+        _running[$REPLY]=1
     done
     _coord-windows | while read -r _node _instance; do
         _running[$_instance]=1
@@ -580,16 +672,20 @@ _coord-theme-args() {
 # only named here: menu marks those cells active and the theme rings them.
 #
 # The menu filters with -matching prefix, which rofi applies to the cell's
-# text without its markup at every word start, so the state words avoid the
-# coordinators' initials (b: brain is listed first, so busy is harmless) and
-# a first letter leaves the cursor on that coordinator.
+# text without its markup at every word start (a hyphen starts one too), so
+# typing a coordinator's key (_COORD_KEYS: its first letter, or two where one
+# isn't unique, pl platform and pe personal) leaves the cursor on it. The
+# words in cells listed before a coordinator must not start with its key:
+# hence "off", not "not running", which n (network-tools) would match. b
+# matches busy, but brain is listed first; s matches Stop all, but it is
+# listed after security. The key is underlined in the name.
 _coord-menu-row() {
-    local _name=$1 _activity=$2 _shown=${3:-} _glyph _label
+    local _name=$1 _activity=$2 _shown=${3:-} _glyph _label _key=${_COORD_KEYS[$1]:-}
     # size is in 1024ths of a point: 36pt, about 48px.
     _glyph="<span font_family='Symbols Nerd Font Mono' size='36864'> ${_COORD_ICONS[$_name]:-${_name[1]}} </span>"
     case "$_activity" in
         off)     _glyph="<span foreground='${_COORD_BAR_COLORS[dim]}'>${_glyph}</span>"
-                 _label="not running" ;;
+                 _label=off ;;
         busy)    _glyph="<span foreground='${_COORD_BAR_COLORS[busy]}'>${_glyph}</span>"
                  _label=busy ;;
         waiting) _glyph="<span background='${_COORD_BAR_COLORS[waiting]}' foreground='${_COORD_BAR_COLORS[ink]}'>${_glyph}</span>"
@@ -597,7 +693,7 @@ _coord-menu-row() {
         *)       _label=running ;;
     esac
     [[ -n "$_shown" ]] && _label+=" · visible"
-    REPLY="${_glyph}&#10;${_name}&#10;<span size='small' fgalpha='55%'>${_label}</span>"
+    REPLY="${_glyph}&#10;${_key:+<u>${_key}</u>}${_name#"$_key"}&#10;<span size='small' fgalpha='55%'>${_label}</span>"
 }
 
 # Sets REPLY to the menu's last cell, Stop all, in _coord-menu-row's shape,
@@ -695,9 +791,12 @@ _coord-confirm() {
     return 1
 }
 
-# Exact (=) so a missing session never matches another by prefix.
+# Exact (=) so a missing session never matches another by prefix. Either of
+# the coordinator's names: one may have been started under the other.
 _coord-has-session() {
-    "${_COORD_TMUX[@]}" has-session -t "=${1}-coordinator" 2>/dev/null
+    local _other=${_COORD_ALIASES[$1]:-${_COORD_FORMER[$1]:-}}
+    "${_COORD_TMUX[@]}" has-session -t "=${1}-coordinator" 2>/dev/null && return 0
+    [[ -n "$_other" ]] && "${_COORD_TMUX[@]}" has-session -t "=${_other}-coordinator" 2>/dev/null
 }
 
 # Tells Stephen why a stop didn't happen: the log, and a notification, since
@@ -867,7 +966,8 @@ coord-stop() {
         (( ${#_names} == 1 )) || { log-error "[coord] stop: expected one name or --all"; return 2; }
         _coord-check-name "${_names[1]}" || return 2
         _coord-stop-ready || return 1
-        _coord-end-asking stop "${_names[1]}" "$_yes"
+        _coord-resolve "${_names[1]}"
+        _coord-end-asking stop "$REPLY" "$_yes"
         return
     fi
     (( ! ${#_names} )) || { log-error "[coord] stop: --all takes no name"; return 2; }
@@ -925,7 +1025,10 @@ coord-stopped() {
             -h|--help) _coord-stopped-help; return 0 ;;
             -*)        log-error "[coord] stopped: unknown option '${_arg}'"; return 2 ;;
             *)         _coord-check-name "$_arg" || return 2
-                       _names+=("$_arg") ;;
+                       # Its state may be under either name.
+                       rm -f -- "${_COORD_STATE_DIR}/${_arg}" 2>/dev/null
+                       _coord-resolve "$_arg"
+                       _names+=("$REPLY") ;;
         esac
     done
     (( ${#_names} )) || { log-error "[coord] stopped: expected a name"; return 2; }
@@ -963,6 +1066,7 @@ coord-restart() {
     done
     [[ -n "$_name" ]] || { log-error "[coord] restart: expected a name"; return 2; }
     _coord-check-name "$_name" || return 2
+    _coord-resolve "$_name"; _name=$REPLY
     _coord-stop-ready || return 1
 
     if _coord-has-session "$_name"; then
