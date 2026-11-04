@@ -9,7 +9,8 @@
 #
 # Nothing real runs: meta is a stub on PATH that only logs its arguments, the
 # registry copy is a scratch file (COORD_REGISTRY_FILE), and each case runs in
-# a clean `zsh -f`. No tmux, no claude, no live coordinator.
+# a clean `zsh -f`. No claude, no live coordinator; the one tmux check uses
+# its own server, -L coordinator-launchers-test, the cleanup included.
 #
 #   zsh tests/coordinator-launchers.zsh
 
@@ -21,7 +22,12 @@ typeset -r REPO=${0:A:h:h}
 typeset -r LAUNCHER=$REPO/shell/.config/zsh/.zshrc.d/55-coordinators
 mkdir -p ~/.cache || exit 1
 typeset -r S=$(mktemp -d ~/.cache/coordinator-launchers-test.XXXXXX) || exit 1
-trap 'rm -rf -- "${S:?}"' EXIT
+typeset -r L=coordinator-launchers-test
+cleanup() {
+    command tmux -L $L kill-server 2>/dev/null || true
+    rm -rf -- "${S:?}"
+}
+trap cleanup EXIT
 typeset -r LOG=$S/meta.log REG=$S/coordinators.json
 
 mkdir -p $S/stub
@@ -129,6 +135,20 @@ PATH=$S/tree/bin:$PATH zsh -f -c "source ${(q)LAUNCHER}; _coordinator alpha --mo
 [[ $rc == 0 && $(logged) == 'launch-script alpha --model x' ]] && ok finds-script-next-to-meta || bad finds-script-next-to-meta "rc=$rc $(logged) $(<$S/err)"
 COORD_LAUNCH_SCRIPT=$S/none run '_coordinator alpha'
 [[ $rc == 2 && $err == *'no launch script at '$S/none* ]] && ok missing-script-says-so || bad missing-script-says-so "rc=$rc err=$err"
+# coord's path doesn't go through meta: a session under the other name refuses.
+copy "beta old1 2999-01-01" >$REG
+command tmux -L $L -f /dev/null new-session -d -s old1-coordinator 'sleep 100000'
+COORD_TMUX_SOCKET=$L COORD_LAUNCH_SCRIPT=$S/tree/tools/coordinator-launch.sh run '_coordinator beta'
+[[ $rc == 1 && $err == *'tmux session old1-coordinator is already running'* && -z $(logged) ]] \
+    && ok other-name-session-refuses || bad other-name-session-refuses "rc=$rc err=$err $(logged)"
+COORD_TMUX_SOCKET=$L COORD_LAUNCH_SCRIPT=$S/tree/tools/coordinator-launch.sh run '_coordinator old1'
+[[ $rc == 0 && $(logged) == 'launch-script old1' ]] && ok own-session-not-counted || bad own-session-not-counted "rc=$rc err=$err $(logged)"
+command tmux -L $L kill-server 2>/dev/null
+command tmux -L $L -f /dev/null new-session -d -s beta-coordinator 'sleep 100000'
+COORD_TMUX_SOCKET=$L COORD_LAUNCH_SCRIPT=$S/tree/tools/coordinator-launch.sh run '_coordinator old1'
+[[ $rc == 1 && $err == *'tmux session beta-coordinator is already running'* ]] && ok new-name-session-refuses-old || bad new-name-session-refuses-old "rc=$rc err=$err"
+command tmux -L $L kill-server 2>/dev/null
+copy "alpha - 2999-01-01" >$REG
 # End to end with the brain's real script, if this machine has it: COORDINATOR
 # is set (record 0017) and claude runs in the home. Stubs only, scratch homes.
 typeset -r REAL=/mnt/brain/tools/coordinator-launch.sh
