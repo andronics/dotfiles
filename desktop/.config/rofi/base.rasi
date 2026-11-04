@@ -27,8 +27,10 @@ configuration {
     bg-color:            @base;
     bg-alt-color:        @surface0;
     fg-color:            @text;
-    fg-alt-color:        @subtext1;
-    dim-color:           @overlay0;
+    fg-alt-color:        @subtext0;
+    /* Mocha's dim as the theme resolves it: overlay0 lifted to 3.0 on
+       surface0 (dotfiles record 0004). */
+    dim-color:           #767b91;
 
     accent-color:        @lavender;
     accent-fg-color:     @crust;

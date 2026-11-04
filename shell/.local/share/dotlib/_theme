@@ -53,8 +53,12 @@
 #   fg on bg and bg_alt     7.0 (contrast = "aaa") or 4.5 ("aa"); aaa falls
 #                           back to aa, recorded as degraded, only when 7.0
 #                           is out of reach
-#   fg_dim                  4.5
-#   dim                     3.0, and below fg_dim's ratio
+#   fg_dim on bg and bg_alt 4.5 on the worse of the two (secondary text;
+#                           record 0004)
+#   dim on bg and bg_alt    3.0 on the worse of the two, and below fg_dim's
+#                           ratio on both. dim is for icons and borders
+#                           only (WCAG 1.4.11) and never draws text: quiet
+#                           text uses fg_dim
 #   accent urgent busy ok warn info   3.0
 #   on_accent / on_urgent   4.5 on accent / urgent; on_ok / on_warn the
 #                           same on ok / warn (GTK's success and warning fills)
@@ -165,7 +169,7 @@ declare -gr _THEME_FONT_FLOOR=6
 # resolver.
 typeset -gA _THEME_FALLBACK=(
     [bg]='#1e1e2e' [bg_alt]='#313244' [surface]='#313244' [border]='#313244'
-    [fg]='#cdd6f4' [fg_dim]='#a6adc8' [dim]='#6c7086' [accent]='#b4befe'
+    [fg]='#cdd6f4' [fg_dim]='#a6adc8' [dim]='#767b91' [accent]='#b4befe'
     [focused]='#b4befe' [on_accent]='#11111b' [urgent]='#f38ba8'
     [on_urgent]='#11111b' [busy]='#fab387' [ok]='#a6e3a1' [on_ok]='#11111b'
     [warn]='#f9e2af' [on_warn]='#11111b'
@@ -833,14 +837,36 @@ _theme-adjusted() {
     _THEME_NOTES+=("$1: $2")
 }
 
-# Lifts role $1 to ratio $2 against bg; returns 1 if unreachable.
+# Lifts role $1 to ratio $2 against each surface role named after it (bg
+# when none), the worse surface first; returns 1 if unreachable on any.
 _theme-floor() {
-    local role=$1 before=${_THEME_ROLE[$1]}
-    colour-ensure-contrast "$before" "${_THEME_ROLE[bg]}" "$2" || return 1
-    if [[ "$REPLY" != "$before" ]]; then
+    local role=$1 before=${_THEME_ROLE[$1]} ratio=$2 s
+    shift 2
+    (( $# )) || set -- bg
+    _theme-worse-surface $role "$@"
+    colour-ensure-contrast "$before" "${_THEME_ROLE[$REPLY]}" $ratio || return 1
+    _THEME_ROLE[$role]=$REPLY
+    for s; do
+        colour-ensure-contrast "${_THEME_ROLE[$role]}" "${_THEME_ROLE[$s]}" $ratio || return 1
         _THEME_ROLE[$role]=$REPLY
-        _theme-adjusted $role "$before -> $REPLY (contrast >= $2)"
-    fi
+    done
+    [[ "${_THEME_ROLE[$role]}" != "$before" ]] &&
+        _theme-adjusted $role "$before -> ${_THEME_ROLE[$role]} (contrast >= $ratio${${${(j:, :)@}:#bg}:+ on ${(j:, :)@}})"
+    return 0
+}
+
+# REPLY = whichever surface role named after role $1 gives it the lowest
+# contrast (the first on a tie).
+_theme-worse-surface() {
+    local role=$1 s worst=$2
+    local -F r low
+    shift
+    colour-contrast "${_THEME_ROLE[$role]}" "${_THEME_ROLE[$worst]}"; low=$REPLY
+    for s; do
+        colour-contrast "${_THEME_ROLE[$role]}" "${_THEME_ROLE[$s]}"; r=$REPLY
+        (( r < low )) && { low=$r; worst=$s; }
+    done
+    REPLY=$worst
 }
 
 # True when role $1 is at least _THEME_MIN_DELTA_E from every role named after it.
@@ -1045,19 +1071,24 @@ _theme-resolve() {
         _theme-adjusted fg "$orig -> $v (contrast >= $body)"
     fi
 
-    _theme-floor fg_dim $_THEME_MIN_FG_DIM || fail=1
+    # fg_dim and dim are drawn on bg and on bg_alt (inverse bar segments,
+    # rofi's input bar), so each meets its floor on the worse of the two.
+    _theme-floor fg_dim $_THEME_MIN_FG_DIM bg bg_alt || fail=1
 
-    # dim: visible (3.0) but quieter than fg_dim.
-    _theme-floor dim $_THEME_MIN_DIM || fail=1
+    # dim: visible (3.0) but quieter than fg_dim, on both surfaces.
+    _theme-floor dim $_THEME_MIN_DIM bg bg_alt || fail=1
     local -F rdim rdimfg
-    colour-contrast "${_THEME_ROLE[dim]}" "${_THEME_ROLE[bg]}"; rdim=$REPLY
-    colour-contrast "${_THEME_ROLE[fg_dim]}" "${_THEME_ROLE[bg]}"; rdimfg=$REPLY
-    if (( rdim >= rdimfg )); then
+    for k in bg bg_alt; do
+        colour-contrast "${_THEME_ROLE[dim]}" "${_THEME_ROLE[$k]}"; rdim=$REPLY
+        colour-contrast "${_THEME_ROLE[fg_dim]}" "${_THEME_ROLE[$k]}"; rdimfg=$REPLY
+        (( rdim >= rdimfg )) || continue
         orig=${_THEME_ROLE[dim]}
-        colour-fit-contrast "$orig" "${_THEME_ROLE[bg]}" $_THEME_MIN_DIM
+        _theme-worse-surface dim bg bg_alt
+        colour-fit-contrast "$orig" "${_THEME_ROLE[$REPLY]}" $_THEME_MIN_DIM
         _THEME_ROLE[dim]=$REPLY
         _theme-adjusted dim "$orig -> $REPLY (dimmer than fg_dim)"
-    fi
+        break
+    done
 
     for role in accent urgent busy ok warn info; do
         _theme-floor $role $_THEME_MIN_INDICATOR || fail=1
@@ -1104,7 +1135,7 @@ _theme-resolve() {
 _theme-contrast-table() {
     local pair a b
     local -A on=(on_accent accent on_urgent urgent)
-    for pair in fg/bg fg/bg_alt fg_dim/bg dim/bg accent/bg urgent/bg busy/bg ok/bg warn/bg info/bg \
+    for pair in fg/bg fg/bg_alt fg_dim/bg fg_dim/bg_alt dim/bg dim/bg_alt accent/bg urgent/bg busy/bg ok/bg warn/bg info/bg \
                 on_accent/accent on_urgent/urgent on_ok/ok on_warn/warn; do
         a=${pair%/*}; b=${pair#*/}
         colour-contrast "${_THEME_ROLE[$a]}" "${_THEME_ROLE[$b]}"
@@ -2906,6 +2937,24 @@ theme-self-test() {
     return $rc
 }
 
+# Record 0004's four pairs for the applied scheme $1: fg_dim >= 4.5 and dim
+# >= 3.0 on bg and on bg_alt, dim below fg_dim on both. Uses the caller's
+# ok/bad.
+_theme-self-test-dim-pairs() {
+    local slug=$1 s out= miss=
+    local -F fd d
+    _theme-source-current || { bad "$slug: no current state to check fg_dim and dim on"; return; }
+    for s in bg bg_alt; do
+        colour-contrast "${THEME_ROLE[fg_dim]}" "${THEME_ROLE[$s]}"; fd=$REPLY
+        colour-contrast "${THEME_ROLE[dim]}" "${THEME_ROLE[$s]}"; d=$REPLY
+        out+="${out:+, }$(printf 'fg_dim/%s %.2f dim/%s %.2f' $s $fd $s $d)"
+        (( fd >= _THEME_MIN_FG_DIM )) || miss+=" fg_dim/$s<$_THEME_MIN_FG_DIM"
+        (( d >= _THEME_MIN_DIM )) || miss+=" dim/$s<$_THEME_MIN_DIM"
+        (( d < fd )) || miss+=" dim>=fg_dim/$s"
+    done
+    [[ -z "$miss" ]] && ok "$slug: $out; dim below fg_dim on both" || bad "$slug:$miss ($out)"
+}
+
 _theme-self-test-run() {
     local scratch=$1 f slug id before after t0 kg
     local -i pass=0 failed=0
@@ -2936,6 +2985,7 @@ _theme-self-test-run() {
             printf '    %-22s %4d ms  %-3s%s  adjusted: %s\n' "$slug" $REPLY "${THEME_META[contrast]}" \
                 "${${THEME_META[degraded]:#false}:+ (AA DEGRADATION)}" "${THEME_META[adjusted]:-none}"
             (( pass++ )) || true
+            _theme-self-test-dim-pairs "$slug"
         else
             bad "$slug: $(<"$scratch/err")"
         fi
@@ -3030,7 +3080,7 @@ _theme-self-test-run() {
         out=$(<"$calls")
         [[ "$out" == *"bspc config border_width 1"* && "$out" == *"bspc config window_gap 5"* &&
            "$out" == *"bspc config bottom_padding 32"* && "$out" == *"bspc config focused_border_color #b4befe"* &&
-           "$out" == *"bspc config presel_feedback_color #6c7086"* && "${${(f)out}[-1]}" == "crew side left" ]] &&
+           "$out" == *"bspc config presel_feedback_color #767b91"* && "${${(f)out}[-1]}" == "crew side left" ]] &&
             ok "bspwm reload: sizes and colours from bspwm.sh, then crew side left (re-dock)" ||
             bad "bspwm reload calls: ${(f)out}"
         : >| "$calls"

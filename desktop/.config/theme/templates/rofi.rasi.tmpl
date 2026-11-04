@@ -39,8 +39,9 @@ configuration {
     bg-color:            {{ $r.bg }};
     bg-alt-color:        {{ $r.bg_alt }};
     fg-color:            {{ $r.fg }};
-    /* Catppuccin's placeholder text is subtext1; other schemes use fg_dim. */
-    fg-alt-color:        {{ if and (has $s.palette "names") (has $s.palette.names "subtext1") }}{{ $s.palette.names.subtext1 }}{{ else }}{{ $r.fg_dim }}{{ end }};
+    /* The placeholder sits on bg_alt: fg_dim, which the resolver keeps at
+       4.5 there, in every scheme (record 0004). */
+    fg-alt-color:        {{ $r.fg_dim }};
     dim-color:           {{ $r.dim }};
 
     accent-color:        {{ $r.accent }};
