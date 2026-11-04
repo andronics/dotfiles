@@ -2,9 +2,9 @@
 
 # _lockscreen - betterlockscreen + xidlehook idle-lock control
 #
-# Wraps betterlockscreen (actual locking), _xidlehook (idle-timeout daemon
-# that triggers the lock), and _systemd (the lockscreen-suspend user unit
-# that locks before suspend/hibernate).
+# Wraps betterlockscreen (actual locking) and _xidlehook (idle-timeout daemon
+# that triggers the lock). `sleep-lock` is the locker xss-lock runs before
+# every suspend or hibernate (desktop's xss-lock.service).
 #
 # The idle daemon is started per X session by desktop's
 # .zlogin.d/50-lockscreen, not by a systemd unit: with lingering the user
@@ -17,9 +17,8 @@
 #   Required:
 #     - _common, _log, _xdg: core utilities
 #     - _xidlehook: idle-timeout daemon control
-#     - _systemd: lockscreen-suspend.service management
 #   External:
-#     - betterlockscreen (system package, wraps i3lock-color)
+#     - betterlockscreen (system package, wraps i3lock-color), pgrep
 
 [[ -n "${LOCKSCREEN_LOADED:-}" ]] && return 0
 declare -gr LOCKSCREEN_LOADED=1
@@ -28,10 +27,7 @@ source "${DOTLIB}/_common"    || { echo "[ERROR] _lockscreen requires _common" >
 source "${DOTLIB}/_log"       2>/dev/null || true
 source "${DOTLIB}/_xdg"       || { echo "[ERROR] _lockscreen requires _xdg" >&2; return 1; }
 source "${DOTLIB}/_xidlehook" || { echo "[ERROR] _lockscreen requires _xidlehook" >&2; return 1; }
-source "${DOTLIB}/_systemd"   || { echo "[ERROR] _lockscreen requires _systemd" >&2; return 1; }
 
-declare -g _LOCKSCREEN_SUSPEND_UNIT="lockscreen-suspend"
-declare -g _LOCKSCREEN_SCOPE="--user"
 # The lock picture when the theme records no wallpaper (see _lockscreen-wallpaper).
 declare -g _LOCKSCREEN_FALLBACK_WALLPAPER="$(xdg-data-file "backgrounds" "0001.png")"
 
@@ -41,6 +37,12 @@ declare -g _LOCKSCREEN_FALLBACK_WALLPAPER="$(xdg-data-file "backgrounds" "0001.p
 # the timer duration locks the screen instantly instead of giving a fresh
 # countdown.
 declare -g _LOCKSCREEN_GRACE_PERIOD="${LOCKSCREEN_GRACE_PERIOD:-10}"
+
+# Seconds sleep-lock waits for the locker. logind lets a delay inhibitor
+# hold sleep for InhibitDelayMaxSec (5s by default), so stay under it.
+declare -g _LOCKSCREEN_SLEEP_TIMEOUT="${LOCKSCREEN_SLEEP_TIMEOUT:-4}"
+# betterlockscreen runs i3lock-color under either name.
+declare -g _LOCKSCREEN_LOCKER='i3lock(-color)?'
 
 typeset -gA _LOCKSCREEN_DESCRIPTIONS=(
     [activate]="Lock the screen now"
@@ -53,9 +55,7 @@ typeset -gA _LOCKSCREEN_DESCRIPTIONS=(
     [hook-query]="Query the idle daemon's timer state"
     [hook-status]="Show comprehensive idle daemon status"
     [status]="Show armed/paused/not-running state (for status bars)"
-    [service-install]="Enable the pre-suspend lock unit"
-    [service-status]="Show the pre-suspend lock unit's status"
-    [service-uninstall]="Disable the pre-suspend lock unit"
+    [sleep-lock]="Lock and return once the locker is up (xss-lock's locker before sleep)"
 )
 
 # ------------------------------
@@ -77,6 +77,10 @@ _lockscreen-wallpaper() {
     wall=$(source "${DOTLIB}/_theme" 2>/dev/null && theme-get wallpaper 2>/dev/null)
     [[ -n "$wall" && -r "$wall" ]] || wall=$_LOCKSCREEN_FALLBACK_WALLPAPER
     REPLY=$wall
+}
+
+_lockscreen-locker-up() {
+    pgrep -u "$UID" -x "$_LOCKSCREEN_LOCKER" >/dev/null
 }
 
 _lockscreen-timer-disabled() {
@@ -159,23 +163,32 @@ lockscreen-status() {
 }
 
 # ------------------------------
-# Pre-suspend lock (systemd)
+# Lock before sleep (xss-lock)
 # ------------------------------
 
-lockscreen-service-install() {
-    log-info "Installing pre-suspend lock unit"
-    systemd-daemon-reload "${_LOCKSCREEN_SCOPE}"
-    # Oneshot, WantedBy=sleep.target - nothing to start now, just enable so it
-    # fires on the next suspend/hibernate.
-    systemd-enable "${_LOCKSCREEN_SUSPEND_UNIT}" "${_LOCKSCREEN_SCOPE}"
-}
-
-lockscreen-service-status() {
-    systemd-get-status "${_LOCKSCREEN_SUSPEND_UNIT}" "${_LOCKSCREEN_SCOPE}"
-}
-
-lockscreen-service-uninstall() {
-    log-info "Uninstalling pre-suspend lock unit"
-    systemd-disable "${_LOCKSCREEN_SUSPEND_UNIT}" "${_LOCKSCREEN_SCOPE}"
-    systemd-daemon-reload "${_LOCKSCREEN_SCOPE}"
+# Run by xss-lock --transfer-sleep-lock: XSS_SLEEP_LOCK_FD is logind's delay
+# inhibitor, and sleep waits until every copy is closed. betterlockscreen
+# can't take the fd, so the lock starts detached without it and the fd is
+# closed once i3lock is up, or after _LOCKSCREEN_SLEEP_TIMEOUT. Returning
+# then, not at unlock, means xss-lock never holds the locker: stopping the
+# service or `loginctl unlock-session` can't kill i3lock. A locker already
+# running (power menu) is left alone. Without the fd (lock-session) it
+# just locks.
+lockscreen-sleep-lock() {
+    local fd=${XSS_SLEEP_LOCK_FD:-}
+    local -i i up=0
+    [[ "$fd" == <-> && -e /proc/self/fd/$fd ]] || fd=
+    if _lockscreen-locker-up; then
+        up=1
+    else
+        ( [[ -n "$fd" ]] && exec {fd}<&-; lockscreen-activate ) &!
+        for (( i = 0; i < _LOCKSCREEN_SLEEP_TIMEOUT * 10; i++ )); do
+            # The process exists a moment before i3lock has mapped its window
+            # and grabbed the keyboard.
+            _lockscreen-locker-up && { up=1; sleep 0.5; break; }
+            sleep 0.1
+        done
+    fi
+    [[ -n "$fd" ]] && exec {fd}<&-
+    (( up )) || { log-error "[lockscreen] the locker did not start within ${_LOCKSCREEN_SLEEP_TIMEOUT}s"; return 1; }
 }

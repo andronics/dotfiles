@@ -1,0 +1,13 @@
+# Lock before sleep (xss-lock.service). Like 50-barctl, started here because
+# graphical-session.target never activates under bspwm; only once xss-lock
+# is installed (sudo pacman -S xss-lock). A new login's session id restarts
+# it, since a lingering user manager keeps the last session's service.
+[[ -n "${DISPLAY}" && -n "${XDG_SESSION_ID}" ]] && (( ${+commands[systemctl]} && ${+commands[xss-lock]} )) && () {
+    local _prev=$(systemctl --user show-environment 2>/dev/null | sed -n "s/^XDG_SESSION_ID=//p")
+    systemctl --user import-environment DISPLAY XAUTHORITY XDG_SESSION_ID 2>/dev/null
+    if [[ "${_prev}" == "${XDG_SESSION_ID}" ]]; then
+        systemctl --user --no-block start xss-lock.service 2>/dev/null
+    else
+        systemctl --user --no-block restart xss-lock.service 2>/dev/null
+    fi
+}
