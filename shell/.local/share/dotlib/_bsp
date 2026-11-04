@@ -817,46 +817,119 @@ _bsp-polybar-toggle() {
     fi
 }
 
-# Hide all windows on the focused desktop
+# Where bsp-hide records the nodes it hid, one id per line, for bsp-unhide.
+# Under $XDG_RUNTIME_DIR, so a reboot forgets it along with the windows.
+_bsp-hidden-record() {
+    print -r -- "$(xdg-runtime-dir bsp)/hidden"
+}
+
+# Hide the shown windows on the focused desktop
 #
 # Function: bsp-hide
-# Description: Hide every leaf node on the focused desktop and hide polybar
+# Description: Hide every shown leaf node on the focused desktop, record
+#   which ones in _bsp-hidden-record, and hide polybar. Nodes already hidden
+#   (the coordinator windows, empty receptacles) are left alone and are not
+#   recorded, so bsp-unhide won't reveal them. A second hide adds to the
+#   record and keeps what the first one took.
 # Returns:
 #   0 - Success
+#   1 - The record could not be written (the nodes are still hidden)
 # Example:
 #   bsp-hide
 #
 bsp-hide() {
     _bsp-polybar-toggle hide
 
-    local _node
-    for _node in $(bspc query -N -n .leaf -d focused); do
+    local record dir tmp= _node
+    record=$(_bsp-hidden-record)
+    dir=${record:h}
+    local -a ids=() hid=()
+    [[ -r "$record" ]] && ids=(${(f)"$(<$record)"})
+
+    for _node in $(bspc query -N -n '.leaf.!hidden' -d focused); do
         log-info "node $_node... hiding"
-        bspc node "$_node" -g hidden=on
+        bspc node "$_node" -g hidden=on && hid+=("$_node")
     done
 
-    return 0
+    (( ${#hid} )) || return 0
+    ids=(${(u)ids} ${hid:|ids})
+
+    # temp file + rename: an unhide racing this hide (lock and unlock close
+    # together) never reads half a record
+    if mkdir -p -m 700 "$dir" \
+        && tmp=$(mktemp "$dir/.hidden.XXXXXX") \
+        && print -rl -- $ids >"$tmp" \
+        && mv -f -- "$tmp" "$record"; then
+        return 0
+    fi
+    [[ -n "$tmp" ]] && rm -f -- "$tmp"
+    log-error "bsp-hide: could not write $record; 'bsp unhide --all' reveals the windows"
+    return 1
 }
 
-# Reveal all hidden windows on the focused desktop
+# Reveal the windows bsp-hide hid
 #
 # Function: bsp-unhide
-# Description: Reveal every hidden node on the focused desktop and show polybar
+# Description: Reveal the nodes bsp-hide recorded that still exist, remove the
+#   record, and show polybar. Nodes that were hidden before bsp-hide ran stay
+#   hidden. With no record nothing is revealed. --all reveals every hidden
+#   node on the focused desktop (a manual rescue) and drops the record.
+# Arguments:
+#   --all - Reveal every hidden node on the focused desktop
 # Returns:
 #   0 - Success
+#   1 - Unknown argument
 # Example:
 #   bsp-unhide
+#   bsp-unhide --all
 #
 bsp-unhide() {
+    local all=false
+    case "${1:-}" in
+        --all) all=true ;;
+        '') ;;
+        *) log-error "bsp-unhide: unknown argument: $1 (only --all)"; return 1 ;;
+    esac
+
     _bsp-polybar-toggle show
 
-    local _node
-    for _node in $(bspc query -N -n .hidden -d focused); do
+    local record _node
+    record=$(_bsp-hidden-record)
+    local -a ids=()
+
+    if [[ $all == true ]]; then
+        ids=($(bspc query -N -n .hidden -d focused))
+    elif [[ -r "$record" ]]; then
+        ids=(${(f)"$(<$record)"})
+    else
+        log-info "no record of hidden nodes ($record)... nothing to unhide ('bsp unhide --all' reveals every hidden node)"
+        return 0
+    fi
+
+    for _node in $ids; do
+        [[ "$_node" =~ '^0x[[:xdigit:]]+$' ]] || continue
+        if ! bspc query -N -n "$_node" >/dev/null 2>&1; then
+            log-info "node $_node... gone, skipping"
+            continue
+        fi
         log-info "node $_node... unhiding"
         bspc node "$_node" -g hidden=off
     done
 
+    rm -f -- "$record"
     return 0
+}
+
+_bsp-unhide-help() {
+    cat <<EOF
+Usage: bsp unhide [--all]
+
+  Reveal the windows 'bsp hide' hid on the focused desktop, and only those:
+  windows that were already hidden (coordinator windows, empty receptacles)
+  stay hidden. With no record of a hide, nothing is revealed.
+
+  --all  Reveal every hidden window on the focused desktop (manual rescue)
+EOF
 }
 
 # ------------------------------
@@ -1494,8 +1567,9 @@ NODE OPERATIONS:
   node-to-desktop DESKTOP [NODE] Move node to desktop
 
 VISIBILITY OPERATIONS:
-  hide                           Hide all windows on focused desktop
-  unhide                         Reveal hidden windows on focused desktop
+  hide                           Hide the shown windows on focused desktop
+  unhide                         Reveal only the windows hide hid
+  unhide --all                   Reveal every hidden window on focused desktop
 
 RULE MANAGEMENT:
   rule-add CLASS OPTIONS...      Add window rule
