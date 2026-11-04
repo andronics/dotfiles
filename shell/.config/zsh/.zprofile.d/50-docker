@@ -1,12 +1,4 @@
 # Docker compose stacks, one directory per stack (used by .zshrc.d/50-docker).
-# A value already set by the caller is kept. Otherwise the workstation's
-# compose folder if it exists, else the old /mnt/docker/svcs layout, which
-# servers that stow this package may still have.
-if [[ -z $DCKR_DIR ]]; then
-    if [[ -d /pool/distributed/iac/workstation/compose ]]; then
-        DCKR_DIR=/pool/distributed/iac/workstation/compose
-    else
-        DCKR_DIR=/mnt/docker/svcs
-    fi
-fi
-export DCKR_DIR
+# A value already set by the caller is kept; otherwise the workstation's
+# compose folder.
+export DCKR_DIR="${DCKR_DIR:-/pool/distributed/iac/workstation/compose}"
