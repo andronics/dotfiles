@@ -2,23 +2,14 @@
 # polybar-reload [bar] - restart the running bars on the current theme, or
 # start [bar] (default $POLYBAR_BAR, else main) when none is running.
 #
-# `theme ensure` comes first: config.ini includes
-# ~/.local/state/theme/current/polybar.ini, and polybar won't start without
-# it. Running bars restart in place through `theme reload polybar`
-# (polybar-msg -p <pid> cmd restart): a bar that doesn't take the restart or
-# doesn't answer within a few seconds after it (frozen) is killed with its
-# scripts and relaunched from its own command line and environment.
+# Kept so .zlogin.d/99-polybar and habits work; it is `barctl restart`
+# (desktop-tools, dotfiles record 0003 §B7), which runs `theme ensure` first
+# (config.ini includes ~/.local/state/theme/current/polybar.ini, and polybar
+# won't start without it), restarts running bars in place, relaunches one
+# that froze from its own command line and environment, and starts a bar
+# with HOST_MONITOR set when none is running. Every bar it starts or
+# relaunches gets TOOL_STATS=skip, so polled and clicked calls write no run
+# entries (the brain's record 0017 §3). Goes when its callers say
+# `barctl restart`.
 
-theme ensure || exit 1
-
-if pgrep -x -u $UID polybar >/dev/null; then
-    exec theme reload polybar
-fi
-
-export HOST_MONITOR="${HOST_MONITOR:-$(bspc query -M --names 2>/dev/null | head -1)}"
-# Every hook, click and tail module the bar runs inherits it: polled and
-# clicked calls write no run entries (the brain's record 0017 §3; their
-# warnings and errors are still journalled). A bar relaunched by `theme
-# reload polybar` keeps this environment.
-export TOOL_STATS=skip
-polybar -q "${1:-${POLYBAR_BAR:-main}}" </dev/null >/dev/null 2>&1 &!
+exec barctl restart "$@"

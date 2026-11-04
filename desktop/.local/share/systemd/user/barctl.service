@@ -1,6 +1,8 @@
-# The bar controller (barctl run, dotlib _barctl). Started by .zlogin.d's
-# 50-barctl once the X session is up, since graphical-session.target never
-# becomes active under this bspwm session; not enabled, so no [Install].
+# The bar controller (barctl run, from andronics/desktop-tools, installed by
+# desktop/.postinstall with `uv tool` into ~/.local/bin at the version pinned
+# in ~/.config/desktop-tools/version; dotfiles record 0003). Started by
+# .zlogin.d's 50-barctl once the X session is up, since graphical-session.target
+# never becomes active under this bspwm session; not enabled, so no [Install].
 # It runs here, never from polybar: polybar 3.7 leaks its module pipes into
 # long-lived children, which can freeze its next restart.
 [Unit]
@@ -10,7 +12,6 @@ After=pipewire-pulse.service
 [Service]
 Type=simple
 Environment=PATH="%h/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-Environment=DOTLIB=%h/.local/share/dotlib
 Environment=XDG_CONFIG_HOME="%h/.config"
 Environment=XDG_DATA_HOME="%h/.local/share"
 Environment=XDG_STATE_HOME="%h/.local/state"

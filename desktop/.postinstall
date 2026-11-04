@@ -13,6 +13,40 @@ else
    warn "gomplate or jq missing: install them, then run 'theme ensure' before starting polybar"
 fi
 
+# desktop-tools (barctl, barmenu; dotfiles record 0003 §A2): the version pinned in
+# .config/desktop-tools/version, from its release tag, on a uv-managed Python so a
+# pacman Python upgrade can't break the bar. Skipped when `uv tool list` already shows
+# that version; reinstalled when another is installed. Then each tool's completion is
+# written into the shell package's completions folder from the installed version.
+# BEGIN desktop-tools
+_dt_version="$(cat "${dotfiles_source_root}/desktop/.config/desktop-tools/version" 2>/dev/null)"
+if [[ -z "${_dt_version}" ]]; then
+   warn "desktop-tools: no version in desktop/.config/desktop-tools/version; not installed"
+elif ! command -v uv >/dev/null; then
+   warn "uv missing: install it (sudo pacman -S uv), then run ./dotfiles reinstall desktop for barctl and barmenu"
+else
+   _dt_installed="$(uv tool list 2>/dev/null | sed -n 's/^desktop-tools v//p')"
+   _dt_args=()
+   [[ -n "${_dt_installed}" && "${_dt_installed}" != "${_dt_version}" ]] && _dt_args=(--reinstall)
+   if [[ "${_dt_installed}" == "${_dt_version}" ]]; then
+      ok "desktop-tools ${_dt_version} already installed"
+   elif uv tool install "${_dt_args[@]}" --python 3.13 --managed-python \
+         "git+https://github.com/andronics/desktop-tools@v${_dt_version}"; then
+      ok "desktop-tools ${_dt_version} installed${_dt_installed:+ (was ${_dt_installed})}"
+   else
+      warn "desktop-tools ${_dt_version} failed to install; the bar's barctl and barmenu are missing"
+   fi
+   _dt_bin="$(uv tool dir --bin 2>/dev/null)/desktop-tools"
+   if [[ -x "${_dt_bin}" ]] && TOOL_STATS=skip "${_dt_bin}" completions zsh \
+         --out "${dotfiles_source_root}/shell/.config/zsh/completions" >/dev/null; then
+      ok "desktop-tools completions installed"
+   else
+      warn "desktop-tools completions not installed"
+   fi
+fi
+unset _dt_version _dt_installed _dt_args _dt_bin
+# END desktop-tools
+
 # Palettes from wallpapers and colours (`theme wallpaper`, `theme apply
 # colour:#hex`) need matugen; named schemes work without it.
 command -v matugen >/dev/null \
