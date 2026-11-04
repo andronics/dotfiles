@@ -51,6 +51,9 @@ echo "$*" >>'$POKES >$S/stub/polybar-msg
 chmod +x $S/stub/*
 
 export DOTLIB=$REPO/shell/.local/share/dotlib BARCTL_STATE_DIR=$S/state
+# The tools under test write nothing to the journal or the run store
+# (dotlib's _log, the brain's record 0017).
+export TOOL_JOURNAL=off
 export XDG_CONFIG_HOME=$S/xdg/config XDG_CACHE_HOME=$S/xdg/cache XDG_DATA_HOME=$S/xdg/data
 export XDG_STATE_HOME=$S/xdg/state XDG_RUNTIME_DIR=$S/xdg/runtime
 export THEME_CONFIG_DIR=$S/theme-config THEME_STATE_DIR=$S/theme-state

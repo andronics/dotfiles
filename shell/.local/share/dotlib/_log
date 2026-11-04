@@ -10,7 +10,8 @@
 # Provides:
 #   - Multi-mode logging (CLI, daemon, hybrid, file)
 #   - Colored console output for CLI tools
-#   - Systemd journal integration for daemons
+#   - Warnings and errors to the user journal under the tool's own name,
+#     plus one run entry per dispatcher run (brain record 0017)
 #   - Log level filtering
 #   - Timestamp support
 #   - JSON output format
@@ -72,8 +73,11 @@ declare -g LOG_OUTPUT_FORMAT="${LOG_OUTPUT_FORMAT:-text}"
 # LOG_FILE: Path to log file (for file mode)
 declare -g LOG_FILE="${LOG_FILE:-}"
 
-# LOG_SYSTEMD_TAG: Tag for systemd journal entries
-declare -g LOG_SYSTEMD_TAG="${LOG_SYSTEMD_TAG:-${name:-log}}"
+# LOG_SYSTEMD_TAG: the journal identifier (SYSLOG_IDENTIFIER) for a script
+# that isn't a dispatcher. A dispatcher always writes under its own name (set
+# by dispatcher-init through log-journal-tool); with neither, the script's
+# own name. Never `log` (brain record 0017).
+declare -g LOG_SYSTEMD_TAG="${LOG_SYSTEMD_TAG:-}"
 
 # LOG_COLOR: Color output control
 #   - auto: Enable if TTY detected (default)
@@ -270,24 +274,17 @@ _log-output() {
             ;;
 
         daemon)
-            # Systemd journal (primary) + console if TTY available
-            if command -v systemd-cat &>/dev/null; then
-                echo "$message" | systemd-cat -t "$LOG_SYSTEMD_TAG" -p "$systemd_priority" 2>/dev/null
-            fi
-
-            # Also output to console if TTY is available (for debugging)
+            # Console only if a TTY is available. The journal is no longer
+            # written here: warnings and above go to it in every mode, under
+            # the tool's own name, through _log-journal-event (brain record
+            # 0017); info, debug and trace never do.
             if [[ -t 1 ]] || [[ -t 2 ]]; then
                 echo "$message" >&2
             fi
             ;;
 
         hybrid)
-            # Both systemd journal and console
-            if command -v systemd-cat &>/dev/null; then
-                echo "$message" | systemd-cat -t "$LOG_SYSTEMD_TAG" -p "$systemd_priority" 2>/dev/null
-            fi
-
-            # Always output to console
+            # Console always (the journal: see daemon above)
             echo "$message" >&2
             ;;
 
@@ -303,6 +300,320 @@ _log-output() {
             fi
             ;;
     esac
+}
+
+# ------------------------------
+# Journal (brain record 0017)
+# ------------------------------
+# Warnings, errors and fatals go to the user journal in every mode, under the
+# tool's own name (SYSLOG_IDENTIFIER: the dispatcher's name, else
+# LOG_SYSTEMD_TAG, else the script's name; never `log`), with the fields of
+# the brain's tools/journal.py: TOOL_OWNER, TOOL_ACTOR, TOOL_VERSION,
+# TOOL_RUN, TOOL_EVENT and, inside a dispatcher run, TOOL_COMMAND. Info,
+# success, debug and trace never do (debug lines carry arguments). _dispatcher
+# adds one run entry per run (log-journal-run). Never the arguments: every
+# argument of the run (4 characters or more) is replaced by [arg] wherever it
+# appears, and the message is redacted with journal.py's patterns (perl). The
+# same error from the same tool is written at most once a minute; the next
+# one carries SUPPRESSED=<n> (stamps shared with journal.py's).
+#
+# Writes through `logger --journald` (fields on stdin, never in arguments).
+# Never fails the caller and never prints.
+#
+# Environment: TOOL_JOURNAL=off (write nothing), TOOL_STATS=skip (no run
+# entry: the bar and completions; errors still written), TOOL_RUNS_DIR (the
+# run store; default $XDG_STATE_HOME/tool-runs), TOOL_JOURNAL_STAMPS (the rate
+# limit's folder; default $XDG_RUNTIME_DIR/tool-journal), COORDINATOR (the
+# calling actor).
+
+zmodload zsh/datetime zsh/system 2>/dev/null
+
+# The owner of every dotfiles tool (record 0018's name).
+declare -g DOTLIB_TOOL_OWNER="desktop-coordinator"
+# This file, symlinks resolved: TOOL_VERSION is its repo's commit.
+declare -g _LOG_SELF="${${(%):-%x}:A}"
+
+# Per-run state (one process is one run).
+declare -g _DOTLIB_TOOL="" _DOTLIB_TOOL_COMMAND="" _DOTLIB_TOOL_RUN=""
+declare -g -i _DOTLIB_TOOL_ERRORS=0
+declare -g -a _DOTLIB_TOOL_ARGS=()
+
+# The redactor (journal.py's scrub() and redact(), signature() and rate
+# limit). argv: tool event stamp-dir; stdin: the message, then each argument
+# of the run, NUL-separated. Prints "-" (rate-limited: write nothing) or the
+# suppressed count, a newline, then the message to write.
+declare -g _LOG_REDACT='
+use strict; use warnings; no warnings "uninitialized";
+use Digest::SHA qw(sha256_hex); use Fcntl qw(:flock O_RDWR O_CREAT); use Time::HiRes qw(time);
+my ($tool, $event, $dir) = @ARGV;
+my $in = do { local $/; <STDIN> };
+my ($m, @args) = split /\0/, $in, -1;
+my %seen; my @vals = sort { length($b) <=> length($a) } grep { length($_) >= 4 && !$seen{$_}++ } @args;
+$m =~ s/\Q$_\E/[arg]/g for @vals;
+my $R = "[redacted]";
+$m =~ s/-----BEGIN [A-Z0-9 ]*KEY-----.*?(?:-----END [A-Z0-9 ]*KEY-----|\z)/$R/gs;
+$m =~ s/\b(authorization\s*:\s*)(?:(?:bearer|basic|token)\s+)?[^\s\x27"]+/$1$R/gi;
+$m =~ s/\b(bearer\s+)[^\s\x27"]+/$1$R/gi;
+$m =~ s{(://)[^/\s:@]+:[^/\s@]*@}{$1$R\@}g;
+$m =~ s/\b(password|passwd|secret|token|api[_-]?key)(\s*[=:]\s*|\s+)([\x27"]?)[^\s\x27",;]+/$1$2$3$R/gi;
+$m =~ s/\b(?:gh[pousr]_[A-Za-z0-9_]{10,}|github_pat_[A-Za-z0-9_]{10,})/$R/g;
+$m =~ s/\b[0-9A-Fa-f]{32,}\b/$R/g;
+$m =~ s{[A-Za-z0-9+/_-]{32,}={0,2}}{ my $s = $&; ($s =~ /\d/ && $s =~ /[a-z]/ && $s =~ /[A-Z]/) ? $R : $s }ge;
+my $sig = $m; $sig =~ s/\b[0-9a-fA-F]{6,}\b/N/g; $sig =~ s/\d+/N/g;
+$sig = substr(join(" ", split(" ", $sig)), 0, 300);
+my $out = 0;
+if ($dir ne "") {
+    my $old = umask 077; mkdir $dir, 0700; umask $old;
+    my $key = substr(sha256_hex("$tool\0$event\0$sig"), 0, 24);
+    if (sysopen(my $fh, "$dir/$key", O_RDWR | O_CREAT, 0600)) {
+        flock($fh, LOCK_EX); my $raw = ""; sysread($fh, $raw, 64);
+        my ($last, $count) = split " ", $raw; my $now = time; my $new;
+        if (defined $count && $now - $last < 60) { $new = "$last " . ($count + 1); $out = "-"; }
+        else { $new = "$now 0"; $out = $count || 0; }
+        seek($fh, 0, 0); truncate($fh, 0); syswrite($fh, $new); close $fh;
+    }
+}
+$m =~ s/\r?\n/ \\n /g;
+print "$out\n", substr($m, 0, 4096);
+'
+
+# log-journal-tool <name>: the tool this process logs as (dispatcher-init).
+log-journal-tool() {
+    emulate -L zsh
+    _DOTLIB_TOOL="${1:-}"
+}
+
+# log-journal-begin [args...]: a new run; its arguments are kept only to be
+# scrubbed out of messages.
+log-journal-begin() {
+    emulate -L zsh
+    _DOTLIB_TOOL_ARGS=("$@")
+    _DOTLIB_TOOL_COMMAND=""
+    _DOTLIB_TOOL_ERRORS=0
+    _DOTLIB_TOOL_RUN=""
+}
+
+# log-journal-command <name>: the run's subcommand. Only a fixed name: the
+# caller passes one it resolved (a function or built-in that exists).
+log-journal-command() {
+    emulate -L zsh
+    local MATCH MBEGIN MEND; local -a match mbegin mend
+    if [[ "${1:-}" =~ '^[a-z0-9][a-z0-9_-]{0,63}$' ]]; then
+        _DOTLIB_TOOL_COMMAND="$1"
+    else
+        _DOTLIB_TOOL_COMMAND=""
+    fi
+}
+
+# The identifier: the dispatcher's name, else LOG_SYSTEMD_TAG, else the
+# script's name.
+_log-journal-id() {
+    emulate -L zsh
+    print -r -- "${_DOTLIB_TOOL:-${LOG_SYSTEMD_TAG:-${${ZSH_ARGZERO:-zsh}:t}}}"
+}
+
+# The same in REPLY, without a fork (the hot path)
+_log-journal-id-reply() {
+    REPLY="${_DOTLIB_TOOL:-${LOG_SYSTEMD_TAG:-${${ZSH_ARGZERO:-zsh}:t}}}"
+}
+
+_log-journal-off() {
+    emulate -L zsh
+    [[ "${(L)${TOOL_JOURNAL:-}}" == (off|0|no|false) ]]
+}
+
+# Who is calling (0017 §1): COORDINATOR, else claude, stephen or system.
+_log-journal-actor() {
+    emulate -L zsh
+    local MATCH MBEGIN MEND; local -a match mbegin mend
+    local c="${COORDINATOR:-}"
+    if [[ -n "$c" ]]; then
+        if [[ "$c" =~ '^[a-z0-9][a-z0-9-]{0,63}$' ]]; then REPLY="$c"; else REPLY="unknown"; fi
+    elif [[ -n "${CLAUDECODE:-}" ]]; then
+        REPLY="claude"
+    elif [[ -t 0 || -t 2 ]]; then
+        REPLY="stephen"
+    else
+        REPLY="system"
+    fi
+}
+
+# TOOL_VERSION: the short commit of the repo _log lives in, read from .git
+# without running git (cached; empty when it can't be read).
+_log-journal-version() {
+    emulate -L zsh
+    if (( ${+_DOTLIB_TOOL_VERSION} )); then REPLY="$_DOTLIB_TOOL_VERSION"; return 0; fi
+    typeset -g _DOTLIB_TOOL_VERSION=""
+    REPLY=""
+    local d="${_LOG_SELF:h}" gitdir common head ref sha="" line
+    while [[ "$d" != "/" && ! -e "$d/.git" ]]; do d="${d:h}"; done
+    [[ -e "$d/.git" ]] || return 0
+    if [[ -f "$d/.git" ]]; then
+        line="$(<"$d/.git")"
+        gitdir="${line#gitdir: }"
+        [[ "$gitdir" == /* ]] || gitdir="$d/$gitdir"
+    else
+        gitdir="$d/.git"
+    fi
+    common="$gitdir"
+    if [[ -r "$gitdir/commondir" ]]; then
+        common="$(<"$gitdir/commondir")"
+        [[ "$common" == /* ]] || common="$gitdir/$common"
+    fi
+    [[ -r "$gitdir/HEAD" ]] || return 0
+    head="$(<"$gitdir/HEAD")"
+    if [[ "$head" == "ref: "* ]]; then
+        ref="${head#ref: }"
+        if [[ -r "$gitdir/$ref" ]]; then sha="$(<"$gitdir/$ref")"
+        elif [[ -r "$common/$ref" ]]; then sha="$(<"$common/$ref")"
+        elif [[ -r "$common/packed-refs" ]]; then
+            for line in "${(@f)$(<"$common/packed-refs")}"; do
+                [[ "$line" == *" $ref" ]] && { sha="${line%% *}"; break; }
+            done
+        fi
+    else
+        sha="$head"
+    fi
+    [[ "$sha" == [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]* ]] || return 0
+    _DOTLIB_TOOL_VERSION="${sha[1,7]}"
+    REPLY="$_DOTLIB_TOOL_VERSION"
+}
+
+_log-journal-run-id() {
+    emulate -L zsh
+    if [[ -z "$_DOTLIB_TOOL_RUN" ]]; then
+        local -i n=$(( (RANDOM << 17) ^ (RANDOM << 2) ^ ${sysparams[pid]:-$$} ^ ${${EPOCHREALTIME:-0.0}#*.} ))
+        printf -v _DOTLIB_TOOL_RUN '%08x' $(( n & 0xffffffff ))
+    fi
+}
+
+# _log-journal-send <priority> <event> <message> [KEY=value...]: one entry,
+# with the common fields, through `logger --journald`.
+_log-journal-send() {
+    emulate -L zsh
+    local priority="$1" event="$2" message="$3"; shift 3
+    local logger="${commands[logger]:-}"
+    [[ -n "$logger" ]] || return 0
+    local actor version id
+    _log-journal-id-reply; id="$REPLY"
+    _log-journal-actor; actor="$REPLY"
+    _log-journal-version; version="$REPLY"
+    _log-journal-run-id
+    local -a fields=(
+        "MESSAGE=$message"
+        "PRIORITY=$priority"
+        "SYSLOG_IDENTIFIER=$id"
+        "TOOL_OWNER=$DOTLIB_TOOL_OWNER"
+        "TOOL_ACTOR=$actor"
+        "TOOL_VERSION=$version"
+        "TOOL_RUN=$_DOTLIB_TOOL_RUN"
+        "TOOL_EVENT=$event"
+    )
+    [[ -n "$_DOTLIB_TOOL_COMMAND" ]] && fields+=("TOOL_COMMAND=$_DOTLIB_TOOL_COMMAND")
+    fields+=("$@")
+    # A here-string, not a pipe: one fork (logger's), and nothing in argv
+    "$logger" --journald <<<"${(F)fields}" >/dev/null 2>&1
+    return 0
+}
+
+# _log-journal-event <error|warning> <message>: an error or warning the tool
+# already prints, scrubbed, redacted and rate-limited.
+_log-journal-event() {
+    emulate -L zsh
+    _log-journal-off && return 0
+    local event="$1" message="$2" out suppressed tool v
+    (( ++_DOTLIB_TOOL_ERRORS ))
+    [[ -n "${commands[logger]:-}" ]] || return 0
+    _log-journal-id-reply; tool="$REPLY"
+    local stamps="${TOOL_JOURNAL_STAMPS:-${XDG_RUNTIME_DIR:+$XDG_RUNTIME_DIR/tool-journal}}"
+    # The run's arguments to scrub: values, not flags; not the tool's or the
+    # subcommand's fixed names.
+    local -a args=()
+    for v in "${_DOTLIB_TOOL_ARGS[@]}"; do
+        if [[ "$v" == -* ]]; then
+            [[ "$v" == *=* ]] && args+=("${v#*=}")
+            continue
+        fi
+        [[ "$v" == "$tool" || ( -n "$_DOTLIB_TOOL_COMMAND" && "$v" == "$_DOTLIB_TOOL_COMMAND" ) ]] && continue
+        args+=("$v")
+    done
+    if [[ -n "${commands[perl]:-}" ]]; then
+        out="$( { print -rn -- "$message"; for v in "${args[@]}"; do print -rn -- $'\0'"$v"; done } \
+            | "${commands[perl]}" -e "$_LOG_REDACT" -- "$tool" "$event" "$stamps" 2>/dev/null )" || return 0
+        suppressed="${out%%$'\n'*}"
+        message="${out#*$'\n'}"
+        [[ "$suppressed" == "-" ]] && return 0
+    else
+        # No redactor: say what happened, not the text.
+        message="$event (message not logged: perl unavailable)"
+        suppressed=0
+    fi
+    local priority=4
+    [[ "$event" == error ]] && priority=3
+    if [[ "$suppressed" == <1-> ]]; then
+        _log-journal-send "$priority" "$event" "$message" "SUPPRESSED=$suppressed"
+    else
+        _log-journal-send "$priority" "$event" "$message"
+    fi
+}
+
+# log-journal-run <exit-code> <duration-ms> [result-codes...]: the run's end,
+# one journal entry (TOOL_EVENT=run) and one line in the run store (the
+# record's 2026-11-04 amendment). None under TOOL_STATS=skip.
+log-journal-run() {
+    emulate -L zsh
+    _log-journal-off && return 0
+    [[ "${(L)${TOOL_STATS:-}}" == skip ]] && return 0
+    local -i code="${1:-0}" ms="${2:-0}"; shift 2
+    local outcome=fail priority=3 tool cmd="$_DOTLIB_TOOL_COMMAND"
+    _log-journal-id-reply; tool="$REPLY"
+    if (( code == 0 )); then outcome=ok
+    elif (( ${@[(Ie)$code]} )); then outcome=result
+    fi
+    [[ "$outcome" == fail ]] || priority=6
+    _log-journal-send "$priority" run "$tool${cmd:+ $cmd}: exit $code ($outcome), $ms ms" \
+        "EXIT_CODE=$code" "OUTCOME=$outcome" "DURATION_MS=$ms" "TOOL_ERRORS=$_DOTLIB_TOOL_ERRORS"
+    _log-journal-store "$tool" "$cmd" "$code" "$outcome" "$ms"
+    return 0
+}
+
+# _log-journal-store <tool> <command> <code> <outcome> <ms>: one JSON line in
+# $TOOL_RUNS_DIR/<YYYY-MM>.jsonl (mode 600, one O_APPEND write), as
+# journal.py's record(); a new month's file prunes those 13 months old.
+_log-journal-store() {
+    emulate -L zsh
+    local tool="$1" cmd="$2" code="$3" outcome="$4" ms="$5"
+    local root="${TOOL_RUNS_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/tool-runs}"
+    local now="${EPOCHREALTIME:-}" secs frac ts month file actor version line f
+    [[ -n "$now" ]] || return 0
+    secs="${now%.*}" frac="${now#*.}000"
+    TZ=UTC strftime -s ts '%Y-%m-%dT%H:%M:%S' "$secs" || return 0
+    TZ=UTC strftime -s month '%Y-%m' "$secs" || return 0
+    ts+=".${frac[1,3]}Z"
+    _log-journal-actor; actor="$REPLY"
+    _log-journal-version; version="$REPLY"
+    _log-journal-run-id
+    tool="${${tool//\\/\\\\}//\"/\\\"}"
+    local jcmd=null
+    [[ -n "$cmd" ]] && jcmd="\"$cmd\""
+    line="{\"ts\":\"$ts\",\"tool\":\"$tool\",\"command\":$jcmd,\"exit\":$code,\"outcome\":\"$outcome\",\"duration_ms\":$ms,\"actor\":\"$actor\",\"owner\":\"$DOTLIB_TOOL_OWNER\",\"version\":\"$version\",\"run\":\"$_DOTLIB_TOOL_RUN\"}"
+    if [[ ! -d "$root" ]]; then
+        ( umask 077; mkdir -p -- "$root" ) 2>/dev/null || return 0
+    fi
+    file="$root/$month.jsonl"
+    local -i new=0 fd
+    [[ -e "$file" ]] || new=1
+    sysopen -a -m 600 -o creat,cloexec -u fd "$file" 2>/dev/null || return 0
+    syswrite -o $fd "$line"$'\n' 2>/dev/null
+    exec {fd}>&-
+    if (( new )); then
+        local -i cutoff=$(( ${month[1,4]} * 12 + ${month[6,7]#0} - 1 - 13 ))
+        for f in "$root"/<1000-9999>-<01-12>.jsonl(N); do
+            local b="${f:t:r}"
+            (( ${b[1,4]} * 12 + ${b[6,7]#0} - 1 <= cutoff )) && rm -f -- "${f:?}"
+        done
+    fi
+    return 0
 }
 
 # ------------------------------
@@ -339,13 +650,21 @@ log-success() {
 
 # Log warning message
 log-warning() {
+    _log-journal-event warning "$*" || true
     log-should-log "warning" || return 0
     local msg=$(_log-format-message "warning" "$LOG_COLOR_WARNING" "$@")
     _log-output "warning" "warning" "$msg"
 }
 
+# log-warn: the name _audio, _bluetooth and _network call (their fallbacks
+# define it when _log is missing; with _log loaded it was undefined)
+log-warn() {
+    log-warning "$@"
+}
+
 # Log error message
 log-error() {
+    _log-journal-event error "$*" || true
     log-should-log "error" || return 0
     local msg=$(_log-format-message "error" "$LOG_COLOR_ERROR" "$@")
     _log-output "error" "err" "$msg"
@@ -353,6 +672,7 @@ log-error() {
 
 # Log fatal error message
 log-fatal() {
+    _log-journal-event error "$*" || true
     log-should-log "fatal" || return 0
     local msg=$(_log-format-message "fatal" "$LOG_COLOR_FATAL" "$@")
     _log-output "fatal" "crit" "$msg"
@@ -534,18 +854,21 @@ log-success-with() {
 }
 
 log-warning-with() {
+    _log-journal-event warning "$*" || true
     log-should-log "warning" || return 0
     local msg=$(_log-format-structured "warning" "$LOG_COLOR_WARNING" "$@")
     _log-output "warning" "warning" "$msg"
 }
 
 log-error-with() {
+    _log-journal-event error "$*" || true
     log-should-log "error" || return 0
     local msg=$(_log-format-structured "error" "$LOG_COLOR_ERROR" "$@")
     _log-output "error" "err" "$msg"
 }
 
 log-fatal-with() {
+    _log-journal-event error "$*" || true
     log-should-log "fatal" || return 0
     local msg=$(_log-format-structured "fatal" "$LOG_COLOR_FATAL" "$@")
     _log-output "fatal" "crit" "$msg"
@@ -669,7 +992,7 @@ log-view() {
         return 1
     fi
 
-    journalctl --user -t "$LOG_SYSTEMD_TAG" -n "$lines" -p "$priority" --no-pager
+    journalctl --user -t "$(_log-journal-id)" -n "$lines" -p "$priority" --no-pager
 }
 
 # Follow systemd journal in real-time
@@ -682,7 +1005,7 @@ log-watch() {
         return 1
     fi
 
-    journalctl --user -f -t "$LOG_SYSTEMD_TAG" -p "$priority"
+    journalctl --user -f -t "$(_log-journal-id)" -p "$priority"
 }
 
 # View log file (file mode)
@@ -760,9 +1083,7 @@ log-show-config() {
         echo "  Log File:          $LOG_FILE"
     fi
 
-    if [[ "$LOG_MODE" == "daemon" ]] || [[ "$LOG_MODE" == "hybrid" ]]; then
-        echo "  Systemd Tag:       $LOG_SYSTEMD_TAG"
-    fi
+    echo "  Journal Tag:       $(_log-journal-id) (warnings and above)"
 }
 
 # ------------------------------

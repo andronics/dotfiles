@@ -67,6 +67,9 @@ if ! source "${DOTLIB}/_log" 2>/dev/null; then
     log-success() { echo "[SUCCESS] $*"; }
 fi
 
+# The run entry's duration and pid (record 0017 §3)
+zmodload zsh/datetime zsh/system 2>/dev/null
+
 # Load optional dependencies
 source "${DOTLIB}/_events" 2>/dev/null || true
 declare -g DISPATCHER_EVENTS_AVAILABLE=$(common-command-exists "events-emit" && echo "true" || echo "false")
@@ -101,6 +104,14 @@ declare -g -A _DISPATCHER_COMMAND_CACHE=()
 # Command aliases (command -> actual_command)
 declare -g -A _DISPATCHER_ALIASES=()
 
+# Exit codes that are answers, not faults (dispatcher-init --results="1 3"):
+# the run entry's outcome is `result` for them, not `fail` (record 0017 §1)
+declare -g -a _DISPATCHER_RESULTS=()
+
+# The run being journalled (record 0017 §3): depth, start, pid, done
+declare -g -i _DISPATCHER_RUN_DEPTH=0 _DISPATCHER_RUN_DONE=0 _DISPATCHER_RUN_EXITFN=0
+declare -g _DISPATCHER_RUN_T0="" _DISPATCHER_RUN_PID=""
+
 # Middleware/hooks (before/after command execution)
 declare -g -a _DISPATCHER_BEFORE_HOOKS=()
 declare -g -a _DISPATCHER_AFTER_HOOKS=()
@@ -133,6 +144,7 @@ dispatcher-init() {
     local name=""
     local bin_dir=""
     local version="unknown"
+    local results=""
     local description=""
     local route_mode=""
     local function_prefix=""
@@ -150,6 +162,7 @@ dispatcher-init() {
             --route=*)        route_mode="${1#--route=}" ;;
             --prefix=*)       function_prefix="${1#--prefix=}" ;;
             --version=*)      version="${1#--version=}" ;;
+            --results=*)      results="${1#--results=}" ;;
             --description=*)  description="${1#--description=}" ;;
             --bin-dir=*)      bin_dir="${1#--bin-dir=}" ;;
             *)
@@ -177,6 +190,9 @@ dispatcher-init() {
     : ${function_prefix:=$name}
 
     DISPATCHER_NAME="$name"
+    _DISPATCHER_RESULTS=(${=results//,/ })
+    # The journal identifier: this tool's own name (brain record 0017)
+    (( ${+functions[log-journal-tool]} )) && log-journal-tool "$name"
     DISPATCHER_BIN_DIR="$bin_dir"
     DISPATCHER_VERSION_STRING="$version"
     DISPATCHER_DESCRIPTION="$description"
@@ -544,6 +560,8 @@ dispatcher-execute-command() {
             return 1
         fi
 
+        _dispatcher-journal-command "$command"
+
         if [[ "$DISPATCHER_EVENTS_AVAILABLE" == "true" ]]; then
             events-emit "dispatcher.command.start" "$DISPATCHER_NAME" "$command"
         fi
@@ -588,6 +606,8 @@ dispatcher-execute-command() {
         return 1
     fi
 
+    _dispatcher-journal-command "$command"
+
     if [[ "$DISPATCHER_EVENTS_AVAILABLE" == "true" ]]; then
         events-emit "dispatcher.command.start" "$DISPATCHER_NAME" "$command"
     fi
@@ -613,12 +633,90 @@ dispatcher-execute-command() {
     return $exit_code
 }
 
+# ------------------------------
+# Run entries (brain record 0017 §3)
+# ------------------------------
+# One journal entry per run, after the after-hooks, under the tool's name:
+# TOOL_COMMAND (a resolved name only), EXIT_CODE, OUTCOME, DURATION_MS, with
+# _log's TOOL_OWNER, TOOL_ACTOR, TOOL_VERSION and TOOL_RUN; never the
+# arguments. None when TOOL_STATS=skip (the bar and completions), but
+# warnings and errors are still journalled. Only the outermost
+# dispatcher-execute of a process counts; a subcommand that calls `exit`
+# still gets its entry (a subshell's exit doesn't write one); `exec` ends
+# the run with no entry.
+
+_dispatcher-journal-command() {
+    emulate -L zsh
+    (( ${+functions[log-journal-command]} )) && log-journal-command "$1"
+    return 0
+}
+
+_dispatcher-run-begin() {
+    emulate -L zsh
+    _DISPATCHER_RUN_DEPTH=1
+    _DISPATCHER_RUN_DONE=0
+    _DISPATCHER_RUN_T0="${EPOCHREALTIME:-}"
+    _DISPATCHER_RUN_PID="${sysparams[pid]:-$$}"
+    (( ${+functions[log-journal-begin]} )) && log-journal-begin "$@"
+    # A subcommand that calls `exit` ends the process before dispatcher-execute
+    # can write the entry, and a zshexit hook is cut short by zsh at its first
+    # nested function call, so `exit` is caught for the run instead.
+    if (( ! ${+functions[exit]} )); then
+        exit() {
+            local -i _code=${1:-$?}
+            _dispatcher-run-exit $_code || true
+            builtin exit $_code
+        }
+        _DISPATCHER_RUN_EXITFN=1
+    fi
+    return 0
+}
+
+_dispatcher-run-end() {
+    emulate -L zsh
+    local -i code="${1:-0}" ms=0
+    (( _DISPATCHER_RUN_DONE )) && return 0
+    _DISPATCHER_RUN_DONE=1
+    _DISPATCHER_RUN_DEPTH=0
+    [[ "${(L)${TOOL_STATS:-}}" == skip ]] && return 0
+    (( ${+functions[log-journal-run]} )) || return 0
+    [[ -n "$_DISPATCHER_RUN_T0" && -n "${EPOCHREALTIME:-}" ]] \
+        && ms=$(( (EPOCHREALTIME - _DISPATCHER_RUN_T0) * 1000 ))
+    log-journal-run "$code" "$ms" "${_DISPATCHER_RESULTS[@]}"
+    return 0
+}
+
+# The run's `exit`: in this process only, not in a subshell of it
+_dispatcher-run-exit() {
+    emulate -L zsh
+    (( _DISPATCHER_RUN_DEPTH )) || return 0
+    [[ "${sysparams[pid]:-$$}" == "$_DISPATCHER_RUN_PID" ]] || return 0
+    _dispatcher-run-end "${1:-0}" || true
+}
+
 # Main execution handler
-# Handles special commands (help, version, commands) and routes to subcommands
+# Handles special commands (help, version, commands) and routes to subcommands,
+# and journals the run (above).
 #
 # Usage: dispatcher-execute "$@"
 #
 dispatcher-execute() {
+    if (( _DISPATCHER_RUN_DEPTH )); then
+        _dispatcher-execute "$@"
+        return
+    fi
+    local -i rc=0
+    _dispatcher-run-begin "$@" || true
+    _dispatcher-execute "$@" && rc=0 || rc=$?
+    _dispatcher-run-end "$rc" || true
+    if (( _DISPATCHER_RUN_EXITFN )); then
+        unfunction exit 2>/dev/null
+        _DISPATCHER_RUN_EXITFN=0
+    fi
+    return $rc
+}
+
+_dispatcher-execute() {
     # Check initialization
     if ! dispatcher-check-init; then
         return 1
@@ -648,6 +746,7 @@ dispatcher-execute() {
     # Handle special commands
     case "$command" in
         help|--help|-h)
+            _dispatcher-journal-command help
             shift
             if [[ -n "$1" ]] && dispatcher-command-exists "$(dispatcher-resolve-alias "$1")"; then
                 dispatcher-show-command-help "$1"
@@ -657,14 +756,17 @@ dispatcher-execute() {
             return 0
             ;;
         version|--version)
+            _dispatcher-journal-command version
             dispatcher-show-version
             return 0
             ;;
         commands|list-commands)
+            _dispatcher-journal-command commands
             dispatcher-list-commands-detailed
             return 0
             ;;
         completion|--completion)
+            _dispatcher-journal-command completion
             shift
             dispatcher-generate-completion "$@"
             return 0
@@ -676,6 +778,7 @@ dispatcher-execute() {
     # turned the adapter off). Only the first argument counts, so a command
     # can still be given --help further on (after `--`, say).
     if [[ "${2:-}" == (--help|-h) ]] && dispatcher-command-exists "$(dispatcher-resolve-alias "$command")"; then
+        _dispatcher-journal-command help
         dispatcher-show-command-help "$command"
         return 0
     fi
@@ -992,6 +1095,8 @@ EOF
 # Test dispatcher functions
 # Usage: dispatcher-self-test
 dispatcher-self-test() {
+    # Its test commands are no one's runs: nothing to the journal
+    local TOOL_JOURNAL=off
     echo "=== _dispatcher v${DISPATCHER_VERSION} Self-Test ==="
     echo ""
 

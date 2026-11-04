@@ -15,6 +15,9 @@ Environment=XDG_CONFIG_HOME="%h/.config"
 Environment=XDG_DATA_HOME="%h/.local/share"
 Environment=XDG_STATE_HOME="%h/.local/state"
 Environment=XDG_CACHE_HOME="%h/.cache"
+# The bar's controller polls tools for the bar: no run entries for them
+# (the brain's record 0017 §3); their warnings and errors are still journalled.
+Environment=TOOL_STATS=skip
 ExecStart=%h/.local/bin/barctl run
 Restart=on-failure
 RestartSec=5

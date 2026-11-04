@@ -21,6 +21,7 @@
 # Prints "<group>\t<value>\t<description>" lines for one context.
 _theme_cmd_data() {
     DOTLIB=${DOTLIB:-${XDG_DATA_HOME:-$HOME/.local/share}/dotlib} \
+    TOOL_STATS=skip LOG_SYSTEMD_TAG=theme \
     command zsh -fc '
         source "$DOTLIB/_theme" || exit 1
         source "$DOTLIB/_theme_ui" 2>/dev/null

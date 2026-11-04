@@ -66,6 +66,9 @@ _coordinator() {
 
   cd "$home" || return
   # Unattended, so prompt suggestions only cost usage; the env var beats the promptSuggestionEnabled setting.
+  # COORDINATOR tells every tool the session and its agents run who is calling (the brain's record 0017):
+  # the actor's slug by its new name (record 0018), even while a former name's home is still in use.
+  COORDINATOR=${_COORDINATOR_ALIASES[$name]:-$name}-coordinator \
   CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false command claude --permission-mode bypassPermissions --dangerously-skip-permissions "$@" "$(${COORD_PROMPT_SCRIPT:-/mnt/brain/tools/coordinator-prompt.sh} "$name")"
 }
 

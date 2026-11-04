@@ -20,6 +20,7 @@
 # Prints "<group>\t<value>\t<description>" lines for one context.
 _coord_cmd_data() {
     DOTLIB=${DOTLIB:-${XDG_DATA_HOME:-$HOME/.local/share}/dotlib} \
+    TOOL_STATS=skip LOG_SYSTEMD_TAG=coord \
     command zsh -fc '
         source "$DOTLIB/_coord" || exit 1
         local f s n shown state last side ev
