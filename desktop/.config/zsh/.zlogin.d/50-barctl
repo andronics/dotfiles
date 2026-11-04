@@ -1,0 +1,8 @@
+# The bar controller (barctl.service) pokes polybar's IPC modules. Started
+# here rather than by graphical-session.target, which this bspwm session
+# never activates. DISPLAY and XAUTHORITY go to the user manager first, for
+# the controller and what it runs. --no-block: login never waits on it.
+[[ -n "${DISPLAY}" || "${WAYLAND_DISPLAY}" ]] && (( ${+commands[systemctl]} )) && {
+    systemctl --user import-environment DISPLAY XAUTHORITY 2>/dev/null
+    systemctl --user --no-block start barctl.service 2>/dev/null
+}

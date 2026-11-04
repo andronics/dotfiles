@@ -52,6 +52,12 @@ Don't add an "auto-loader" — the manual pattern is intentional and works.
 
 Scripts in `shell/.local/bin/` (e.g. `audio`, `player`) should be thin dispatchers over `dotlib` modules, not standalone reimplementations. The wrapper contract — ≤30-line wrapper that sources `_dispatcher` + its `_<module>` and calls `dispatcher-init <name> --route=function` then `dispatcher-execute "$@"` — is documented at `shell/.local/share/dotlib/README.md`. Business logic lives in modules, not in wrapper scripts.
 
+## Bar controller
+
+Stateful polybar icons are `custom/ipc` modules drawn by one controller, `barctl` (`dotlib/_barctl`; design record `docs/design/0001-polybar-ipc-module-taxonomy.md`). `barctl run` (the `barctl.service` user unit, started by `.zlogin.d/50-barctl`; never a child of polybar, whose leaked pipes freeze its restarts) runs one watcher per event source (`pactl subscribe`, `playerctl -a --follow`). A watcher writes each module's tier and text to `~/.local/state/barctl/<module>` and pokes the module only when that changed. The module's one hook, `hook-0 = barctl render <module>` with `initial = 1`, reads the file and colours it from theme roles at render time (unavailable `dim`, idle `fg_dim`, active `accent`, alert `urgent`), so a bar restart or `theme apply` needs nothing from the controller.
+
+To add a module: write `_barctl-source-<name>` (follow the source, call `_barctl-set <module> <tier> <text>`, return when the stream ends), add it to `_BARCTL_SOURCES` and `_BARCTL_ORDER`, make the module `inherit = module/base-ipc` with `type = custom/ipc` and `hook-0 = barctl render <module>`, and add its cases to `tests/barctl.zsh` (stubs only; nothing live).
+
 ## Secrets architecture
 
 Three-tier chain: GPG key (private submodule) → `pass` (private repo) → git-crypt symmetric key (in `pass` at `hosts/desktop/dotfiles-git-crypt-key-official`) → encrypted files in this public repo. Official git-crypt; Stephen's GPG key is also a git-crypt user. Design record: `docs/design/0002-official-git-crypt.md`.
