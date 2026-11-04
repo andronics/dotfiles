@@ -1,0 +1,64 @@
+/**
+ * Confirm: a Yes/No question to click, nothing to type (crew's Yes/No).
+ * The question is rofi's -mesg, shown in full and wrapped over two large
+ * rows, Yes and No side by side; there is no input bar, though typing still
+ * filters the rows. prompt.rasi's one line squeezed a long question and hid
+ * what was typed.
+ */
+
+@import "../base.rasi"
+
+window {
+    location:            center;
+    anchor:              center;
+    width:               720px;
+    border-radius:       @radius-lg;
+}
+
+mainbox {
+    orientation:         vertical;
+    padding:             16px;
+    spacing:             16px;
+    children:            [ message, listview ];
+}
+
+message {
+    border:              0px;
+    border-radius:       @radius;
+}
+
+textbox {
+    font:                @font-lg;
+    horizontal-align:    0.5;
+}
+
+listview {
+    layout:              vertical;
+    lines:               1;
+    columns:             2;
+    fixed-columns:       true;
+    fixed-height:        true;
+    scrollbar:           false;
+    padding:             0px;
+    spacing:             16px;
+}
+
+element {
+    padding:             16px 12px;
+    border-radius:       @radius-lg;
+}
+
+element normal.normal,
+element alternate.normal {
+    background-color:    @bg-alt-color;
+}
+
+element-icon {
+    size:                0px;
+    padding:             0px;
+}
+
+element-text {
+    font:                @font-bold;
+    horizontal-align:    0.5;
+}
