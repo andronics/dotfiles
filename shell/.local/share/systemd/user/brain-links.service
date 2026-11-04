@@ -1,0 +1,12 @@
+# One pass of brain-links (dotlib _brain_links), from brain-links.path and
+# .zlogin.d/40-brain-links. Its warnings (a name it won't replace) go to the
+# journal as `brain-links`.
+[Unit]
+Description=Link every brain tool into ~/.local/bin
+ConditionPathIsDirectory=/mnt/brain/bin
+
+[Service]
+Type=oneshot
+Environment=PATH="%h/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+Environment=TOOL_STATS=skip
+ExecStart=%h/.local/bin/brain-links sync

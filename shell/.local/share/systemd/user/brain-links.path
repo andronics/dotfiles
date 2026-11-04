@@ -1,0 +1,11 @@
+# Re-links the brain's tools into ~/.local/bin whenever /mnt/brain/bin gains,
+# loses or renames one (a brain pull). Started by .zlogin.d/40-brain-links,
+# like barctl.service; not enabled, so no [Install]. The path is fixed here:
+# units can't read $BRAIN_BIN.
+[Unit]
+Description=Watch the brain's tools for brain-links
+ConditionPathIsDirectory=/mnt/brain/bin
+
+[Path]
+PathChanged=/mnt/brain/bin
+Unit=brain-links.service

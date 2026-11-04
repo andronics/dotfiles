@@ -1,0 +1,10 @@
+# Links every brain tool into ~/.local/bin (brain-links, dotlib _brain_links),
+# where Claude Code sessions find them, and starts the path unit that keeps
+# them linked as the brain changes. --no-block: login never waits on it.
+# Without a user manager, one pass here instead; its warnings are journalled.
+if [[ -d ${BRAIN_BIN:-/mnt/brain/bin} && -x ${HOME}/.local/bin/brain-links ]]; then
+    if ! { (( ${+commands[systemctl]} )) \
+        && systemctl --user --no-block start brain-links.path brain-links.service 2>/dev/null; }; then
+        TOOL_STATS=skip "${HOME}/.local/bin/brain-links" sync 2>/dev/null
+    fi
+fi
