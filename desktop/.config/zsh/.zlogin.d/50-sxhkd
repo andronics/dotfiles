@@ -5,5 +5,7 @@
         return 1
     }
 
-    pgrep -x "sxhkd" > /dev/null || sxhkd &
+    # Detached, stdio on /dev/null: sxhkd outlives this login terminal, and a
+    # command it runs must never inherit a terminal that has since closed.
+    pgrep -x "sxhkd" > /dev/null || sxhkd </dev/null >/dev/null 2>&1 &!
 }
