@@ -1,6 +1,6 @@
 # 0004: Theme text contrast on surfaces
 
-Status: Approved, with changes (by the ⚖️ Arbiter, record 0023; 2026-11-04)
+Status: Implemented (approved with changes by the ⚖️ Arbiter, record 0023, 2026-11-04; built in PR 108)
 Date: 2026-11-04
 Authors: written up by the desktop coordinator's agent, for the ⚖️ Arbiter (record 0023)
 
@@ -200,3 +200,4 @@ Each with what it costs the dim/fg_dim hierarchy and the look; numbers from the 
 | 2026-11-04 | Proposed (PR 99) |
 | 2026-11-04T08:28:09+00:00 | Approved by the arbiter, 2026-11-04T08:28:09+00:00, with changes (❓ 2026-11-04 Approve Dotfiles Record 0004 On Theme Text Contrast); the five open questions as recommended |
 | 2026-11-04 | Built in PR 108 (`_theme`: fg_dim and dim checked on bg and bg_alt, `theme check` and `theme self-test` report the four pairs; rofi's placeholder is fg_dim); status stays Approved until the live switch |
+| 2026-11-04T16:32:34+00:00 | Implemented: built in PR 108 and live on the desktop (`theme apply` of the current scheme): `theme check` shows fg_dim and dim passing on bg and bg_alt (Dracula: fg_dim 6.02/6.68, dim 3.03/3.36), `theme self-test` 133/133, the measurement script 0 below the floors. Status change decided by the arbiter. |
