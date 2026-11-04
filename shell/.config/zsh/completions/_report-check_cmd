@@ -1,0 +1,11 @@
+#compdef report-check
+
+# Completion for the brain's `report-check` (/mnt/brain/tools/report-check in
+# andronics/brain, run through /mnt/brain/bin), the coordinators' SubagentStop
+# hook, written by hand from its --help. It is a bash script with no argparse
+# parser, so the brain's tools/gen-zsh-completions.py doesn't generate it and
+# its completion lives here, not in /mnt/brain/completions.
+
+_arguments \
+  '(- *)'{-h,--help}'[show this help message and exit]' \
+  '(- *)--self-test[run the planted-defect and real-report fixtures]'
