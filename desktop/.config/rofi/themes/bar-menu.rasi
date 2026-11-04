@@ -64,3 +64,21 @@ element {
 textbox {
     padding:             0px;
 }
+
+/*
+ * A row barmenu marks as current (rofi -a; desktop-tools design record 0001):
+ * the in-effect idle-lock row, say. Its text is in the theme's accent, on
+ * every row (alternate rows too), so it stays apart from the selection,
+ * which is the accent pill as on any other row.
+ */
+element normal.active,
+element alternate.active {
+    background-color:    transparent;
+    text-color:          @accent-color;
+}
+
+element selected.active {
+    background-color:    @accent-color;
+    text-color:          @accent-fg-color;
+    border:              0px;
+}
