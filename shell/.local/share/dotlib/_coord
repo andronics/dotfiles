@@ -717,7 +717,7 @@ _coord-alert() {
 _coord-stop-ready() {
     (( ${+commands[python3]} )) && [[ -r "$_COORD_STOP_SCRIPT" ]] && return 0
     _coord-alert "coord: can't stop" \
-        "no python3, or no stop script at ${_COORD_STOP_SCRIPT}; by hand: tmux kill-session -t =<name>-coordinator"
+        "no python3, or no stop script at ${_COORD_STOP_SCRIPT}; by hand: TMUX_FORCE=1 tmux kill-session -t =<name>-coordinator"
     return 1
 }
 
