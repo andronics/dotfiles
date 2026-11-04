@@ -1,12 +1,15 @@
 # 0001: Polybar IPC module taxonomy
 
-Status: Proposed
-Date: 2026-11-03
+Status: Approved (by Stephen for question 7 and the colour tiers; by the brain coordinator, on Stephen's
+behalf, for everything else; 2026-11-04)
+Date: 2026-11-04
 Authors: Stephen Cox (proposal); written up as a design record by the dotfiles coordinator
 
-Stephen's proposal is kept as he wrote it, in [Decision](#decision) and [Open questions](#open-questions).
-Everything marked **Coordinator's note** or **Coordinator's recommendation** was added while writing it up:
-it describes the repo as it is today, or suggests an answer. None of it is decided.
+Stephen's proposal is kept as he wrote it, in [Decision](#decision) and [Questions, as
+decided](#questions-as-decided). Everything marked **Coordinator's note** or **Coordinator's
+recommendation** was added while writing it up: it describes the repo as it is today, or suggests an
+answer. What was decided is in the **Decided** lines: under each question, and in the Decision sections
+they change.
 
 ## Context
 
@@ -25,6 +28,10 @@ The modules fall into five groups:
 | polybar menu (`custom/menu`) | `menu-theme`, `menu-lock` | polybar's own expanding menu |
 
 The built-in `internal/bspwm` module (`modules/bspwm.ini`) is kept for rollback but not on a bar.
+
+Volume is polled too (`audio-level`, every 5 s). The "pulsectl-based volume watcher" in question 1 is
+PipeWire itself (`pipewire-pulse` and `wireplumber`), not a watcher of ours: nothing in this repo watches
+volume today.
 
 So the things this proposal is about have no state on the bar today: the printer, scanner and Bluetooth
 device icons never change, the VPN button is a static glyph whose left-click opens a fixed rofi menu
@@ -147,6 +154,10 @@ counters into one glanceable readout. The GitHub-activity module is the motivati
 opened, [unclear item: tasks/requests?] completed vs remaining, rendered together as a single compact string
 (e.g. `PR:3 ISS:5 TASK:12/20`).
 
+> **Decided (Stephen, question 7).** The third counter is selectable, from four sources: the vault's ☑️
+> tasks (done vs open, through `vault-query`), GitHub Projects items, reviews requested of him, and issues
+> closed vs open. One is picked in config, or cycled by scroll or click on the module.
+
 - **Data source:** polled API (GitHub REST/GraphQL), not an event stream: no dbus signal fires when a PR
   merges. Controller polls on an interval and diffs against last-seen state to decide whether to re-render
   at all.
@@ -221,6 +232,10 @@ jobs" (that's idle), so each module type needs its own availability check, not j
 > This differs from `coord`, where idle is plain `fg` and busy is `busy` (orange). Either `coord` moves to
 > the three tiers or the record says why it differs.
 
+> **Decided (Stephen).** These tiers, for every module, with colours read from the theme roles at render
+> time: unavailable = `dim`, idle = `fg-dim`, active = `accent`, alert (blink) = `urgent`. `coord` changes
+> to match (see Consequences).
+
 ## Alternatives considered
 
 Stephen's proposal names no rejected alternatives. **Coordinator's notes** on the mechanisms the bar uses
@@ -261,10 +276,20 @@ today, and why each falls short for live state:
 - Wiki pages: none (this repo has no wiki). `REVIEW.md` and `CLAUDE.md` mention the bar's modules and may
   need a line when the first controller lands.
 
-## Open questions
+Following the decisions:
 
-Stephen's eight questions for the implementation pass, as he wrote them. Each has the options and, where the
-current setup suggests one, a **Coordinator's recommendation**: a suggestion for Stephen, not a decision.
+- `coord` moves to the colour tiers: idle becomes `fg-dim` instead of plain `fg`, and busy becomes `accent`
+  instead of `busy`, with `urgent` kept for waiting on input. A follow-up change, not part of this record.
+- Volume becomes event-driven: the controller follows `pactl subscribe` (served by `pipewire-pulse`) and
+  replaces the polled `audio-level`.
+- The build follows the coordinator rename (the dotfiles coordinator becomes the desktop coordinator) and
+  comes as separate briefs, one change per controller or module, not as one change.
+
+## Questions, as decided
+
+Stephen's eight questions for the implementation pass, as he wrote them. Each has the options, the
+**Coordinator's recommendation** made while the record was proposed, and the **Decided** answer. Stephen
+decided question 7 and the colour tiers; the brain coordinator decided the rest on his behalf.
 
 1. **Shared-controller process:** single Python daemon (natural fit alongside existing pulsectl-based volume
    watcher) vs one daemon per concern?
@@ -275,6 +300,10 @@ current setup suggests one, a **Coordinator's recommendation**: a suggestion for
      pulsectl volume watcher exists in this repo today (`audio-level` polls every 5 s), and the house style
      and the theming design's helpers are zsh. The event sources can be read from command-line tools
      (`pactl subscribe`, `dbus-monitor`, `lpstat`, `playerctl --follow`). Revisit if one of them can't.
+   - **Decided:** one shared controller, in zsh as a `dotlib` module with a thin dispatcher, run as a
+     systemd user service. The "pulsectl volume watcher" was PipeWire itself (`pipewire-pulse` and
+     `wireplumber`), not a watcher of ours (see Context); volume becomes event-driven through `pactl
+     subscribe` inside the controller.
 
 2. **Hook-count convention:** fix a minimum hook set per type (e.g. single-item always 0=inactive, 1=active,
    2=alert) so modules are interchangeable in config?
@@ -284,6 +313,7 @@ current setup suggests one, a **Coordinator's recommendation**: a suggestion for
      proposal already makes the text the payload (counts, colours, composite strings), so per-state hooks add
      config without adding anything a render hook can't do; a blink is the controller flipping its state and
      poking `hook-0` twice. Every module is then interchangeable by construction.
+   - **Decided:** one render hook (`hook-0`) per module, as `coord` does.
 
 3. **Multi-item priority rule** when multiple sources are simultaneously active: last-changed wins, explicit
    priority list, or user-selectable?
@@ -291,6 +321,8 @@ current setup suggests one, a **Coordinator's recommendation**: a suggestion for
    - Coordinator's recommendation: Playing beats Paused beats Stopped; among several playing, the one that
      changed most recently wins; scrolling on the module pins another source until it stops. A fixed
      priority list goes in the same `instances.json` the player module already reads, only as a tie-break.
+   - **Decided:** Playing beats Paused beats Stopped; then the most recently changed player wins. (Pinning
+     by scroll and an `instances.json` tie-break were not part of the decision.)
 
 4. **Right-click menu renderer:** rofi, dmenu, or a custom picker; needs icon support if rendering preference
    (§4) [the rendering preference is §5] applies to menus too.
@@ -298,6 +330,7 @@ current setup suggests one, a **Coordinator's recommendation**: a suggestion for
    - Coordinator's recommendation: rofi through the existing `barmenu`. It already opens above the clicked
      button, shows a glyph column (and can show image icons, such as flags), is themed from the theme
      roles, and handles the polybar pipe hazard. dmenu has no icons; a custom picker would redo all of that.
+   - **Decided:** right-click menus through `barmenu` (rofi).
 
 5. **Where module-specific quick-action lists** (scanner, VPN) live: hardcoded per controller, or a
    declarative config the controller reads so adding a new action doesn't mean editing Python?
@@ -306,6 +339,8 @@ current setup suggests one, a **Coordinator's recommendation**: a suggestion for
      label, command), so fixed actions such as the scanner's are one line each. Dynamic rows (VPN countries)
      are generated by the controller at menu time, using the same row shape. A separate config file only
      if the controller ends up outside zsh.
+   - **Decided:** quick actions are rows in `barmenu`'s table; dynamic rows (such as VPN countries) are
+     generated by the controller.
 
 6. **Availability detection per module type:** what counts as "unreachable" for each (printer: CUPS queries
    fail vs returns no printer; scanner: SANE device list empty; VPN: interface absent) needs enumerating per
@@ -317,6 +352,14 @@ current setup suggests one, a **Coordinator's recommendation**: a suggestion for
      SANE lists no device (`scanimage -L` takes seconds, so check it rarely or on USB plug events, not every
      poll); VPN unavailable when the `nordvpn` daemon isn't running (disconnected is idle); Bluetooth
      unavailable when the adapter is off or missing.
+   - **Decided:** a per-device availability table first, before code:
+
+     | Device | Unavailable when | Checked |
+     |---|---|---|
+     | Printer | CUPS doesn't answer, or the printer is missing or disabled (`lpstat`) | each poll or event |
+     | Scanner | SANE lists no device (`scanimage -L`) | rarely, or on USB plug events: the check takes seconds |
+     | VPN | the `nordvpn` daemon isn't running (disconnected is idle) | each poll or event |
+     | Bluetooth | the adapter is off or missing | each poll or event |
 
 7. **Aggregate module:** the "tasks completed vs remaining" counter wasn't fully clear from the voice note;
    needs confirming what that third figure actually tracks (project board tasks? review requests? something
@@ -324,6 +367,9 @@ current setup suggests one, a **Coordinator's recommendation**: a suggestion for
    - Options: GitHub project board items (done vs total); review requests waiting on you; issues closed vs
      open in a milestone; something else.
    - Coordinator's recommendation: none. This is Stephen's to say.
+   - **Decided (Stephen):** selectable, from four sources: the vault's ☑️ tasks (done vs open, through
+     `vault-query`), GitHub Projects items, reviews requested of him, and issues closed vs open. One is
+     picked in config, or cycled by scroll or click on the module.
 
 8. **Aggregate module poll interval vs GitHub rate limit budget:** needs a concrete number once the API calls
    (REST vs GraphQL, which scopes) are picked, since GraphQL's single-query-multiple-field shape may let one
@@ -335,3 +381,9 @@ current setup suggests one, a **Coordinator's recommendation**: a suggestion for
      polls an hour is well under 1% of the budget. The budget is shared with every other use of the same
      login, which is why the interval should stay in minutes, not seconds. Search-based counts use the
      separate search limit (30 a minute), which a 5-minute poll also stays well inside.
+   - **Decided:** as recommended: one GraphQL query every 5 minutes through `gh`, backing off when the
+     remaining budget runs low. (The vault's tasks are read locally through `vault-query`, not from GitHub.)
+
+## Open questions
+
+None.
