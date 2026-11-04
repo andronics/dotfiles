@@ -5,22 +5,95 @@
 # The launch prompt comes from the coordinator's actor note in the vault, via
 # /mnt/brain/tools/coordinator-prompt.sh (a cached copy if the vault fails).
 # Its memory belongs to that home, so always launch from it. Extra arguments go
-# to claude, e.g. `folio-coordinator --model opus`. Check `tmux ls` / ListAgents
-# first: two of the same coordinator would both act. Vault cheatsheet:
+# to claude, e.g. `personal-coordinator --model opus`. Vault cheatsheet:
 # "📇 🤖 Launching a Coordinator".
+#
+# Names follow the brain's design record 0018: each coordinator is named
+# after its knowledge centre. Its homes move one at a time, so a name with no
+# home yet launches nothing, and each former name is an announced alias that
+# runs the new one once its home exists, and the old one exactly as before
+# until then. The aliases go on 2026-12-04, with _coord's _COORD_ALIASES.
+#
+# For tests: COORD_ACTORS_DIR moves the homes, COORD_PROMPT_SCRIPT the prompt
+# script, and COORD_TMUX_SOCKET (as _coord's: a path is -S, a name -L) the
+# tmux server checked for running sessions.
 
+# Former name -> name (record 0018 §2). Keep in step with _coord.
+typeset -gA _COORDINATOR_ALIASES=(
+  dotfiles     desktop
+  apps         media
+  ideas        incubator
+  metalayerlab network-tools
+  template     platform
+  folio        personal
+)
+
+# Refuses to start <name> while its own or its other name's tmux session
+# (<name>-coordinator, or the former/new name's) is running: two of the same
+# coordinator would both act. The switchboard and the cheatsheet start a
+# coordinator inside its own session (tmux new -A -s <name>-coordinator
+# 'zsh -ic <name>-coordinator'), so the session this shell runs in doesn't
+# count; the other name's always does.
 _coordinator() {
-  local name=$1 home=/pool/local/actors/$1; shift
+  local name=$1; shift
+  local home=${COORD_ACTORS_DIR:-/pool/local/actors}/$name other self s k v
+  local -a tm=(tmux) sessions=("$name-coordinator")
+  if [[ ! -d $home ]]; then
+    print -u2 "$name-coordinator: no home yet ($home), so nothing launched"
+    return 1
+  fi
+
+  for k v in "${(@kv)_COORDINATOR_ALIASES}"; do
+    [[ $k == "$name" ]] && other=$v
+    [[ $v == "$name" ]] && other=$k
+  done
+  [[ -n $other ]] && sessions+=("$other-coordinator")
+
+  if [[ ${COORD_TMUX_SOCKET:-} == */* ]]; then tm+=(-S "$COORD_TMUX_SOCKET")
+  elif [[ -n ${COORD_TMUX_SOCKET:-} ]]; then tm+=(-L "$COORD_TMUX_SOCKET"); fi
+  # This shell's own session, only if it is on the server being checked.
+  if [[ -n ${TMUX:-} && -n ${TMUX_PANE:-} ]]; then
+    s=$(command "${tm[@]}" display -p -t "$TMUX_PANE" '#{socket_path} #S' 2>/dev/null)
+    [[ ${s%% *} == "${TMUX%%,*}" ]] && self=${s#* }
+  fi
+  for s in "${sessions[@]}"; do
+    [[ $s == "$self" ]] && continue
+    if command "${tm[@]}" has-session -t "=$s" 2>/dev/null; then
+      print -u2 "$name-coordinator: not starting, tmux session $s is already running (tmux attach -t $s)"
+      return 1
+    fi
+  done
+
   cd "$home" || return
   # Unattended, so prompt suggestions only cost usage; the env var beats the promptSuggestionEnabled setting.
-  CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false command claude --permission-mode bypassPermissions --dangerously-skip-permissions "$@" "$(/mnt/brain/tools/coordinator-prompt.sh "$name")"
+  CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false command claude --permission-mode bypassPermissions --dangerously-skip-permissions "$@" "$(${COORD_PROMPT_SCRIPT:-/mnt/brain/tools/coordinator-prompt.sh} "$name")"
 }
 
-template-coordinator()     { _coordinator template "$@"; }
-brain-coordinator()        { _coordinator brain "$@"; }
-folio-coordinator()        { _coordinator folio "$@"; }
-homelab-coordinator()      { _coordinator homelab "$@"; }
-metalayerlab-coordinator() { _coordinator metalayerlab "$@"; }
-apps-coordinator()         { _coordinator apps "$@"; }
-dotfiles-coordinator()     { _coordinator dotfiles "$@"; }
-ideas-coordinator()        { _coordinator ideas "$@"; }
+# A former name: the new one once its home exists, else the old home as before.
+_coordinator-alias() {
+  local old=$1 new=$2; shift 2
+  if [[ -d ${COORD_ACTORS_DIR:-/pool/local/actors}/$new ]]; then
+    print -u2 "$old-coordinator is now $new-coordinator"
+    _coordinator "$new" "$@"
+  else
+    _coordinator "$old" "$@"
+  fi
+}
+
+brain-coordinator()         { _coordinator brain "$@"; }
+platform-coordinator()      { _coordinator platform "$@"; }
+personal-coordinator()      { _coordinator personal "$@"; }
+homelab-coordinator()       { _coordinator homelab "$@"; }
+network-tools-coordinator() { _coordinator network-tools "$@"; }
+media-coordinator()         { _coordinator media "$@"; }
+desktop-coordinator()       { _coordinator desktop "$@"; }
+incubator-coordinator()     { _coordinator incubator "$@"; }
+security-coordinator()      { _coordinator security "$@"; }
+
+# Former names (record 0018 §5): remove on 2026-12-04.
+dotfiles-coordinator()      { _coordinator-alias dotfiles desktop "$@"; }
+apps-coordinator()          { _coordinator-alias apps media "$@"; }
+ideas-coordinator()         { _coordinator-alias ideas incubator "$@"; }
+metalayerlab-coordinator()  { _coordinator-alias metalayerlab network-tools "$@"; }
+template-coordinator()      { _coordinator-alias template platform "$@"; }
+folio-coordinator()         { _coordinator-alias folio personal "$@"; }
