@@ -6,6 +6,11 @@
 # that triggers the lock). `sleep-lock` is the locker xss-lock runs before
 # every suspend or hibernate (desktop's xss-lock.service).
 #
+# A timed pause (`hook-disable 1h`) is a transient user timer,
+# lockscreen-resume.timer, that runs `lockscreen hook-enable` when it fires;
+# `status --json` reports its end, for barmenu's lock menu (desktop-tools
+# design record 0001).
+#
 # The idle daemon is started per X session by desktop's
 # .zlogin.d/50-lockscreen, not by a systemd unit: with lingering the user
 # manager is up at boot, long before there is an X display to watch.
@@ -17,8 +22,11 @@
 #   Required:
 #     - _common, _log, _xdg: core utilities
 #     - _xidlehook: idle-timeout daemon control
+#   Optional:
+#     - _notify: forget-passphrase's notification
 #   External:
 #     - betterlockscreen (system package, wraps i3lock-color), pgrep
+#     - systemd-run, systemctl (timed pauses), gpg-connect-agent, timeout
 
 [[ -n "${LOCKSCREEN_LOADED:-}" ]] && return 0
 declare -gr LOCKSCREEN_LOADED=1
@@ -27,6 +35,7 @@ source "${DOTLIB}/_common"    || { echo "[ERROR] _lockscreen requires _common" >
 source "${DOTLIB}/_log"       2>/dev/null || true
 source "${DOTLIB}/_xdg"       || { echo "[ERROR] _lockscreen requires _xdg" >&2; return 1; }
 source "${DOTLIB}/_xidlehook" || { echo "[ERROR] _lockscreen requires _xidlehook" >&2; return 1; }
+source "${DOTLIB}/_notify"    2>/dev/null || true
 
 # The lock picture when the theme records no wallpaper (see _lockscreen-wallpaper).
 declare -g _LOCKSCREEN_FALLBACK_WALLPAPER="$(xdg-data-file "backgrounds" "0001.png")"
@@ -43,18 +52,23 @@ declare -g _LOCKSCREEN_GRACE_PERIOD="${LOCKSCREEN_GRACE_PERIOD:-10}"
 declare -g _LOCKSCREEN_SLEEP_TIMEOUT="${LOCKSCREEN_SLEEP_TIMEOUT:-4}"
 # betterlockscreen runs i3lock-color under either name.
 declare -g _LOCKSCREEN_LOCKER='i3lock(-color)?'
+# The transient user timer (and its service) behind a timed pause.
+declare -g _LOCKSCREEN_RESUME_UNIT=lockscreen-resume
+# systemd time spans: `30m`, `1h`, `1h 30min`, `90s`.
+declare -g _LOCKSCREEN_TIMESPAN='^([0-9]+ *(us|ms|s|sec|seconds?|m|min|minutes?|h|hr|hours?|d|days?|w|weeks?)? *)+$'
 
 typeset -gA _LOCKSCREEN_DESCRIPTIONS=(
     [activate]="Lock the screen now"
     [wallpaper-update]="Regenerate betterlockscreen's cached lock picture from the theme's wallpaper (or [image])"
     [hook-init]="Start the idle daemon in the foreground (used by .zlogin.d/50-lockscreen)"
     [hook-stop]="Stop the idle daemon"
-    [hook-enable]="Resume the idle timer"
-    [hook-disable]="Pause the idle timer"
+    [hook-enable]="Resume the idle timer (and cancel a timed pause)"
+    [hook-disable]="Pause the idle timer; [duration] (30m, 1h) resumes it after that long"
     [hook-trigger]="Lock immediately via the idle daemon"
     [hook-query]="Query the idle daemon's timer state"
     [hook-status]="Show comprehensive idle daemon status"
-    [status]="Show armed/paused/not-running state (for status bars)"
+    [status]="Show armed/paused/not-running state (for status bars); --json adds a timed pause's end"
+    [forget-passphrase]="Clear gpg-agent's cached passphrases, with a notification"
     [sleep-lock]="Lock and return once the locker is up (xss-lock's locker before sleep)"
 )
 
@@ -85,6 +99,30 @@ _lockscreen-locker-up() {
 
 _lockscreen-timer-disabled() {
     xidlehook-query 2>/dev/null | grep -q "disabled: true"
+}
+
+# Cancel a timed pause: stop the resume timer, if there is one. Never fails.
+_lockscreen-resume-cancel() {
+    common-command-exists systemctl || return 0
+    systemctl --user stop "${_LOCKSCREEN_RESUME_UNIT}.timer" >/dev/null 2>&1 || :
+}
+
+# REPLY = when the resume timer fires (ISO 8601, local time with its
+# offset); fails when no timed pause runs.
+_lockscreen-resume-at() {
+    REPLY=
+    common-command-exists systemctl || return 1
+    local -A prop
+    local line
+    for line in "${(@f)$(systemctl --user show "${_LOCKSCREEN_RESUME_UNIT}.timer" \
+            -p ActiveState -p NextElapseUSecRealtime --timestamp=unix 2>/dev/null)}"; do
+        [[ $line == *=* ]] && prop[${line%%=*}]=${line#*=}
+    done
+    [[ ${prop[ActiveState]:-} == active && ${prop[NextElapseUSecRealtime]:-} == @<-> ]] || return 1
+    zmodload -F zsh/datetime b:strftime 2>/dev/null || return 1
+    local at
+    strftime -s at '%Y-%m-%dT%H:%M:%S%z' ${prop[NextElapseUSecRealtime]#@}
+    REPLY="${at[1,-3]}:${at[-2,-1]}"
 }
 
 # ------------------------------
@@ -127,12 +165,37 @@ lockscreen-hook-stop() {
     xidlehook-stop
 }
 
+# Resume the idle timer; a timed pause still running is cancelled first, so
+# the last choice wins.
 lockscreen-hook-enable() {
+    _lockscreen-resume-cancel
     xidlehook-enable
 }
 
+# Usage: lockscreen-hook-disable [duration]
+# Without a duration the pause lasts until hook-enable. With one (systemd
+# time syntax: 30m, 1h), a transient user timer runs `lockscreen hook-enable`
+# after that long; it carries PATH and DOTLIB so the dispatcher is found.
+# Either way a timed pause already running is cancelled first.
 lockscreen-hook-disable() {
-    xidlehook-disable
+    local duration=${1:-}
+    if [[ -n "$duration" && ! "$duration" =~ $_LOCKSCREEN_TIMESPAN ]]; then
+        log-error "[lockscreen] not a duration: ${duration} (try 30m or 1h)"
+        return 2
+    fi
+    _lockscreen-resume-cancel
+    xidlehook-disable || return 1
+    [[ -n "$duration" ]] || return 0
+    if ! systemd-run --user --quiet --collect --unit="${_LOCKSCREEN_RESUME_UNIT}" \
+            --on-active="$duration" --timer-property=AccuracySec=1s \
+            --setenv=PATH="$PATH" --setenv=DOTLIB="$DOTLIB" \
+            --setenv=XIDLEHOOK_SOCKET="$XIDLEHOOK_SOCKET" \
+            lockscreen hook-enable >/dev/null 2>&1; then
+        # A pause with no end was not what was asked for: undo it.
+        log-error "[lockscreen] could not start the resume timer; idle lock left on"
+        xidlehook-enable
+        return 1
+    fi
 }
 
 lockscreen-hook-trigger() {
@@ -148,18 +211,52 @@ lockscreen-hook-status() {
 }
 
 # Armed/paused/not-running, for consumption by a status bar module.
-# Usage: lockscreen-status
+# Usage: lockscreen-status [--json]
+# --json: {"state": "armed" | "paused" | "not running", "until": "<ISO time>" | null},
+# `until` being a timed pause's end (barmenu's lock menu reads it).
 lockscreen-status() {
+    local state
     if ! xidlehook-is-running; then
-        echo "not running"
+        state="not running"
+    elif _lockscreen-timer-disabled; then
+        state=paused
+    else
+        state=armed
+    fi
+    if [[ ${1:-} != --json ]]; then
+        print -r -- "$state"
         return 0
     fi
+    local until=null
+    [[ $state == paused ]] && _lockscreen-resume-at && until="\"${REPLY}\""
+    print -r -- "{\"state\": \"${state}\", \"until\": ${until}}"
+}
 
-    if _lockscreen-timer-disabled; then
-        echo "paused"
+# ------------------------------
+# GPG passphrase
+# ------------------------------
+
+# What every lock does (betterlockscreen/custom-pre.sh): gpg-agent forgets
+# its cached passphrases. Bounded by a 2 s timeout, as there; a notification
+# says whether it worked, since it runs from a menu click.
+lockscreen-forget-passphrase() {
+    local -i st=0
+    if ! common-command-exists gpg-connect-agent; then
+        st=1
+    elif common-command-exists timeout; then
+        timeout 2 gpg-connect-agent reloadagent /bye >/dev/null 2>&1 || st=1
     else
-        echo "armed"
+        gpg-connect-agent reloadagent /bye >/dev/null 2>&1 || st=1
     fi
+    if (( st )); then
+        log-error "[lockscreen] gpg-connect-agent failed or is missing"
+        (( $+functions[notify-error] )) \
+            && notify-error "GPG passphrase not forgotten" "gpg-connect-agent failed or is missing" &>/dev/null || :
+    else
+        (( $+functions[notify-info] )) \
+            && notify-info "GPG passphrase forgotten" "gpg-agent asks for it again on next use" &>/dev/null || :
+    fi
+    return st
 }
 
 # ------------------------------
