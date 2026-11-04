@@ -209,6 +209,6 @@ tmux-guard() {
         logger -t tmux-guard "${_what} (${_by}) by ${_pname:-?}/${_ppid}" 2>/dev/null
         return 0
     fi
-    print -u2 "tmux: refused ${_what}: coordinators running: ${(j:, :)_coords}; stop them cleanly with \`coord stop <name>\` (or Stop all in the menu); TMUX_FORCE=1 to override"
+    print -u2 "tmux: refused ${_what}: coordinators running: ${(j:, :)_coords}; stop them cleanly with \`crew stop <name>\` (or Stop all in the menu); TMUX_FORCE=1 to override"
     return 1
 }

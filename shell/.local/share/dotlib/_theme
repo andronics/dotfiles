@@ -1529,10 +1529,10 @@ _theme-reload-bspwm() {
     local f="$_THEME_STATE/current/bspwm.sh"
     [[ -r "$f" ]] || { log-error "[theme] no $f"; return 1; }
     source "$f" || return 1
-    whence coord >/dev/null || return 0
+    whence crew >/dev/null || return 0
     local side
-    side=$(coord side 2>/dev/null) && [[ "$side" == (left|right) ]] &&
-        coord side "$side" >/dev/null 2>&1 || log-warning "[theme] coord re-dock failed; run: coord side \"\$(coord side)\""
+    side=$(crew side 2>/dev/null) && [[ "$side" == (left|right) ]] &&
+        crew side "$side" >/dev/null 2>&1 || log-warning "[theme] crew re-dock failed; run: crew side \"\$(crew side)\""
     return 0
 }
 
@@ -2852,7 +2852,7 @@ _theme-self-test-generated() {
 }
 
 # Commands self-test shadows with logging guard stubs for its whole run.
-declare -gr _THEME_SELFTEST_GUARDED='betterlockscreen feh barctl bspc coord dunstctl xrdb gsettings xsettingsd notify-send'
+declare -gr _THEME_SELFTEST_GUARDED='betterlockscreen feh barctl bspc crew dunstctl xrdb gsettings xsettingsd notify-send'
 
 # Renders every scheme into a scratch state dir under ~/.cache and checks the
 # swap, undo, rollback and known-good behaviour. The real state is untouched.
@@ -3002,7 +3002,7 @@ _theme-self-test-run() {
         bad "catppuccin-mocha dunst.conf/xresources: $(grep -E 'font|radius|color0:|Xcursor' "$cur/dunst.conf" "$cur/xresources" | tr '\n' ' ')"
 
     # The desktop reloaders: a scratch state never reaches bspc, dunstctl,
-    # xrdb or coord. Then, with every command stubbed and the live check
+    # xrdb or crew. Then, with every command stubbed and the live check
     # forced, each makes the right calls. In a subshell, so no stub or
     # forced check outlives it.
     (
@@ -3010,7 +3010,7 @@ _theme-self-test-run() {
         pass=0 failed=0
         trap 'print -r -- "$pass $failed" >| "$scratch/desktop-counts"' EXIT
         bspc()     { print -r -- "bspc $*" >> "$calls"; [[ "$1 $#" == "config 2" ]] && print -r -- "${_st_bspc:-0}"; return 0; }
-        coord()    { print -r -- "coord $*" >> "$calls"; (( $# == 1 )) && print -r -- left; return 0; }
+        crew()     { print -r -- "crew $*" >> "$calls"; (( $# == 1 )) && print -r -- left; return 0; }
         dunstctl() { print -r -- "dunstctl $*" >> "$calls"; }
         xrdb()     { print -r -- "xrdb $*" >> "$calls"; }
         pgrep()    { return 0; }
@@ -3021,7 +3021,7 @@ _theme-self-test-run() {
         [[ ! -e "$calls" && ! -e "$scratch/config/$_THEME_DUNST_DROPIN" ]] &&
             ok "bspwm, dunst and xresources reloads skipped for a scratch state dir" ||
             bad "a scratch state reached the desktop: $(cat "$calls" 2>/dev/null)"
-        for c in bspc coord dunstctl xrdb pgrep timeout; do
+        for c in bspc crew dunstctl xrdb pgrep timeout; do
             [[ "$(whence -w $c)" == "$c: function" ]] ||
                 { bad "stub for $c not in place; live reloaders not exercised"; exit; }
         done
@@ -3030,8 +3030,8 @@ _theme-self-test-run() {
         out=$(<"$calls")
         [[ "$out" == *"bspc config border_width 1"* && "$out" == *"bspc config window_gap 5"* &&
            "$out" == *"bspc config bottom_padding 32"* && "$out" == *"bspc config focused_border_color #b4befe"* &&
-           "$out" == *"bspc config presel_feedback_color #6c7086"* && "${${(f)out}[-1]}" == "coord side left" ]] &&
-            ok "bspwm reload: sizes and colours from bspwm.sh, then coord side left (re-dock)" ||
+           "$out" == *"bspc config presel_feedback_color #6c7086"* && "${${(f)out}[-1]}" == "crew side left" ]] &&
+            ok "bspwm reload: sizes and colours from bspwm.sh, then crew side left (re-dock)" ||
             bad "bspwm reload calls: ${(f)out}"
         : >| "$calls"
         _st_bspc=5 _theme-reload-bspwm >/dev/null
@@ -3316,12 +3316,12 @@ _theme-self-test-run() {
             print -rl -- '#!/bin/sh' "echo \"$c \$*\" >> '$calls'" > "$bin/$c" && chmod +x "$bin/$c"
         done
         path=("$bin" $path)
-        for c in bspc coord dunstctl xrdb barctl; do functions[$c]="print -r -- \"$c \$*\" >> ${(q)calls}"; done
+        for c in bspc crew dunstctl xrdb barctl; do functions[$c]="print -r -- \"$c \$*\" >> ${(q)calls}"; done
         pgrep()   { return 1; }
         timeout() { shift; "$@"; }
         [[ "$(whence -p feh) $(whence -p betterlockscreen)" == "$bin/feh $bin/betterlockscreen" ]] ||
             { bad "feh/betterlockscreen stubs not first on PATH; live reloaders not exercised"; exit; }
-        for c in bspc coord dunstctl xrdb barctl pgrep timeout; do
+        for c in bspc crew dunstctl xrdb barctl pgrep timeout; do
             [[ "$(whence -w $c)" == "$c: function" ]] ||
                 { bad "stub for $c not in place; live reloaders not exercised"; exit; }
         done

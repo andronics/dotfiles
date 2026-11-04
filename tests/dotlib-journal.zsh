@@ -9,8 +9,8 @@
 # Nothing reaches the real journal: logger is a stub on PATH that appends
 # what it is given to a file, and the run store and rate-limit stamps are in
 # the scratch dir. The tools under test are a throwaway dispatcher (jt) and
-# `coord` asked for an unknown command, in a scratch actors dir; its tmux
-# calls name their own server (-L dotlib-journal-test), the cleanup included.
+# a real one, `desk`, asked for an unknown command (it fails before touching
+# bspwm or polybar).
 #
 #   zsh tests/dotlib-journal.zsh
 
@@ -19,12 +19,11 @@ setopt no_unset
 
 unset TMUX TMUX_PANE TOOL_STATS TOOL_JOURNAL COORDINATOR CLAUDECODE LOG_SYSTEMD_TAG LOG_LEVEL
 typeset -r REPO=${0:A:h:h}
-typeset -r L=dotlib-journal-test
 mkdir -p ~/.cache || exit 1
 typeset -r S=$(mktemp -d ~/.cache/dotlib-journal-test.XXXXXX)
-typeset -r JLOG=$S/journal RUNS=$S/runs ACTORS=$S/actors
+typeset -r JLOG=$S/journal RUNS=$S/runs
 
-mkdir -p $S/stub $S/bin $ACTORS
+mkdir -p $S/stub $S/bin
 # logger: one "@@ entry <args>" line, then the fields it was given on stdin.
 print -r -- '#!/bin/sh
 echo "@@ entry $*" >>"'$JLOG'"
@@ -55,16 +54,10 @@ chmod +x $S/bin/*
 export DOTLIB=$REPO/shell/.local/share/dotlib
 export PATH="$S/stub:$PATH"
 export TOOL_RUNS_DIR=$RUNS TOOL_JOURNAL_STAMPS=$S/stamps
-export COORD_ACTORS_DIR=$ACTORS COORD_TMUX_SOCKET=$L
-export COORD_STATE_DIR=$S/state COORD_LOCK_DIR=$S/lock COORD_LAUNCH_TIMEOUT=0
 
 integer pass=0 fail=0
 typeset out err rc
-cleanup() {
-    command tmux -L $L kill-server 2>/dev/null || true
-    rm -rf -- "${S:?}"
-}
-trap cleanup EXIT
+trap 'rm -rf -- "${S:?}"' EXIT
 
 ok()  { (( ++pass )); print "ok   $1"; }
 bad() { (( ++fail )); print "FAIL $1${2:+: $2}"; }
@@ -95,10 +88,10 @@ runs=(${(u)${(M)${(f)"$(<$JLOG)"}:#TOOL_RUN=*}})
 [[ ${#runs} == 1 && $runs[1] == TOOL_RUN=[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f] ]] \
     && ok one-run-id || bad one-run-id "${runs[*]}"
 
-fresh; rc=0; zsh -f $REPO/desktop/.local/bin/coord nosuchcommand 2>/dev/null >/dev/null || rc=$?
-[[ $rc != 0 && $(entries SYSLOG_IDENTIFIER=coord) == 2 && $(entries TOOL_EVENT=error) == 1 \
+fresh; rc=0; zsh -f $REPO/desktop/.local/bin/desk nosuchcommand 2>/dev/null >/dev/null || rc=$?
+[[ $rc != 0 && $(entries SYSLOG_IDENTIFIER=desk) == 2 && $(entries TOOL_EVENT=error) == 1 \
     && $(entries 'MESSAGE=Unknown command: \[arg\]') == 1 && $(journal) != *nosuchcommand* && $(entries 'TOOL_COMMAND=*') == 0 ]] \
-    && ok real-dispatcher-error-as-coord || bad real-dispatcher-error-as-coord "rc=$rc $(journal)"
+    && ok real-dispatcher-error-as-desk || bad real-dispatcher-error-as-desk "rc=$rc $(journal)"
 
 fresh; rc=0; zsh -f $S/bin/notdispatcher 2>/dev/null || rc=$?
 [[ $(entries SYSLOG_IDENTIFIER=notdispatcher) == 1 && $(entries TOOL_EVENT=error) == 1 && $(entries TOOL_EVENT=run) == 0 ]] \

@@ -1,8 +1,9 @@
 #!/usr/bin/env zsh
 # rofi-preview <variant> - open a rofi theme variant on harmless sample rows
-# and print what was picked instead of acting on it. Themes, _coord and _power
-# come from the checkout this script lives in (stow links resolve back to it),
-# so a worktree previews its own, uninstalled themes. Besides one variant per
+# and print what was picked instead of acting on it. Themes and _power come
+# from the checkout this script lives in (stow links resolve back to it), so a
+# worktree previews its own, uninstalled themes; crew's cells come from the
+# installed desktop-tools. Besides one variant per
 # theme, `confirm` shows power's Yes/No question (themes/prompt.rasi). The
 # bar menus (barmenu) moved to andronics/desktop-tools (dotfiles record 0003),
 # which has no preview mode, so `bar-menu` shows its theme on sample rows.
@@ -52,29 +53,33 @@ case "$_variant" in
     bar-popup)
         _rows=(
             "firefox     GitHub - andronics/dotfiles"$'\0icon\x1f'"firefox"
-            "code        _coord - dotfiles"$'\0icon\x1f'"visual-studio-code"
+            "code        _desk - dotfiles"$'\0icon\x1f'"visual-studio-code"
             "alacritty   ~/.dotfiles: zsh"$'\0icon\x1f'"Alacritty"
             "nemo        Downloads"$'\0icon\x1f'"nemo"
             "spotify     Spotify Premium"$'\0icon\x1f'"spotify"
         )
         _args+=(-p "window") ;;
-    coord)
-        export DOTLIB="${_repo}/shell/.local/share/dotlib"
-        source "${DOTLIB}/_coord" || exit 1
-        _coord-colors
-        # Every name in the switchboard's order, home or not, so the preview
-        # shows the full width the menu will need once each has moved.
-        _COORD_NAMES=("${_COORD_LIST[@]}")
-        _coord-keys
-        _states=(idle busy waiting off idle off off)
-        for _i in {1..${#_COORD_NAMES}}; do
-            _shown=
-            (( _i == 1 )) && _shown=1
-            _coord-menu-row "${_COORD_NAMES[_i]}" "${_states[_i]:-off}" "$_shown"
-            _rows+=("$REPLY")
-        done
-        _coord-menu-stop-row 3
-        _rows+=("$REPLY")
+    crew)
+        # crew's own cells (its menus.cell and stop_cell, from the installed
+        # desktop-tools) for the coordinators in its registry copy, in sample
+        # states, the first shown; nothing is asked of meta or tmux.
+        _py="$(uv tool dir 2>/dev/null)/desktop-tools/bin/python"
+        [[ -x "$_py" ]] || { print -u2 "rofi-preview: no desktop-tools at ${_py:h:h}; run: ./dotfiles reinstall desktop"; exit 1; }
+        _out=("${(@f)$(TOOL_STATS=skip "$_py" -c '
+from desktop_tools.common import theme
+from desktop_tools.crew import menus, registry
+reg = registry.load(refresh=False)
+colours = theme.roles(menus.COLOUR_ROLES)
+keys = reg.keys()
+states = ["idle", "busy", "waiting", "off", "idle", "off", "off"]
+print(" ".join(reg.names))
+for i, c in enumerate(reg.coordinators):
+    state = states[i] if i < len(states) else "off"
+    print(menus.cell(c.name, c.icon, keys.get(c.name, ""), state, i == 0, colours))
+print(menus.stop_cell(3, colours))
+')}") || exit 1
+        _names=(${=_out[1]})
+        _rows=("${(@)_out[2,-1]}")
         # The cursor starts off the shown cell so both the ring and the pill show.
         _args+=(-markup-rows -format i -matching prefix -p "Coordinator" -selected-row 1 -a 0) ;;
     power|confirm)
@@ -99,7 +104,7 @@ case "$_variant" in
 esac
 
 if _choice=$(print -rn -- "${(pj:\n:)_rows}" | rofi "${_args[@]}"); then
-    [[ "$_variant" == coord && "$_choice" == <-> ]] && _choice="${_choice} (${_COORD_NAMES[_choice + 1]:-Stop all})"
+    [[ "$_variant" == crew && "$_choice" == <-> ]] && _choice="${_choice} (${_names[_choice + 1]:-Stop all})"
     print -r -- "${_variant}: picked '${_choice}'"
 else
     print -r -- "${_variant}: cancelled"

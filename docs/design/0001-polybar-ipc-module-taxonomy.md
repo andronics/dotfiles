@@ -4,6 +4,7 @@ Status: Approved (by Stephen for question 7 and the colour tiers; by the brain c
 behalf, for everything else; 2026-11-04)
 Date: 2026-11-04
 Authors: Stephen Cox (proposal); written up as a design record by the dotfiles coordinator
+Note (2026-11-04): the coordinator switchboard `coord` is now `crew`, from andronics/desktop-tools (brain record 0019 §9); where this record says `coord`, read `crew`, whose strip barctl draws.
 
 Stephen's proposal is kept as he wrote it, in [Decision](#decision) and [Questions, as
 decided](#questions-as-decided). Everything marked **Coordinator's note** or **Coordinator's

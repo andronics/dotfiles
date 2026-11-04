@@ -4,30 +4,26 @@
 # <name>-coordinator function for every name in meta's copy of the registry,
 # each running `meta <name> launch --attach` with its arguments; each former
 # name an announced alias until its date; one meta call when there is no copy;
-# _coordinator running the brain's launch script; and no coordinator's name
-# written in the file outside comments.
+# and no coordinator's name written outside comments in the file or in the
+# dotfiles' crew files (crew.ini, the crew lines of sxhkdrc and bspwmrc,
+# barctl's crew table and the coord alias): crew reads the names from the
+# registry too.
 #
 # Nothing real runs: meta is a stub on PATH that only logs its arguments, the
 # registry copy is a scratch file (COORD_REGISTRY_FILE), and each case runs in
-# a clean `zsh -f`. No claude, no live coordinator; the one tmux check uses
-# its own server, -L coordinator-launchers-test, the cleanup included.
+# a clean `zsh -f`. No claude, no tmux, no live coordinator.
 #
 #   zsh tests/coordinator-launchers.zsh
 
 emulate -L zsh
 setopt no_unset extended_glob
 
-unset TMUX TMUX_PANE COORDINATOR CLAUDECODE COORD_TODAY COORD_LAUNCH_SCRIPT
+unset TMUX TMUX_PANE COORDINATOR CLAUDECODE COORD_TODAY
 typeset -r REPO=${0:A:h:h}
 typeset -r LAUNCHER=$REPO/shell/.config/zsh/.zshrc.d/55-coordinators
 mkdir -p ~/.cache || exit 1
 typeset -r S=$(mktemp -d ~/.cache/coordinator-launchers-test.XXXXXX) || exit 1
-typeset -r L=coordinator-launchers-test
-cleanup() {
-    command tmux -L $L kill-server 2>/dev/null || true
-    rm -rf -- "${S:?}"
-}
-trap cleanup EXIT
+trap 'rm -rf -- "${S:?}"' EXIT
 typeset -r LOG=$S/meta.log REG=$S/coordinators.json
 
 mkdir -p $S/stub
@@ -122,64 +118,20 @@ rm -f $REG $S/copy
 out=$(PATH=/usr/bin:/bin zsh -f -c "source ${(q)LAUNCHER}; print -rn -- \${(ok)functions[(I)*-coordinator]}; print rc=\$?" 2>&1)
 [[ $out == rc=0 ]] && ok no-meta-no-copy-defines-nothing || bad no-meta-no-copy-defines-nothing "$out"
 
-print "== _coordinator: the brain's launch script"
-# A stub tree like the brain's: bin/meta, and tools/coordinator-launch.sh next to it.
-mkdir -p $S/tree/bin $S/tree/tools
-cp $S/stub/meta $S/tree/bin/meta
-print -r -- '#!/bin/sh
-echo "launch-script $*" >>"'$LOG'"' >$S/tree/tools/coordinator-launch.sh
-chmod +x $S/tree/tools/coordinator-launch.sh
-copy "alpha - 2999-01-01" >$REG
-rc=0; : >$LOG
-PATH=$S/tree/bin:$PATH zsh -f -c "source ${(q)LAUNCHER}; _coordinator alpha --model x" 2>$S/err || rc=$?
-[[ $rc == 0 && $(logged) == 'launch-script alpha --model x' ]] && ok finds-script-next-to-meta || bad finds-script-next-to-meta "rc=$rc $(logged) $(<$S/err)"
-COORD_LAUNCH_SCRIPT=$S/none run '_coordinator alpha'
-[[ $rc == 2 && $err == *'no launch script at '$S/none* ]] && ok missing-script-says-so || bad missing-script-says-so "rc=$rc err=$err"
-# coord's path doesn't go through meta: a session under the other name refuses.
-copy "beta old1 2999-01-01" >$REG
-command tmux -L $L -f /dev/null new-session -d -s old1-coordinator 'sleep 100000'
-COORD_TMUX_SOCKET=$L COORD_LAUNCH_SCRIPT=$S/tree/tools/coordinator-launch.sh run '_coordinator beta'
-[[ $rc == 1 && $err == *'tmux session old1-coordinator is already running'* && -z $(logged) ]] \
-    && ok other-name-session-refuses || bad other-name-session-refuses "rc=$rc err=$err $(logged)"
-COORD_TMUX_SOCKET=$L COORD_LAUNCH_SCRIPT=$S/tree/tools/coordinator-launch.sh run '_coordinator old1'
-[[ $rc == 0 && $(logged) == 'launch-script old1' ]] && ok own-session-not-counted || bad own-session-not-counted "rc=$rc err=$err $(logged)"
-command tmux -L $L kill-server 2>/dev/null
-command tmux -L $L -f /dev/null new-session -d -s beta-coordinator 'sleep 100000'
-COORD_TMUX_SOCKET=$L COORD_LAUNCH_SCRIPT=$S/tree/tools/coordinator-launch.sh run '_coordinator old1'
-[[ $rc == 1 && $err == *'tmux session beta-coordinator is already running'* ]] && ok new-name-session-refuses-old || bad new-name-session-refuses-old "rc=$rc err=$err"
-command tmux -L $L kill-server 2>/dev/null
-copy "alpha - 2999-01-01" >$REG
-# End to end with the brain's real script, if this machine has it: COORDINATOR
-# is set (record 0017) and claude runs in the home. Stubs only, scratch homes.
-typeset -r REAL=/mnt/brain/tools/coordinator-launch.sh
-if [[ -x $REAL ]]; then
-    mkdir -p $S/actors/alpha
-    print -r -- '#!/bin/sh
-printf "claude %s COORDINATOR=%s | %s\n" "${PWD##*/}" "$COORDINATOR" "$*" >>"'$LOG'"' >$S/stub/claude
-    print -r -- '#!/bin/sh
-printf "prompt for %s" "$1"' >$S/stub/prompt.sh
-    chmod +x $S/stub/claude $S/stub/prompt.sh
-    ACTORS_HOME=$S/actors COORD_PROMPT_SCRIPT=$S/stub/prompt.sh COORD_CLAUDE=$S/stub/claude COORD_LAUNCH_SCRIPT=$REAL \
-        run '_coordinator alpha --model x'
-    [[ $rc == 0 && $(logged) == 'claude alpha COORDINATOR=alpha-coordinator | --permission-mode bypassPermissions --dangerously-skip-permissions --model x prompt for alpha' ]] \
-        && ok real-script-exports-coordinator || bad real-script-exports-coordinator "rc=$rc err=$err $(logged)"
-else
-    print "skip real-script-exports-coordinator: no $REAL"
-fi
-
-print "== no coordinator's name in the file (record 0019 §9 step 5)"
-# names <file>: REPLY = "<line>: <text>" for each use of a name in $NAMES in
-# <file> outside comments (a line whose first non-blank is #, and the rest of
-# a line after a blank and a #), the registry's address `meta brain
-# coordinators` allowed. A name counts as a word: no letter, digit or _ on
-# either side (a hyphen is a boundary, so brain-coordinator counts).
+print "== no coordinator's name in the launchers or crew's files (record 0019 §9 step 5)"
+# names_in <file> [<comment chars>]: REPLY = "<line>: <name>: <text>" for each
+# use of a name in $NAMES in <file> outside comments (a line whose first
+# non-blank is a comment char, and the rest of a line after a blank and one;
+# the chars default to #, an ini file's are #;), the registry's address `meta
+# brain coordinators` allowed. A name counts as a word: no letter, digit or _
+# on either side (a hyphen is a boundary, so brain-coordinator counts).
 names_in() {
-    local line n=0 word
+    local line n=0 word cc=${2:-#}
     local -a found
     while IFS= read -r line || [[ -n $line ]]; do
         (( ++n ))
-        [[ $line == [[:space:]]#\#* ]] && continue
-        line=${line%%[[:space:]]\#*}
+        [[ $line == [[:space:]]#[$cc]* ]] && continue
+        line=${line%%[[:space:]][$cc]*}
         line=${line//meta brain coordinators/}
         for word in $NAMES; do
             [[ $line == (|*[^a-z0-9_])$word(|[^a-z0-9_]*) ]] && found+=("$n: $word: ${line##[[:space:]]#}")
@@ -209,6 +161,34 @@ names_in $S/clean
 names_in $LAUNCHER
 [[ -z $REPLY ]] && ok "no coordinator name in 55-coordinators outside comments (${#NAMES} names)" \
     || bad "a coordinator name in 55-coordinators" $'\n'"$REPLY"
+
+# crew's files: crew.ini whole (ini comments are ; or #), the coord alias
+# whole, and the lines of the shared files that are crew's: in sxhkdrc and
+# bspwmrc those naming crew (a coordinator's lines start with crew), in
+# barctl's modules.toml the [modules.crew...] tables.
+typeset -r CREW_INI=$REPO/desktop/.config/polybar/modules/crew.ini
+typeset -r ALIAS=$REPO/desktop/.local/bin/coord
+crew_lines() { grep -E '(^|[^a-z0-9_-])crew([^a-z0-9_]|$)' $1 >$2 || :; }
+crew_tables() { awk '/^\[/ { on = ($0 ~ /^\[modules\.crew[].]/) } on' $1 >$2; }
+crew_lines $REPO/desktop/.config/sxhkd/sxhkdrc $S/sxhkd-crew
+crew_lines $REPO/desktop/.config/bspwm/bspwmrc $S/bspwm-crew
+crew_tables $REPO/desktop/.config/barctl/modules.toml $S/barctl-crew
+[[ -f $CREW_INI && -f $ALIAS && $(grep -c '^  crew ' $S/sxhkd-crew) -ge 5 \
+    && $(grep -c '^bspc rule -a crew' $S/bspwm-crew) == 2 && $(grep -c '^\[modules\.crew' $S/barctl-crew) == 2 ]] \
+    && ok "crew's files and lines found (crew.ini, the alias, 5+ sxhkd lines, 2 bspwm rules, 2 barctl tables)" \
+    || bad "crew's files or lines missing" "$(cat $S/sxhkd-crew $S/bspwm-crew $S/barctl-crew)"
+# The scan, on a planted copy of crew.ini: a name in a click is caught.
+{ <$CREW_INI; print -r -- 'click-left = crew show desktop' } >$S/crew-planted.ini
+names_in $S/crew-planted.ini '#;'
+[[ $REPLY == <->": desktop: click-left = crew show desktop" ]] \
+    && ok "a name added to crew.ini is caught" || bad "a name planted in crew.ini" "${REPLY:-not caught}"
+found=()
+for f cc in $CREW_INI '#;' $ALIAS '#' $S/sxhkd-crew '#' $S/bspwm-crew '#' $S/barctl-crew '#'; do
+    names_in $f $cc
+    [[ -n $REPLY ]] && found+=("${f:t}:"$'\n'"$REPLY")
+done
+(( ${#found} == 0 )) && ok "no coordinator name in crew's files outside comments" \
+    || bad "a coordinator name in crew's files" $'\n'"${(F)found}"
 
 print "\n$pass passed, $fail failed"
 (( fail == 0 ))

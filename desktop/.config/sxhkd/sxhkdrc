@@ -50,25 +50,25 @@ super + b + {_, alt}
 super + shift + c
   for win in `bspc query -n -n ".leaf.\!window"`; do bspc node $win -k; done
 
-# coordinator - menu: pick one (type its first letter, or two where one is shared: pl platform, pe personal) or Stop all, then show/hide, start, stop, restart
+# coordinator - menu (crew): pick one (type its first letter, or two where one is shared: pl platform, pe personal) or Stop all, then show/hide, start, stop, restart
 super + c
-  coord menu
+  crew menu
 
 # coordinator - cycle {previous, next}
 super + alt + {Left, Right}
-  coord cycle {prev,next}
+  crew cycle {prev,next}
 
-# coordinator - hide the shown one, focused or not (none shown: re-show the last)
+# coordinator - hide the shown one, focused or not (none shown: re-show the last, if it is running)
 super + grave
-  coord hide --toggle
+  crew hide --toggle
 
 # coordinator - dock inner edge {left, right}
 super + {bracketleft, bracketright}
-  coord width {left,right}
+  crew width {left,right}
 
 # coordinator - dock side {left, right}
 super + shift + {bracketleft, bracketright}
-  coord side {left,right}
+  crew side {left,right}
 
 # node - equalise
 super + e + {_, alt}
