@@ -13,9 +13,9 @@
 # Suspend and hibernate lock first. `lockscreen activate` blocks until unlock
 # (betterlockscreen runs i3lock -n) and has no ready signal, so it is started
 # detached and the locker process polled for before systemctl runs; if it
-# never appears the machine stays awake rather than waking unlocked. The
-# lockscreen-suspend user unit (WantedBy=sleep.target) then finds i3lock
-# already running and exits.
+# never appears the machine stays awake rather than waking unlocked.
+# xss-lock.service (`lockscreen sleep-lock`) then finds i3lock already
+# running and lets sleep go ahead without a second lock.
 #
 # Logging out is `bspc quit`: bspwm is the session process under both lightdm
 # (bspwm.desktop) and startx (.xinitrc execs it), so its exit ends the session.

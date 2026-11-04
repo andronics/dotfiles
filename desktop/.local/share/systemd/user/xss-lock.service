@@ -1,0 +1,25 @@
+# Locks the screen before every suspend or hibernate, whatever starts it (the
+# lid, `systemctl suspend`, the power menu). xss-lock holds a logind delay
+# inhibitor and, on PrepareForSleep, runs `lockscreen sleep-lock` with it
+# (--transfer-sleep-lock); sleep waits until i3lock is up or ~4s pass.
+# Also locks on `loginctl lock-session`. Never on idle: xidlehook owns that,
+# so --ignore-xss (xss-lock 0.4) makes it ignore the X screensaver, which
+# .zlogin.d/10-x11 also turns off.
+# Started by .zlogin.d's 50-xss-lock with this X session's DISPLAY,
+# XAUTHORITY and XDG_SESSION_ID (graphical-session.target never becomes
+# active under bspwm), so no [Install]. KillMode=process: a stop or restart
+# ends xss-lock only, never an i3lock it started.
+[Unit]
+Description=Lock the screen before sleep (xss-lock)
+
+[Service]
+Type=simple
+Environment=PATH="%h/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+Environment=XDG_CONFIG_HOME="%h/.config"
+Environment=XDG_DATA_HOME="%h/.local/share"
+Environment=XDG_STATE_HOME="%h/.local/state"
+Environment=XDG_CACHE_HOME="%h/.cache"
+ExecStart=/usr/bin/xss-lock --transfer-sleep-lock --ignore-xss --session=${XDG_SESSION_ID} -- %h/.local/bin/lockscreen sleep-lock
+KillMode=process
+Restart=on-failure
+RestartSec=5
