@@ -1,6 +1,7 @@
 # 0003: Desktop tools move to Python; barctl masters the bar
 
-Status: Proposed
+Status: Approved (by Stephen for question 1; by the brain coordinator, on Stephen's behalf, for everything
+else; 2026-11-04)
 Date: 2026-11-04
 Authors: Stephen Cox (direction); written up by the desktop coordinator
 
@@ -446,55 +447,90 @@ in its `detail`. Nothing blinks for ever: every alert has an end.
 ## Open questions
 
 For the brain coordinator; 1 and 2 are Stephen's, as AGENTS.md reserves making anything public and changes
-of an actor's scope to him.
+of an actor's scope to him. Each now has its **Decided** line.
 
 1. **Create andronics/desktop-tools as a public repo?** Options: (a) public; (b) private. Recommendation:
    **(a)**: nothing in it is secret, the dotfiles are public, the template's secret scan guards every PR.
    Reserved to Stephen.
+
+   **Decided (Stephen):** public.
+
 2. **Give the repo to the desktop coordinator** (its actor note's `owns` and `merge_scope`, with Tagwarden's
    release PRs, Courier's template-update PRs and Dependabot's merged by it, as in its other repos).
    Options: (a) yes, as the brain's Tooling Conventions note already says; (b) another owner.
    Recommendation: **(a)**. A scope change: the steward proposes it, Stephen approves.
+
+   **Decided (the brain coordinator, on Stephen's behalf):** as recommended.
+
 3. **CLI library.** Options: (a) Typer as the template gives it, with the stdlib fast path for `render` and
    `push` (A1); (b) argparse everywhere (fastest, stdlib, the brain's generator), with the template's wiki
    generator's CLI block replaced in the project; (c) argparse, and ask the platform coordinator for an
    argparse option in template-python. Recommendation: **(a)**: it keeps template updates clean, and the
    fast path removes the start-up cost where it matters (measured: Typer adds 30 to 95 ms; the hot verbs
    don't pay it).
+
+   **Decided (the brain coordinator, on Stephen's behalf):** as recommended.
+
 4. **Dependencies.** Options: (a) as A5: allow `jeepney` when the first D-Bus source lands, not
    `dbus-next`, not `pulsectl` for now, not `pydantic`; (b) standard library only, D-Bus through
    `busctl`/`dbus-monitor` subprocesses; (c) allow all four. Recommendation: **(a)**.
+
+   **Decided (the brain coordinator, on Stephen's behalf):** as recommended.
+
 5. **Where `uv tool` puts commands.** Options: (a) `~/.local/bin`, beside the stow links (no PATH change;
    `uv` refuses to overwrite a linked wrapper, so a forgotten wrapper fails loudly); (b) a folder of its own,
    first on PATH (a rollback is a PATH change, but polybar, sxhkd and `barctl.service` each need it added).
    Recommendation: **(a)**.
+
+   **Decided (the brain coordinator, on Stephen's behalf):** as recommended.
+
 6. **The journal helper.** Options: (a) a copy of the brain's `tools/journal.py` in desktop-tools, with its
    test and the commit it came from; (b) a small shared package (for example `andronics/tool-journal`) that
    the brain and desktop-tools both depend on; (c) desktop-tools imports it from `/mnt/brain` at run time.
    Recommendation: **(a)** now (about 40 lines, standard library, the brain's tools must stay stdlib), and
    (b) only if a third Python repo needs it. (c) ties the bar to the vault being mounted.
+
+   **Decided (the brain coordinator, on Stephen's behalf):** as recommended.
+
 7. **Module state folder.** Options: (a) `$XDG_RUNTIME_DIR/barctl/` for states (gone at logout), settings in
    `$XDG_STATE_HOME/barctl/`; (b) everything in `$XDG_STATE_HOME/barctl/` as the zsh controller does, with a
    boot stamp to spot stale states. Recommendation: **(a)**: stale states can't exist, and the zsh
    controller's folder stays untouched for rollback.
+
+   **Decided (the brain coordinator, on Stephen's behalf):** as recommended.
+
 8. **Where `meta desktop` lives.** brain record 0019 recommends a dotlib dispatcher `meta-desktop` in the
    dotfiles. Options: (a) a console command `meta-desktop` in desktop-tools (Python, reads barctl's status
    in-process), registered by its path under `uv tool`'s folder; (b) as 0019 says, then moved later.
    Recommendation: **(a)**: it is a new tool, and new tools are Python; it avoids writing it twice.
+
+   **Decided (the brain coordinator, on Stephen's behalf):** as recommended.
+
 9. **The counter reading `meta brain status --json`.** brain record 0019's question 5 said the bar doesn't
    use `meta` in v1. Options: (a) the counter's vault-tasks source goes through `meta brain` once that module
    exists (after v1), and through `vault-query` until then; (b) `vault-query` always, as record 0001 said;
    (c) wait to build the counter until `meta brain` exists. Recommendation: **(a)**: the counter isn't
    first in line anyway, and the front door is where every other reader is heading.
+
+   **Decided (the brain coordinator, on Stephen's behalf):** as recommended.
+
 10. **The printer's network path.** On 2026-11-04 the printer (`printer.andronics.io`) answered on none of
     ports 80, 443, 631 and 9100, while CUPS called it idle. Options: (a) ask the network-tools or homelab
     coordinator (whichever owns the printer's network) whether it's a firewall rule or the device asleep,
     before the scanner module is built; (b) build the module now and let it show unavailable. Recommendation:
     **(a)**, sent by the brain coordinator; the module can still be built meanwhile, since its availability
     check is what tells the two apart.
+
+    **Decided (the brain coordinator, on Stephen's behalf):** as recommended.
+
 11. **`hide` / `unhide`.** The brief's verbs didn't include bar visibility, but `bsp` hides the bar today.
     Options: (a) two verbs, `hide` and `unhide` (the words `bsp` uses); (b) one, `visibility show|hide|toggle`.
     Recommendation: **(a)**.
+
+    **Decided (the brain coordinator, on Stephen's behalf):** as recommended.
+
 12. **`barmenu` moves with barctl.** Options: (a) in barctl's first wave, since every module menu is drawn
     by it and its rows move to `modules.toml`; (b) later, by `tool-stats` order, with barctl calling the zsh
     `barmenu` meanwhile. Recommendation: **(a)**: one cut-over for the bar instead of two.
+
+    **Decided (the brain coordinator, on Stephen's behalf):** as recommended.
