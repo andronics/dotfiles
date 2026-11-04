@@ -802,12 +802,18 @@ bsp-node-to-desktop() {
 # ------------------------------
 
 # Toggle polybar visibility. Internal helper shared by bsp-hide/bsp-unhide.
+# barctl (desktop-tools) is the one program that talks to polybar (dotfiles
+# record 0003 §B7): `barctl hide` / `barctl unhide`.
 _bsp-polybar-toggle() {
     local action="$1"  # hide|show
 
-    if pgrep "polybar" >/dev/null 2>&1; then
+    if pgrep "polybar" >/dev/null 2>&1 && (( ${+commands[barctl]} )); then
         log-debug "polybar found... $action"
-        polybar-msg cmd "$action" >/dev/null 2>&1
+        if [[ "$action" == show ]]; then
+            barctl unhide >/dev/null 2>&1
+        else
+            barctl hide >/dev/null 2>&1
+        fi
     fi
 }
 
