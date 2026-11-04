@@ -1,0 +1,10 @@
+# Runs tessera-sync.service when the password store gains a commit (its main
+# branch ref or HEAD's log changes). Started by .zlogin.d/60-tessera; not
+# enabled, so no [Install]. Replaces password-store-autocommit.
+[Unit]
+Description=tessera: watch the password store for commits
+
+[Path]
+PathChanged=%h/.password-store/.git/refs/heads/main
+PathChanged=%h/.password-store/.git/logs/HEAD
+Unit=tessera-sync.service

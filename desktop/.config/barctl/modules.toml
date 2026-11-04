@@ -55,3 +55,13 @@ middle = ["crew", "menu"]
 right = ["crew", "quick", "{segment}"]
 scroll-up = ["crew", "cycle", "prev"]
 scroll-down = ["crew", "cycle", "next"]
+
+# The password store's light, pushed by tessera (tessera design record 0001 §4) on every watcher
+# run and command, with a 20-minute ttl: idle locked and level, active unlocked, alert when entries
+# wait, the store has diverged, sync is failing, the first sync is pending or a read was denied, and
+# unavailable when nothing has pushed for 20 minutes (the watcher is dead). The label and detail say
+# which (`barctl status tessera`). No clicks: each alert is fixed at a terminal.
+[modules.tessera]
+pusher = "tessera"
+display = "icon"
+glyph = "\U000F033E" # md-lock: before tessera's first push

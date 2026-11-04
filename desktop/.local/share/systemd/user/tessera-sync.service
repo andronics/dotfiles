@@ -1,0 +1,19 @@
+# One watcher run of tessera (the password-store tool, /usr/local/bin/tessera;
+# tessera design record 0001 §13). Started by tessera-sync.path on a commit
+# and by tessera-sync.timer every 10 minutes; not enabled, so no [Install].
+# SuccessExitStatus=1: while the first sync is pending, the watcher fetches
+# but never pushes and exits 1 ("first sync pending"); only Stephen's own
+# `tessera sync` at a terminal does that first push. tessera pushes its own
+# bar light (barctl's `tessera` module). Never set COORDINATOR, CLAUDECODE or
+# GNUPGHOME here (the security coordinator's spec).
+[Unit]
+Description=tessera: sync the password store (watcher run)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/tessera sync --watch
+TimeoutStartSec=60
+SuccessExitStatus=1
+Environment=TOOL_STATS=skip
+Environment=PATH=/usr/local/bin:/usr/bin:%h/.local/bin
+Environment=XDG_STATE_HOME=%h/.local/state
