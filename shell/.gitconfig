@@ -7,7 +7,10 @@
 	hooksPath = ~/.git-hooks
 
 [credential]
-	helper = store
+	# gh keeps its token in the system keyring; `store` kept one in plaintext
+	# in ~/.git-credentials. The empty line clears any helper set earlier.
+	helper =
+	helper = !gh auth git-credential
 
 [init]
 	defaultbranch = main
