@@ -1,0 +1,21 @@
+#!/usr/bin/env zsh
+set -e
+
+source "${DOTLIB}/_dispatcher"  || { echo "missing _dispatcher" >&2; exit 1; }
+source "${DOTLIB}/_brain_links" || { echo "missing _brain_links" >&2; exit 1; }
+
+dispatcher-init "brain-links" \
+    --route=function \
+    --description="Link every brain tool into ~/.local/bin"
+
+# sync is the default, and its flags are its own (moved after it): the
+# dispatcher's global --dry-run would skip the call instead of showing what
+# it would change.
+typeset -a flags=()
+while [[ "${1:-}" == (--dry-run|-n|--verbose|-v) ]]; do flags+=("$1"); shift; done
+if (( $#flags )) || [[ -z "${1:-}" ]]; then
+    [[ "${1:-}" == sync ]] && shift
+    set -- sync "${flags[@]}" "$@"
+fi
+
+dispatcher-execute "$@"

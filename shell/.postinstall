@@ -68,3 +68,14 @@ _dotfiles_git_crypt() {
 }
 _dotfiles_git_crypt
 unset -f _dotfiles_git_crypt
+
+# Every brain tool linked into ~/.local/bin (brain-links, dotlib _brain_links),
+# on hosts that mount the brain. The path unit that keeps them linked is
+# started at login (.zlogin.d/40-brain-links).
+if [[ -d "${BRAIN_BIN:-/mnt/brain/bin}" && -x "${HOME}/.local/bin/brain-links" ]]; then
+   if TOOL_STATS=skip "${HOME}/.local/bin/brain-links" sync; then
+      ok "brain tools linked into ~/.local/bin"
+   else
+      warn "brain-links: some brain tools not linked (journalctl --user -t brain-links)"
+   fi
+fi

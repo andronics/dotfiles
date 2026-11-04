@@ -1,0 +1,115 @@
+#!/usr/bin/env zsh
+
+# _brain_links - one ~/.local/bin link per brain tool.
+#
+# Claude Code sessions run Bash from the PATH they started with, so they never
+# see .zshenv.d/10-brain's $BRAIN_BIN; they find brain tools only through
+# ~/.local/bin, which is first on PATH everywhere. brain-links-sync keeps one
+# link there per executable in $BRAIN_BIN, so a new brain tool reaches them
+# without anyone's hand.
+#
+# Rules:
+#   - a missing link is created; a link already pointing at that exact tool is
+#     left alone;
+#   - anything else under the name is never replaced: a file or a link
+#     outside the brain is warned of; a link elsewhere in the brain (such as
+#     vault-query's to the brain's tools/) is only noted on --verbose/--dry-run;
+#   - a link into $BRAIN_BIN whose tool is gone is removed, and only those;
+#   - no $BRAIN_BIN directory (a host without the brain): nothing at all.
+#
+# Runs from .zlogin.d/40-brain-links, shell/.postinstall and the
+# brain-links.path user unit. BRAIN_LINKS_DIR overrides the link folder
+# (tests).
+
+[[ -n "${BRAIN_LINKS_LOADED:-}" ]] && return 0
+declare -gr BRAIN_LINKS_LOADED=1
+
+source "${DOTLIB}/_common" || { echo "[ERROR] _brain_links requires _common" >&2; return 1; }
+source "${DOTLIB}/_log"    2>/dev/null || true
+
+typeset -gA _BRAIN_LINKS_DESCRIPTIONS=(
+    [sync]="Link every brain tool into ~/.local/bin (--dry-run, --verbose)"
+)
+
+_brain-links-sync-help() {
+    print -r -- "Usage: brain-links [sync] [--dry-run|-n] [--verbose|-v]
+
+Links each executable in \$BRAIN_BIN (${BRAIN_BIN:-/mnt/brain/bin}) into
+\$BRAIN_LINKS_DIR (${BRAIN_LINKS_DIR:-${HOME}/.local/bin}). Never replaces a
+file or a link to anything else; removes only links into \$BRAIN_BIN whose
+tool is gone. Quiet unless something is wrong.
+
+  --dry-run, -n   print what would change, change nothing
+  --verbose, -v   print each create, keep, skip and remove"
+}
+
+brain-links-sync() {
+    local bin="${BRAIN_BIN:-/mnt/brain/bin}" dir="${BRAIN_LINKS_DIR:-${HOME}/.local/bin}"
+    local dry=false verbose=false
+    [[ "${DISPATCHER_VERBOSE:-}" == true ]] && verbose=true
+    while (( $# )); do
+        case "$1" in
+            --dry-run|-n) dry=true ;;
+            --verbose|-v) verbose=true ;;
+            *) log-error "unknown option: $1"; return 2 ;;
+        esac
+        shift
+    done
+
+    bin="${bin%/}"
+    [[ -d "$bin" ]] || { $verbose && print -r -- "no brain tools at $bin: nothing to do"; return 0; }
+    [[ -d "$dir" ]] || { log-warning "no link folder $dir: brain tools not linked"; return 1; }
+    # A folded stow dir would put the links in the dotfiles repo.
+    [[ -L "$dir" ]] && { log-warning "link folder $dir is itself a link: brain tools not linked"; return 1; }
+
+    local -i created=0 kept=0 skipped=0 removed=0 failed=0
+    local tool name link target
+    for tool in "$bin"/*(N); do
+        [[ -f "$tool" && -x "$tool" ]] || continue
+        name="${tool:t}" link="$dir/${tool:t}"
+        if [[ -L "$link" ]]; then
+            target="$(readlink -- "$link")"
+            if [[ "$target" == "$tool" ]]; then
+                (( ++kept )); $verbose && print -r -- "keep    $name"
+                continue
+            fi
+            (( ++skipped ))
+            # Elsewhere in the brain (vault-query -> tools/) is expected: info,
+            # shown only on --verbose or --dry-run, so no standing warning.
+            if [[ "$target" == "${bin:h}"/* ]]; then
+                { $verbose || $dry; } && log-info "$link points at $target, not $tool: left alone (brain's own)"
+            else
+                log-warning "$link points at $target, not $tool: left alone"
+            fi
+        elif [[ -e "$link" ]]; then
+            (( ++skipped )); log-warning "$link is not a link: left alone"
+        elif $dry; then
+            (( ++created )); print -r -- "would create $name -> $tool"
+        elif ln -s -- "$tool" "$link"; then
+            (( ++created )); $verbose && print -r -- "create  $name -> $tool"
+        else
+            (( ++failed )); log-error "could not link $link"
+        fi
+    done
+
+    # Dangling links into $BRAIN_BIN: a tool the brain removed or renamed.
+    for link in "$dir"/*(N@); do
+        target="$(readlink -- "$link")"
+        [[ "$target" == "$bin"/* && ! -e "$target" ]] || continue
+        name="${link:t}"
+        if $dry; then
+            (( ++removed )); print -r -- "would remove $name -> $target (gone)"
+        elif rm -f -- "${dir:?}/${name:?}"; then
+            (( ++removed )); $verbose && print -r -- "remove  $name -> $target (gone)"
+        else
+            (( ++failed )); log-error "could not remove $link"
+        fi
+    done
+
+    local verb=""
+    $dry && verb="would "
+    if $dry || $verbose; then
+        print -r -- "${verb}create $created, keep $kept, skip $skipped (not ours), ${verb}remove $removed"
+    fi
+    (( failed == 0 ))
+}
