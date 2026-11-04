@@ -1,10 +1,9 @@
 # docker compose
 #
 # Stacks live one per directory under $DCKR_DIR, each with its own compose
-# file and .env. .zprofile.d/50-docker sets DCKR_DIR, keeping a caller's value:
-# /pool/distributed/iac/workstation/compose where it exists, else the old
-# /mnt/docker/svcs layout on servers. Dot-directories such as .extend hold
-# shared fragments, not stacks, and are skipped.
+# file and .env. .zprofile.d/50-docker sets DCKR_DIR, keeping a caller's value,
+# else /pool/distributed/iac/workstation/compose. Dot-directories such as
+# .extend hold shared fragments, not stacks, and are skipped.
 
 # List the stack names: every non-hidden directory holding a compose file.
 _dc_stacks() {
