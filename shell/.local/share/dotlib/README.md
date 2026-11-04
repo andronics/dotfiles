@@ -83,7 +83,7 @@ A `${DOTLIB}/_<noun>` module:
 
 | Call | Purpose |
 |---|---|
-| `dispatcher-init <name> --route=function [--prefix=<p>] [--version=<v>] [--description=<d>]` | Initialise. `--prefix` defaults to `<name>`. Idempotent — safe to call again to re-bind. |
+| `dispatcher-init <name> --route=function [--prefix=<p>] [--version=<v>] [--description=<d>] [--results="<codes>"]` | Initialise. `--prefix` defaults to `<name>`. `--results` lists the exit codes that are answers, not faults (the run entry's outcome is `result`, not `fail`). Idempotent — safe to call again to re-bind. |
 | `dispatcher-execute "$@"` | Auto-parse global flags, resolve aliases, route `<sub>` → `<prefix>-<sub>` function call. |
 | `dispatcher-register-alias <alias> <real>` | Map a shorthand to a real subcommand name. Prefer the module's `_<UPPER_PREFIX>_ALIASES` array, which `dispatcher-init` registers. |
 | `dispatcher-before <fn>` | Register a function called before each subcommand: `fn <command> <args...>`. |
@@ -111,6 +111,14 @@ Auto-consumed from the front of `$@` by `dispatcher-execute`:
 | `--dry-run` | `DISPATCHER_DRY_RUN=true` — dispatcher logs the would-be call instead of running it |
 
 Module functions can read these via `dispatcher-is-verbose`, `dispatcher-is-debug`, `dispatcher-is-dry-run`, or by reading the `DISPATCHER_*` env vars directly.
+
+## The journal (the brain's record 0017)
+
+Every dispatcher logs to the user journal under its own name (`journalctl --user -t <name>`), owned by `desktop-coordinator`:
+
+- `log-warning`, `log-error` and `log-fatal` (in any `LOG_MODE`) write a `warning` or `error` entry; info, success, debug and trace never do. Messages are scrubbed of the run's arguments and redacted as the brain's `tools/journal.py` does (perl), and the same message is written at most once a minute.
+- `dispatcher-execute` writes one `run` entry per run (`TOOL_COMMAND`, `EXIT_CODE`, `OUTCOME`, `DURATION_MS`, `TOOL_ACTOR` from `COORDINATOR`, `TOOL_VERSION`, `TOOL_RUN`) and one JSON line in `~/.local/state/tool-runs/<YYYY-MM>.jsonl`, never the arguments.
+- `TOOL_STATS=skip` (the bar's launcher and the completions set it) writes no run entry; warnings and errors still go. `TOOL_JOURNAL=off` writes nothing; tests set it, or put a stub `logger` on `PATH` (`tests/dotlib-journal.zsh`).
 
 ## Routing modes
 

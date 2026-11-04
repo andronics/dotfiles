@@ -16,4 +16,9 @@ if pgrep -x -u $UID polybar >/dev/null; then
 fi
 
 export HOST_MONITOR="${HOST_MONITOR:-$(bspc query -M --names 2>/dev/null | head -1)}"
+# Every hook, click and tail module the bar runs inherits it: polled and
+# clicked calls write no run entries (the brain's record 0017 §3; their
+# warnings and errors are still journalled). A bar relaunched by `theme
+# reload polybar` keeps this environment.
+export TOOL_STATS=skip
 polybar -q "${1:-${POLYBAR_BAR:-main}}" </dev/null >/dev/null 2>&1 &!

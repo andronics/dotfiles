@@ -39,6 +39,9 @@ chmod +x $SCRATCH/stub/*
 export COORD_ACTORS_DIR=$ACTORS COORD_PROMPT_SCRIPT=$SCRATCH/stub/prompt.sh COORD_TMUX_SOCKET=$L
 export COORD_STATE_DIR=$SCRATCH/state COORD_LOCK_DIR=$SCRATCH/lock COORD_LAUNCH_TIMEOUT=0
 export DOTLIB=$REPO/shell/.local/share/dotlib
+# The tools under test write nothing to the journal or the run store
+# (dotlib's _log, the brain's record 0017).
+export TOOL_JOURNAL=off
 export PATH="$SCRATCH/stub:$PATH"
 
 integer pass=0 fail=0

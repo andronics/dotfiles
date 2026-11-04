@@ -22,7 +22,8 @@ _vault-query_cmd_lines() {
     reply=()
     if (( ! ${+_vault_query_cache[$key]} )); then
         (( ${+commands[vault-query]} )) || return 1
-        out=$(command vault-query "$@" </dev/null 2>/dev/null) || return 1
+        # A completion's call is no one's run (the brain's record 0017 §3).
+        out=$(TOOL_STATS=skip command vault-query "$@" </dev/null 2>/dev/null) || return 1
         _vault_query_cache[$key]=$out
     fi
     reply=(${(f)_vault_query_cache[$key]})

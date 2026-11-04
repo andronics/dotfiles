@@ -15,6 +15,7 @@ _barmenu_cmd() {
     if (( CURRENT == 2 )); then
         for line in ${(f)"$(
             DOTLIB=${DOTLIB:-${XDG_DATA_HOME:-$HOME/.local/share}/dotlib} \
+            TOOL_STATS=skip LOG_SYSTEMD_TAG=barmenu \
             command zsh -fc '
                 source "$DOTLIB/_barmenu" || exit 1
                 local m
