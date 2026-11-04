@@ -38,6 +38,9 @@ chmod +x $SCRATCH/stub/*
 
 export COORD_ACTORS_DIR=$ACTORS COORD_PROMPT_SCRIPT=$SCRATCH/stub/prompt.sh COORD_TMUX_SOCKET=$L
 export COORD_STATE_DIR=$SCRATCH/state COORD_LOCK_DIR=$SCRATCH/lock COORD_LAUNCH_TIMEOUT=0
+# _coord keeps the dock width, side and last-shown files under XDG_STATE_HOME:
+# never the live ones.
+export XDG_STATE_HOME=$SCRATCH/xdgstate
 export DOTLIB=$REPO/shell/.local/share/dotlib
 # The tools under test write nothing to the journal or the run store
 # (dotlib's _log, the brain's record 0017).
@@ -276,6 +279,115 @@ homes desktop
 session dotfiles-coordinator
 coordrun 'local -A _running _shown; _coord-scan 2>/dev/null; print -r -- ${(k)_running}; _coord-has-session desktop && print has'
 [[ $out == "desktop"$'\n'"has" ]] && ok scan-old-session-as-new || bad scan-old-session-as-new "$out"
+
+print "== switchboard: dock width (_coord, stubbed bspwm)"
+# A bspwm with one monitor M, a tiled window 0x2 and, when DOCK_SHOWN names a
+# coordinator, its panel 0x1 shown. DOCK_FAIL makes one call fail: focused
+# (the focused monitor), nodemon (a node's monitor), tomonitor, padding (a
+# padding set). Only answers, never a real window.
+mkdir -p $SCRATCH/dock $SCRATCH/lock
+print -r -- '#!/bin/sh
+case "$*" in
+  "query -N -n .window.!hidden") [ -n "$DOCK_SHOWN" ] && echo 0x1; echo 0x2 ;;
+  "query -N -n .window") echo 0x1; echo 0x2 ;;
+  "query -M -m focused") [ "$DOCK_FAIL" = focused ] && exit 1; echo M ;;
+  "query -M -n "*) [ "$DOCK_FAIL" = nodemon ] && exit 1; [ "$DOCK_FAIL" = tomonitor ] && { echo N; exit 0; }; echo M ;;
+  "query -M") echo M ;;
+  "query -T -m "*) echo "{\"rectangle\":{\"x\":0,\"y\":0,\"width\":3840,\"height\":2160}}" ;;
+  "query -T -n "*) echo "{\"client\":{\"borderWidth\":1,\"instanceName\":\"$DOCK_SHOWN\",\"className\":\"coord\",\"floatingRectangle\":{\"x\":100,\"y\":100,\"width\":800,\"height\":600}}}" ;;
+  "query -T -d "*) echo "{\"windowGap\":5,\"padding\":{\"top\":0,\"bottom\":0},\"layout\":\"tiled\"}" ;;
+  "node "*" --to-monitor "*) [ "$DOCK_FAIL" = tomonitor ] && exit 1 ;;
+  "config -m "*"_padding "*) [ "$DOCK_FAIL" = padding ] && exit 1 ;;
+  "config -m "*"_padding") echo 0 ;;
+  "config window_gap") echo 5 ;;
+  "config gapless_monocle") echo false ;;
+esac
+exit 0' >$SCRATCH/dock/bspc
+print -r -- '#!/bin/sh
+case "$2" in
+  0x1) echo "WM_CLASS(STRING) = \"$DOCK_SHOWN\", \"coord\"" ;;
+  *) echo "WM_CLASS(STRING) = \"firefox\", \"firefox\"" ;;
+esac' >$SCRATCH/dock/xprop
+# Runs argv with stdin, stdout and stderr on a pty whose master is closed,
+# as sxhkd's are once the terminal that started it has gone: a write there
+# fails with EIO.
+print -r -- 'import os, pty, subprocess, sys
+m, s = pty.openpty()
+os.close(m)
+sys.exit(subprocess.run(sys.argv[1:], stdin=s, stdout=s, stderr=s).returncode)' >$SCRATCH/dock/deadtty.py
+chmod +x $SCRATCH/dock/bspc $SCRATCH/dock/xprop
+
+# dockrun [VAR=value...] -- <cmd>: as coordrun, with the stubbed bspwm above
+# on PATH, a fresh state dir and a home for desktop.
+dockrun() {
+    local -a e; while [[ $1 != -- ]]; do e+=($1); shift; done; shift
+    rm -rf $XDG_STATE_HOME $SCRATCH/lock; mkdir -p $SCRATCH/lock
+    rc=0
+    out=$(env DISPLAY=:0 PATH=$SCRATCH/dock:$PATH DOCK_SHOWN= DOCK_FAIL= $e COORD_NAMES=desktop zsh -f -c "
+        source \$DOTLIB/_coord || exit 1
+        $*" 2>$SCRATCH/err) || rc=$?
+    err=$(<$SCRATCH/err)
+}
+homes desktop
+
+# sxhkd runs `coord width left|right` with no step and its stdout on a dead
+# pty (here /dev/full, which fails every write as that pty fails with EIO):
+# the width is set, so the command succeeds (issue #81).
+for shown in '' desktop; do
+    for edge in left right; do
+        want=$([[ $edge == right ]] && print 1152 || print 1408)
+        dockrun DOCK_SHOWN=$shown -- "coord-width $edge >/dev/full; print rc=\$?; print -r -- \$(<\$_COORD_WIDTH_FILE)"
+        [[ $out == "rc=0"$'\n'"$want" && -z $err ]] \
+            && ok "width-$edge-stdout-unwritable${shown:+-shown}" || bad "width-$edge-stdout-unwritable${shown:+-shown}" "rc=$rc out=$out err=$err"
+    done
+done
+if (( ${+commands[python3]} )); then
+    for shown in '' desktop; do
+        for edge in left right; do
+            rm -rf $XDG_STATE_HOME $SCRATCH/lock; mkdir -p $SCRATCH/lock
+            rc=0
+            env TOOL_STATS=skip DISPLAY=:0 PATH=$SCRATCH/dock:$PATH DOCK_SHOWN=$shown DOCK_FAIL= COORD_NAMES=desktop \
+                python3 $SCRATCH/dock/deadtty.py zsh -f $REPO/desktop/.local/bin/coord width $edge || rc=$?
+            [[ $rc == 0 ]] && ok "width-$edge-dead-pty${shown:+-shown}" || bad "width-$edge-dead-pty${shown:+-shown}" "rc=$rc"
+        done
+    done
+else
+    print "skip width-*-dead-pty: no python3"
+fi
+dockrun DOCK_SHOWN=desktop -- 'coord-width left; print rc=$?; coord-side >/dev/full; print rc=$?; coord-side left >/dev/full; print rc=$?'
+[[ $out == "1408"$'\n'"rc=0"$'\n'"rc=1"$'\n'"rc=0" && $err == *'[coord] side-get: could not write right to stdout'* ]] \
+    && ok width-and-side-print || bad width-and-side-print "out=$out err=$err"
+
+# Every failure on width's path says why.
+dockrun -- 'coord-width >/dev/full; print rc=$?'
+[[ $out == rc=1 && $err == *'[coord] width-clamp: could not write 1280 to stdout'* && $err == *'[coord] width-get: could not print the width'* ]] \
+    && ok width-get-logs || bad width-get-logs "out=$out err=$err"
+dockrun -- '_coord-width-clamp abc; print rc=$?'
+[[ $out == rc=1 && $err == *"[coord] width-clamp: not a number: 'abc'"* ]] \
+    && ok width-clamp-logs || bad width-clamp-logs "out=$out err=$err"
+dockrun -- '_COORD_LOCK_DIR=/nonexistent/coord-test; coord-width left; print rc=$?'
+[[ $out == rc=1 && $err == *'[coord] lock: cannot open /nonexistent/coord-test/coord-dock.lock'* && $err == *'[coord] width: cannot take the dock lock'* ]] \
+    && ok width-lock-open-logs || bad width-lock-open-logs "out=$out err=$err"
+dockrun -- 'exec {h}>$_COORD_LOCK_DIR/coord-dock.lock; flock $h; ( exec {h}>&-; coord-width left ); print rc=$?'
+[[ $out == rc=1 && $err == *'[coord] dock lock busy after 0s'* && $err == *'[coord] width: cannot take the dock lock'* ]] \
+    && ok width-lock-busy-logs || bad width-lock-busy-logs "out=$out err=$err"
+dockrun -- 'mkdir -p ${_COORD_WIDTH_FILE:h:h}; : >${_COORD_WIDTH_FILE:h}; coord-width left; print rc=$?'
+[[ $out == rc=1 && $err == *'[coord] width: cannot write 1408 to '*'/coord/width'* ]] \
+    && ok width-file-logs || bad width-file-logs "out=$out err=$err"
+dockrun DOCK_SHOWN=desktop DOCK_FAIL=padding -- 'coord-width left; print rc=$?'
+[[ $out == rc=1 && $err == *'[coord] place: cannot set right_padding 1413 on M'* \
+    && $err == *'[coord] redock: cannot place desktop (0x1) at 1408 on the right'* \
+    && $err == *'[coord] width: set to 1408, but a shown coordinator was not re-docked'* ]] \
+    && ok width-place-padding-logs || bad width-place-padding-logs "out=$out err=$err"
+dockrun DOCK_SHOWN=desktop DOCK_FAIL=nodemon -- 'coord-width left; print rc=$?'
+[[ $out == rc=1 && $err == *'[coord] redock: no monitor for desktop (0x1)'* && $err == *'[coord] width: set to 1408'* ]] \
+    && ok width-redock-monitor-logs || bad width-redock-monitor-logs "out=$out err=$err"
+dockrun DOCK_SHOWN=desktop DOCK_FAIL=tomonitor -- '_coord-place 0x1 1280 right M; print rc=$?'
+[[ $out == rc=1 && $err == *'[coord] place: cannot move 0x1 to monitor M'* ]] \
+    && ok place-to-monitor-logs || bad place-to-monitor-logs "out=$out err=$err"
+dockrun DOCK_SHOWN=desktop DOCK_FAIL=focused -- '_coord-place 0x1 1280 right; print rc=$?'
+[[ $out == rc=1 && $err == *'[coord] place: no focused monitor for 0x1'* ]] \
+    && ok place-focused-logs || bad place-focused-logs "out=$out err=$err"
 
 print "\n$pass passed, $fail failed"
 (( fail == 0 ))
