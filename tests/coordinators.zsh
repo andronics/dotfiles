@@ -236,6 +236,32 @@ for w in ${=$(print -r -- $out | sed 's/<[^>]*>/ /g; s/·/ /g')}; do
 done
 (( ! $#bad_words )) && ok state-words-avoid-keys || bad state-words-avoid-keys "$bad_words"
 
+# The bar's colour tiers (dotfiles design record 0001): off dim, idle fg_dim,
+# busy accent, waiting the urgent pill, shown the accent underline.
+coord $ALLNEW -- 'print -r -- $_COORD_BAR_ROLES'
+[[ $out == "dim=dim idle=fg_dim busy=accent waiting=urgent ink=on_urgent shown=accent" ]] \
+    && ok tier-roles || bad tier-roles "$out"
+coord $ALLNEW -- '_coord-colors 2>/dev/null; [[ ${_COORD_BAR_COLORS[idle]} == "#"* && ${_COORD_BAR_COLORS[busy]} == "#"* ]] && print resolved'
+[[ $out == resolved ]] && ok tier-roles-resolve || bad tier-roles-resolve "out=$out err=$err"
+# Menu cells: the glyph colour per state, and Stop all.
+coord $ALLNEW -- '_COORD_BAR_COLORS=(dim "#111111" idle "#222222" busy "#333333" waiting "#444444" ink "#555555")
+    for a in off idle busy waiting; do _coord-menu-row homelab $a; print -r -- ${REPLY%%&#10;*}; done
+    _coord-menu-stop-row 0; print -r -- ${REPLY%%&#10;*}; _coord-menu-stop-row 2; print -r -- ${REPLY%%&#10;*}'
+lines=("${(@f)out}")
+[[ ${#lines} == 6 && $lines[1] == "<span foreground='#111111'>"* && $lines[2] == "<span foreground='#222222'>"* \
+    && $lines[3] == "<span foreground='#333333'>"* && $lines[4] == "<span background='#444444' foreground='#555555'>"* \
+    && $lines[5] == "<span foreground='#111111'>"* && $lines[6] == "<span foreground='#222222'>"* ]] \
+    && ok menu-tiers || bad menu-tiers "$out"
+# The strip: a test session per state, colours given as overrides.
+homes $ALLNEW
+session brain-coordinator; session homelab-coordinator; session media-coordinator
+mkdir -p $COORD_STATE_DIR; print busy >$COORD_STATE_DIR/homelab; print waiting >$COORD_STATE_DIR/media
+COORD_NAMES_TEST="brain homelab media desktop" coordrun 'coord-bar dim=#111111 idle=#222222 busy=#333333 waiting=#444444 ink=#555555 shown=#666666 2>/dev/null'
+[[ $out == *'coord toggle brain:}%{F#222222}'* && $out == *'coord toggle homelab:}%{F#333333}'* \
+    && $out == *'coord toggle media:}%{B#444444}%{F#555555}'* && $out == *'coord toggle desktop:}%{F#111111}'* ]] \
+    && ok bar-tiers || bad bar-tiers "out=$out err=$err"
+rm -rf $COORD_STATE_DIR
+
 COORD_NAMES_TEST="brain alpha" coord brain -- 'print -r -- $_COORD_LIST / $_COORD_NAMES'
 [[ $out == "brain alpha / brain" ]] && ok coord-names-override || bad coord-names-override "$out"
 
