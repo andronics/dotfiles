@@ -4,6 +4,7 @@ Status: Approved (by Stephen for question 1; by the brain coordinator, on Stephe
 else; 2026-11-04)
 Date: 2026-11-04
 Authors: Stephen Cox (direction); written up by the desktop coordinator
+Note (2026-11-04): the coordinator switchboard `coord` is now `crew`, from andronics/desktop-tools (brain record 0019 §9); where this record says `coord`, read `crew`, whose strip barctl draws.
 
 This record amends one choice in record 0001 (Polybar IPC module taxonomy): its question 1 decided that the
 bar controller is "one shared controller, in zsh as a `dotlib` module with a thin dispatcher". This record

@@ -1,11 +1,6 @@
-#!/usr/bin/env zsh
-set -e
-
-source "${DOTLIB}/_dispatcher" || { echo "missing _dispatcher" >&2; exit 1; }
-source "${DOTLIB}/_coord"      || { echo "missing _coord"      >&2; exit 1; }
-
-dispatcher-init "coord" \
-    --route=function \
-    --description="Coordinator switchboard: one hidden terminal per Claude Code coordinator, docked left or right when shown"
-
-dispatcher-execute "$@"
+#!/bin/sh
+# coord is now crew (andronics/desktop-tools; brain record 0019 §9 step 4): this
+# alias says so once on stderr and runs crew with the same arguments. It goes on
+# 2026-12-04, with bspwmrc's `coord` rule.
+echo "coord is now crew" >&2
+exec crew "$@"

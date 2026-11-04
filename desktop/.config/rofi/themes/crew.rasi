@@ -1,9 +1,10 @@
 /**
- * Coordinator menu, first level (coord menu: super + c, the coord strip's
- * right-click): the launcher's look, sized for the ten coordinators in a
+ * Coordinator menu, first level (crew menu: super + c, the crew strip's
+ * middle-click; crew finds this theme by name, CREW_MENU_THEME to change
+ * it): the launcher's look, sized for the ten coordinators in a
  * row and Stop all on a second row under them (a coordinator without a home
  * under its new name shows under its former name, or not at all if it has
- * none, and the cells move up). Each cell is pango markup from _coord: a large
+ * none, and the cells move up). Each cell is pango markup from crew: a large
  * Nerd Font glyph coloured as on the strip, in the bar's colour tiers
  * (dotfiles design record 0001: dim not running, fg_dim idle, accent busy,
  * urgent pill waiting), the name with its filter key underlined, and a faint state. Shown coordinators are marked

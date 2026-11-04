@@ -18,8 +18,8 @@
 # The one name written here is the registry's own address, `meta brain
 # coordinators` (record 0019 §4), which the test allows.
 #
-# For tests: COORD_REGISTRY_FILE moves the copy, COORD_LAUNCH_SCRIPT the launch
-# script _coordinator runs, and COORD_TODAY (YYYY-MM-DD) pretends today.
+# For tests: COORD_REGISTRY_FILE moves the copy, and COORD_TODAY (YYYY-MM-DD)
+# pretends today.
 
 # The copy is one line of JSON: {"source", "generated", "coordinators": [{"name":
 # ..., "old_names": [...], "old_names_until": "YYYY-MM-DD", ...}, ...]}, each
@@ -65,48 +65,20 @@ _coordinator-registry() {
     done
   fi
   reply=($names)
-  _COORDINATOR_OLD=($olds)
+  pairs=($olds)
 }
 
-# "old new" pairs, kept for _coordinator's check below.
-typeset -ga _COORDINATOR_OLD
 () {
   local name old new pair
-  local -a reply
+  local -a reply pairs   # pairs: "old new", set by _coordinator-registry
   _coordinator-registry
   for name in $reply; do
     functions[$name-coordinator]="meta $name launch --attach \"\$@\""
   done
-  for pair in $_COORDINATOR_OLD; do
+  for pair in $pairs; do
     new=${pair#* } old=${pair% *}
     (( ${+functions[$old-coordinator]} )) && continue
     functions[$old-coordinator]="print -u2 -- '$old-coordinator is now $new-coordinator'; $new-coordinator \"\$@\""
   done
 }
 unfunction _coordinator-registry
-
-# What dotlib's _coord runs inside the tmux session it creates (zsh -ic
-# '_coordinator <name>; exec zsh -i'): the brain's launch script, which checks
-# the home, sets COORDINATOR and runs claude (record 0019 §9 step 2). It is
-# next to meta, one folder up from meta's bin. coord's path never goes through
-# meta, whose check refuses a second copy, and its `tmux new -A` covers only
-# this name's own session; so a session under the coordinator's other name
-# (old or new, from the registry) refuses here, as before. Goes with coord.
-# COORD_TMUX_SOCKET (a path is -S, a name -L) is the server checked, for tests.
-_coordinator() {
-  local name=${1:-} pair other
-  local script=${COORD_LAUNCH_SCRIPT:-${commands[meta]:A:h:h}/tools/coordinator-launch.sh}
-  local -a tm=(tmux)
-  if [[ ${COORD_TMUX_SOCKET:-} == */* ]]; then tm+=(-S "$COORD_TMUX_SOCKET")
-  elif [[ -n ${COORD_TMUX_SOCKET:-} ]]; then tm+=(-L "$COORD_TMUX_SOCKET"); fi
-  for pair in $_COORDINATOR_OLD; do
-    other=
-    [[ ${pair#* } == "$name" ]] && other=${pair% *}
-    [[ ${pair% *} == "$name" ]] && other=${pair#* }
-    [[ -n $other ]] && command "${tm[@]}" has-session -t "=$other-coordinator" 2>/dev/null || continue
-    print -u2 "$name-coordinator: not starting, tmux session $other-coordinator is already running (tmux attach -t $other-coordinator)"
-    return 1
-  done
-  [[ -x $script ]] || { print -u2 "_coordinator: no launch script at $script"; return 2; }
-  "$script" "$@"
-}

@@ -49,8 +49,13 @@ bspc config right_padding 0
 bspc rule -r "*:*:*"
 bspc rule -a Alacritty border=off
 
-# Coordinator switchboard (desktop/.local/bin/coord): born hidden, summoned by
-# `coord toggle <name>`, `coord menu` or `coord cycle`, which dock it to the
-# left or right edge (`coord side`) and reserve that strip with left_padding
-# or right_padding while it is shown, so no geometry here.
+# Coordinator switchboard (crew, from andronics/desktop-tools): born hidden,
+# summoned by `crew toggle <name>`, `crew menu` or `crew cycle`, which dock it
+# to the left or right edge (`crew side`) and reserve that strip with
+# left_padding or right_padding while it is shown, so no geometry here.
+bspc rule -a crew state=floating sticky=on hidden=on
+# crew's menus show a command's output in a floating terminal of this class.
+bspc rule -a crew-view state=floating
+# Windows still open from before crew (class coord, as coord made them) keep
+# their rule until the coord alias goes on 2026-12-04; then this line goes too.
 bspc rule -a coord state=floating sticky=on hidden=on

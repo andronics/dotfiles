@@ -5,8 +5,9 @@
 # holds several), in the coordinator strip's visual language.
 #
 # `bar` draws the bar monitor's desktops in bspwm's order. A desktop is empty
-# when it has no visible window once coordinator panels (class `coord`,
-# sticky, so they ride along on the focused desktop) are set aside; empty
+# when it has no visible window once coordinator panels (crew's, class `crew`,
+# or `coord` for one left from before crew; sticky, so they ride along on the
+# focused desktop) are set aside; empty
 # desktops are hidden, except the focused one, which shows a placeholder so
 # the strip never loses track of where you are. Each window's WM_CLASS (class,
 # then instance, case-insensitively) picks a glyph from _DESK_ICONS. A cell
@@ -62,9 +63,10 @@ source "${DOTLIB}/_common" || { echo "[ERROR] _desk requires _common" >&2; retur
 source "${DOTLIB}/_log"    2>/dev/null || true
 source "${DOTLIB}/_theme"  || { echo "[ERROR] _desk requires _theme" >&2; return 1; }
 
-# Mirrors _coord's _COORD_CLASS; sourcing _coord just for it would drag in
-# its dependencies.
-declare -g _DESK_SKIP_CLASS="coord"
+# The coordinator panels' classes: crew's (its CREW_CLASS), and coord's, which
+# crew still matches until the coord alias goes on 2026-12-04.
+declare -ga _DESK_SKIP_CLASSES=(crew coord)
+declare -g _DESK_SKIP_JSON='["'${(j:",":)_DESK_SKIP_CLASSES}'"]'   # for jq
 declare -g _DESK_GAP=   # polybar offset between desktop cells, %{O<cell_gap>}
 declare -g _DESK_KEEP_NAME="0"
 declare -g _DESK_SETTLE="${DESK_SETTLE:-0.05}"
@@ -166,7 +168,7 @@ typeset -gA _DESK_BAR_COLORS=()
 typeset -gA _DESK_DESCRIPTIONS=(
     [bar]="Print the polybar strip for [monitor] (default \$DESK_MONITOR, \$HOST_MONITOR, else focused): one fixed-width cell per non-empty desktop showing one app icon, rotating through its distinct apps every ${_DESK_ROTATE}s (DESK_ROTATE), focused underlined, urgent as a pill, then the focused desktop's mode and a + cell, coloured from the current theme; [key=#rrggbb ...] overrides a colour (key=role): ${(j:, :)_DESK_BAR_ROLES}"
     [watch]="Print the strip, then reprint it after each burst of bspc events and on each rotation tick when it changed, pruning first after desktop focus, node removal or node transfer, and repeat it after ${_DESK_IDLE}s unprinted (DESK_IDLE); for a polybar custom/script with tail = true, exits when its reader goes away"
-    [new]="Create a desktop named the lowest free integer right after the focused one on the focused monitor and focus it; --take moves the focused window there and follows (not a ${_DESK_SKIP_CLASS} panel)"
+    [new]="Create a desktop named the lowest free integer right after the focused one on the focused monitor and focus it; --take moves the focused window there and follows (not a coordinator panel)"
     [prune]="Remove every desktop with no nodes at all (hidden windows count) that isn't its monitor's focused desktop, never desktop '${_DESK_KEEP_NAME}' nor a monitor's last; prints the names removed"
 )
 
@@ -178,7 +180,7 @@ declare -g _DESK_JQ_BAR='
     def nz: if . == null or . == "" then "-" else . end;
     .focusedDesktopId as $f
     | .desktops[] | . as $d
-    | [.root | .. | objects | select(.client? != null and .client.className != $skip)] as $all
+    | [.root | .. | objects | select(.client? != null and (.client.className as $c | $skip | index($c) | not))] as $all
     | [$all[] | select(.hidden | not)] as $w
     | ([$w[] | select(.id == $d.focusedNodeId)] | first) as $fn
     | [($d.id | tostring),
@@ -243,7 +245,7 @@ _desk-is-prune-event() {
 # another module was starting a command, can inherit that command's output
 # pipe. Held here (and by `bspc subscribe`) for the bar's life, that pipe
 # never reaches end-of-file: polybar's reader blocks for good (an IPC hook
-# such as coord's reads to EOF on the main loop; a script that prints no
+# such as crew's reads to EOF on the main loop; a script that prints no
 # newline blocks its module thread), and the next restart waits on it
 # forever, frozen, deaf to SIGTERM and IPC. Only pipes: the shell's own fds
 # (the script it reads) are files.
@@ -258,7 +260,7 @@ _desk-close-inherited() {
 
 # Sets REPLY to the strip and _DESK_ROTATING to whether any cell rotates.
 # Runs in the caller's shell (watch needs _DESK_ROTATING); one tree query.
-# Cell styles stack as in coord-bar: urgent fills the cell, focused adds an
+# Cell styles stack as on crew's strip: urgent fills the cell, focused adds an
 # underline. Polybar action tags wrap each cell; right-click and scroll are
 # the module's own handlers.
 _desk-render() {
@@ -280,7 +282,7 @@ _desk-render() {
     _tree=$(_desk-tree "$_monitor") || { log-error "[desk] bspwm not reachable"; return 1; }
     (( _tick = EPOCHREALTIME / _DESK_ROTATE ))
 
-    for _line in ${(f)"$(jq -r --arg skip "$_DESK_SKIP_CLASS" "$_DESK_JQ_BAR" <<<"$_tree")"}; do
+    for _line in ${(f)"$(jq -r --argjson skip "$_DESK_SKIP_JSON" "$_DESK_JQ_BAR" <<<"$_tree")"}; do
         _f=("${(@ps:\t:)_line}")
         _id=$(_desk-hex "${_f[1]}")
         _focused=${_f[2]} _urgent=${_f[3]} _layout=${_f[4]} _state=${_f[5]} _sticky=${_f[6]}
@@ -362,7 +364,7 @@ desk-new() {
     if (( _take )); then
         _node=$(bspc query -N -n focused.window 2>/dev/null) || _node=
         [[ -n "$_node" ]] && _class=$(bspc query -T -n "$_node" | jq -r '.client.className // ""')
-        [[ "$_class" == "$_DESK_SKIP_CLASS" ]] && _node=
+        (( ${_DESK_SKIP_CLASSES[(Ie)$_class]} )) && _node=
     fi
 
     bspc monitor focused -a "$_name" || { log-error "[desk] new: could not add desktop '$_name'"; return 1; }

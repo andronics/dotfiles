@@ -69,7 +69,7 @@ refused() {
     err=$(tmux "$@" 2>&1 >/dev/null) || rc=$?
     local -a lines=("${(@f)err}")
     if (( rc != 1 )); then bad $name "exit $rc ($err)"
-    elif [[ $#lines != 1 || $err != *'refused'*'apps-coordinator, multi-coordinator'*'coord stop <name>'*'TMUX_FORCE=1 to override'* ]]; then bad $name "message: $err"
+    elif [[ $#lines != 1 || $err != *'refused'*'apps-coordinator, multi-coordinator'*'crew stop <name>'*'TMUX_FORCE=1 to override'* ]]; then bad $name "message: $err"
     elif [[ $(sessions) != $ALL || $(count list-windows '=multi-coordinator') != 2 ]]; then bad $name "state changed: $(sessions)"
     elif [[ -s $LOGFILE ]]; then bad $name "logged"
     else ok $name; fi
@@ -158,7 +158,7 @@ fixture; TMUX_FORCE=1 tmux -L $L kill-session -t apps-coordinator \
     && ok tmux-force || bad tmux-force "$(<$LOGFILE)"
 fixture; COORD_STOP=1 tmux -L $L kill-server \
     && ! $REAL -L $L has-session 2>/dev/null && [[ $(<$LOGFILE) == '-t tmux-guard kill-server (COORD_STOP=1) by '* ]] \
-    && ok coord-stop || bad coord-stop "$(<$LOGFILE)"
+    && ok stop-env-override || bad stop-env-override "$(<$LOGFILE)"
 # The stop script calls subprocess.run(["tmux", "kill-session", ...]) and
 # sets nothing; its command line lets it through.
 mkdir -p $SCRATCH/brain
