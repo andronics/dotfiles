@@ -89,6 +89,7 @@ media-coordinator()         { _coordinator media "$@"; }
 desktop-coordinator()       { _coordinator desktop "$@"; }
 incubator-coordinator()     { _coordinator incubator "$@"; }
 security-coordinator()      { _coordinator security "$@"; }
+ventures-coordinator()      { _coordinator ventures "$@"; }
 
 # Former names (record 0018 §5): remove on 2026-12-04.
 dotfiles-coordinator()      { _coordinator-alias dotfiles desktop "$@"; }

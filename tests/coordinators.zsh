@@ -111,7 +111,11 @@ homes
 run security-coordinator
 [[ $rc != 0 && $err == *'security-coordinator: no home yet'* && -z $(launched) ]] \
     && ok security-no-home || bad security-no-home "rc=$rc err=$err"
-run 'for n in brain platform personal homelab network-tools media desktop incubator security dotfiles apps ideas metalayerlab template folio; do (( ${+functions[$n-coordinator]} )) || print -n "$n "; done'
+homes ventures
+run ventures-coordinator
+[[ $rc == 0 && -z $err && $(launched) == 'claude ventures | '*'prompt for ventures' ]] \
+    && ok ventures-launch || bad ventures-launch "rc=$rc err=$err launched=$(launched)"
+run 'for n in brain platform personal homelab network-tools media desktop incubator security ventures dotfiles apps ideas metalayerlab template folio; do (( ${+functions[$n-coordinator]} )) || print -n "$n "; done'
 [[ -z $out ]] && ok all-functions || bad all-functions "missing: $out"
 
 print "== launcher: refusals (tmux -L $L)"
@@ -190,7 +194,7 @@ coordrun() {
     err=$(<$SCRATCH/err)
 }
 ALLOLD=(brain template folio homelab metalayerlab apps dotfiles ideas)
-ALLNEW=(brain platform personal homelab network-tools media desktop incubator security)
+ALLNEW=(brain platform personal homelab network-tools media desktop incubator security ventures)
 
 coord $ALLOLD -- 'print -r -- $_COORD_NAMES'
 [[ $out == "brain template folio homelab metalayerlab apps dotfiles ideas" ]] \
@@ -208,7 +212,7 @@ coord brain dotfiles media -- 'for n in desktop dotfiles apps media brain securi
     && ok resolve || bad resolve "$out"
 
 coord $ALLNEW -- 'for n in $_COORD_NAMES; do print -n "${_COORD_KEYS[$n]} "; done; print; print -r -- $_COORD_KEYS_HELP'
-[[ $out == "b pl pe h n m d i s "$'\n'"b brain, pl platform, pe personal, h homelab, n network-tools, m media, d desktop, i incubator, s security" ]] \
+[[ $out == "b pl pe h n m d i s v "$'\n'"b brain, pl platform, pe personal, h homelab, n network-tools, m media, d desktop, i incubator, s security, v ventures" ]] \
     && ok keys-two-letters || bad keys-two-letters "$out"
 coord $ALLOLD -- 'for n in $_COORD_NAMES; do print -n "${_COORD_KEYS[$n]} "; done'
 [[ $out == "b t f h m a d i " ]] && ok keys-before-moves || bad keys-before-moves "$out"
@@ -217,8 +221,8 @@ coord platform folio -- 'for n in $_COORD_NAMES; do print -n "${_COORD_KEYS[$n]}
 coord $ALLNEW -- 'print -r -- ${_COORD_DESCRIPTIONS[menu]}'
 [[ $out == *'pl platform, pe personal'* ]] && ok keys-in-help || bad keys-in-help "$out"
 
-coord $ALLNEW -- 'for n in platform personal network-tools media desktop incubator security dotfiles apps ideas metalayerlab template folio; do [[ -n ${_COORD_ICONS[$n]:-} ]] || print -n "$n "; done
-    [[ ${_COORD_ICONS[desktop]} == ${_COORD_ICONS[dotfiles]} && ${_COORD_ICONS[security]} == $'"'"'\U000F0306'"'"' ]] || print -n mismatch'
+coord $ALLNEW -- 'for n in platform personal network-tools media desktop incubator security ventures dotfiles apps ideas metalayerlab template folio; do [[ -n ${_COORD_ICONS[$n]:-} ]] || print -n "$n "; done
+    [[ ${_COORD_ICONS[desktop]} == ${_COORD_ICONS[dotfiles]} && ${_COORD_ICONS[security]} == $'"'"'\U000F0306'"'"' && ${_COORD_ICONS[ventures]} == $'"'"'\U000F1494'"'"' ]] || print -n mismatch'
 [[ -z $out ]] && ok icons || bad icons "$out"
 
 coord $ALLNEW -- '_COORD_BAR_COLORS=(dim "#111111"); _coord-menu-row platform off; print -r -- $REPLY'
@@ -228,7 +232,7 @@ coord $ALLNEW -- '_COORD_BAR_COLORS=(dim "#111111"); _coord-menu-row platform of
 coord $ALLNEW -- '_COORD_BAR_COLORS=(); for a in off idle busy waiting; do _coord-menu-row homelab $a 1; print -r -- ${REPLY##*&#10;}; done'
 bad_words=()
 for w in ${=$(print -r -- $out | sed 's/<[^>]*>/ /g; s/·/ /g')}; do
-    for k in pl pe h n m d i s; do [[ $w == $k* ]] && bad_words+=($w); done
+    for k in pl pe h n m d i s v; do [[ $w == $k* ]] && bad_words+=($w); done
 done
 (( ! $#bad_words )) && ok state-words-avoid-keys || bad state-words-avoid-keys "$bad_words"
 
