@@ -4,7 +4,8 @@
 # from the checkout this script lives in (stow links resolve back to it), so a
 # worktree previews its own, uninstalled themes; crew's cells come from the
 # installed desktop-tools. Besides one variant per
-# theme, `confirm` shows power's Yes/No question (themes/prompt.rasi). The
+# theme, `power-confirm` shows power's Yes/No question (themes/prompt.rasi)
+# and `confirm` crew's (themes/confirm.rasi) on a sample question. The
 # bar menus (barmenu) moved to andronics/desktop-tools (dotfiles record 0003),
 # which has no preview mode, so `bar-menu` shows its theme on sample rows.
 #
@@ -15,7 +16,7 @@
 
 _repo=${0:A:h:h:h:h}
 _themes="${_repo}/desktop/.config/rofi/themes"
-_variants=(${_themes}/*.rasi(N:t:r) confirm)
+_variants=(${_themes}/*.rasi(N:t:r) power-confirm)
 
 # REPLY = the theme file for variant $1, wrapped when THEME_STATE_DIR is set.
 _theme_file() {
@@ -35,7 +36,7 @@ if [[ -z "$_variant" || ${_variants[(Ie)$_variant]} -eq 0 ]]; then
     exit 2
 fi
 
-_theme_name=${_variant/#confirm/prompt}
+_theme_name=${_variant/#power-confirm/prompt}
 _theme_file "$_theme_name"
 _args=(-dmenu -i -no-custom -theme "$REPLY")
 _rows=()
@@ -82,7 +83,7 @@ print(menus.stop_cell(3, colours))
         _rows=("${(@)_out[2,-1]}")
         # The cursor starts off the shown cell so both the ring and the pill show.
         _args+=(-markup-rows -format i -matching prefix -p "Coordinator" -selected-row 1 -a 0) ;;
-    power|confirm)
+    power|power-confirm)
         # The real menu and question from _power, minus the acting.
         export DOTLIB="${_repo}/shell/.local/share/dotlib"
         _theme_file power;  export POWER_MENU_THEME=$REPLY
@@ -93,9 +94,15 @@ print(menus.stop_cell(3, colours))
                 && print -r -- "power: picked '${REPLY}'" || print -r -- "power: cancelled"
         else
             _power-confirm-ask suspend \
-                && print -r -- "confirm: picked 'Yes'" || print -r -- "confirm: No or cancelled"
+                && print -r -- "power-confirm: picked 'Yes'" || print -r -- "power-confirm: No or cancelled"
         fi
         exit 0 ;;
+    confirm)
+        # crew's Yes/No (desktop-tools' crew life._ask): the question as the
+        # message, No selected.
+        _rows=(Yes No)
+        _args+=(-format s -selected-row 1 -p crew
+            -mesg "the sample coordinator: no PAUSED notes since its last RESUMED heading: stop it anyway? (preview: nothing runs)") ;;
     prompt)
         _args=(${_args:#-no-custom} -p "Rename") ;;
     *)
