@@ -212,14 +212,18 @@ _coord-keys() {
 _coord-keys
 declare -g _COORD_KEYS_HELP=${REPLY:-none shown}
 
-# Colours for `bar` and `menu`: key=theme role. polybar can't interpolate
-# references inside a command, so the hook is a plain `coord bar`, and `bar`
-# and `menu` fill _COORD_BAR_COLORS from the current theme.zsh each time they
-# run (theme-roles; Catppuccin Mocha when no theme is applied). A new theme
+# Colours for `bar` and `menu`: key=theme role. They are the bar's colour
+# tiers (dotfiles design record 0001, section 6), as _barctl uses them: not
+# running dim, running and idle fg_dim, busy accent, and waiting on input the
+# urgent pill (on_urgent ink); shown adds the accent underline. polybar
+# can't interpolate references inside a command, so the hook is a plain
+# `coord bar`, and `bar` and `menu` fill _COORD_BAR_COLORS from the current
+# theme.zsh each time they run (theme-roles; Catppuccin Mocha when no theme
+# is applied). A new theme
 # shows on the next poke. key=#rrggbb args to `bar` still override.
 # _theme is sourced then, not here, so `status`, which every hook runs,
 # doesn't pay for loading it.
-typeset -ga _COORD_BAR_ROLES=(dim=dim busy=busy waiting=urgent ink=on_urgent shown=accent)
+typeset -ga _COORD_BAR_ROLES=(dim=dim idle=fg_dim busy=accent waiting=urgent ink=on_urgent shown=accent)
 typeset -gA _COORD_BAR_COLORS=()
 
 typeset -gA _COORD_DESCRIPTIONS=(
@@ -693,18 +697,24 @@ _coord-menu-row() {
                  _label=busy ;;
         waiting) _glyph="<span background='${_COORD_BAR_COLORS[waiting]}' foreground='${_COORD_BAR_COLORS[ink]}'>${_glyph}</span>"
                  _label=waiting ;;
-        *)       _label=running ;;
+        *)       _glyph="<span foreground='${_COORD_BAR_COLORS[idle]}'>${_glyph}</span>"
+                 _label=running ;;
     esac
     [[ -n "$_shown" ]] && _label+=" · open"
     REPLY="${_glyph}&#10;${_key:+<u>${_key}</u>}${_name#"$_key"}&#10;<span size='small' fgalpha='55%'>${_label}</span>"
 }
 
 # Sets REPLY to the menu's last cell, Stop all, in _coord-menu-row's shape,
-# dim when nothing is running. $1 is how many are.
+# in the same tiers: dim when nothing is running (unavailable), else fg_dim
+# (idle). $1 is how many are.
 _coord-menu-stop-row() {
     local -i _count=$1
     local _glyph="<span font_family='Symbols Nerd Font Mono' size='36864'> ${_COORD_STOP_ICON} </span>"
-    (( _count )) || _glyph="<span foreground='${_COORD_BAR_COLORS[dim]}'>${_glyph}</span>"
+    if (( _count )); then
+        _glyph="<span foreground='${_COORD_BAR_COLORS[idle]}'>${_glyph}</span>"
+    else
+        _glyph="<span foreground='${_COORD_BAR_COLORS[dim]}'>${_glyph}</span>"
+    fi
     REPLY="${_glyph}&#10;Stop all&#10;<span size='small' fgalpha='55%'>$(( _count )) running</span>"
 }
 
@@ -1335,10 +1345,11 @@ coord-status() {
     return 0
 }
 
-# Styles stack: the activity state colours the icon (not running dim, idle the
-# module's foreground, busy, or waiting as a filled pill), and shown adds an
-# underline. Running means the coordinator's window or its tmux session
-# exists; the state file of one that isn't running is stale and removed.
+# Styles stack: the activity state colours the icon in the bar's colour tiers
+# (dotfiles design record 0001: not running dim, idle fg_dim, busy accent, or
+# waiting as a filled urgent pill), and shown adds an accent underline.
+# Running means the coordinator's window or its tmux session exists; the
+# state file of one that isn't running is stale and removed.
 # Polybar action tags wrap each icon, so a left-click is `toggle <name>`;
 # right-click and scroll are the module's own handlers.
 coord-bar() {
@@ -1360,7 +1371,7 @@ coord-bar() {
             off)     _cell="%{F${_color[dim]}}${_icon}%{F-}" ;;
             busy)    _cell="%{F${_color[busy]}}${_icon}%{F-}" ;;
             waiting) _cell="%{B${_color[waiting]}}%{F${_color[ink]}}${_icon}%{F-}%{B-}" ;;
-            *)       _cell=$_icon ;;
+            *)       _cell="%{F${_color[idle]}}${_icon}%{F-}" ;;
         esac
         (( ${+_shown[$_name]} )) && _cell="%{u${_color[shown]}}%{+u}${_cell}%{-u}"
         _out+="%{A1:coord toggle ${_name}:}${_cell}%{A}"

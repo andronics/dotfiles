@@ -4,8 +4,9 @@
  * row and Stop all on a second row under them (a coordinator without a home
  * under its new name shows under its former name, or not at all if it has
  * none, and the cells move up). Each cell is pango markup from _coord: a large
- * Nerd Font glyph coloured as on the strip (dim not running, peach busy, red
- * pill waiting), the name with its filter key underlined, and a faint state. Shown coordinators are marked
+ * Nerd Font glyph coloured as on the strip, in the bar's colour tiers
+ * (dotfiles design record 0001: dim not running, fg_dim idle, accent busy,
+ * urgent pill waiting), the name with its filter key underlined, and a faint state. Shown coordinators are marked
  * active: a lavender ring in the selection's shape with a heavier bottom
  * edge, the strip's underline. The second level is themes/prompt.rasi.
  */
