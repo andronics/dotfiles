@@ -1,0 +1,214 @@
+#!/usr/bin/env zsh
+
+# _tmux_guard - the checks behind the tmux shim (~/.local/bin/tmux).
+#
+# On the default server, while a session named *-coordinator exists, refuses:
+#   - kill-server
+#   - kill-session of a coordinator (no -t: the current session), or -a while
+#     another coordinator would go with it
+#   - kill-window / kill-pane that would remove a coordinator's last window /
+#     last pane
+# Each command of a chain (`a \; b`, `a; b`) is checked; tmux's aliases and
+# unique prefixes (killp, killw, kill-ses, ...) are matched as tmux does.
+# Targets are resolved by asking the real tmux read-only (list-windows,
+# list-panes, display-message), so `=name`, `name:`, prefixes and %ids mean
+# what they mean to tmux.
+#
+# Let through, and logged with `logger -t tmux-guard`: TMUX_FORCE=1,
+# COORD_STOP=1, or a call from the brain's coordinator-stop.py (its parent's
+# command line), which ends a coordinator only after judging its notes.
+#
+# TMUX_GUARD_DEFAULT_SOCKET names the socket that counts as the default
+# server, for tests on a private one.
+#
+# Not seen: commands inside other commands' arguments (if-shell,
+# confirm-before, bind-key, run-shell), control mode (-C), source-file, and a
+# user command-alias to a kill command.
+#
+# Deliberately standalone (no _common etc.): it runs inside every guarded
+# tmux call and must not depend on anything that calls tmux.
+
+typeset -g _TMUX_GUARD_PAT='*-coordinator'
+
+# Resolves a command name as tmux does: exact name or alias, else a unique
+# prefix of a name. REPLY: the kill command, or empty for any other.
+_tmux-guard-cmd() {
+    REPLY=
+    case $1 in
+        killp) REPLY=kill-pane; return ;;
+        killw) REPLY=kill-window; return ;;
+        '') return ;;
+    esac
+    local -a _hits=()
+    local _n
+    for _n in kill-pane kill-server kill-session kill-window; do
+        [[ $_n == $1 ]] && { REPLY=$_n; return; }
+        [[ $_n == ${1}* ]] && _hits+=$_n
+    done
+    # A prefix also shared by a non-kill command ("k" is not; "kill" is
+    # shared by four, so ambiguous) would make tmux refuse it anyway.
+    (( $#_hits == 1 )) && REPLY=$_hits[1]
+}
+
+# Splits a command's arguments into flags and -t, setting the caller's _flags
+# (letters), _hast (1 with -t) and _target.
+_tmux-guard-cmdopts() {
+    _flags= _hast=0 _target=
+    local _a _i _ch
+    while (( $# )); do
+        _a=$1; shift
+        [[ $_a == -- ]] && break
+        [[ $_a == -?* ]] || break
+        for (( _i = 2; _i <= $#_a; _i++ )); do
+            _ch=$_a[_i]
+            if [[ $_ch == t ]]; then
+                _hast=1
+                if (( _i < $#_a )); then
+                    _target=${_a[_i+1,-1]}
+                else
+                    _target=${1-}; shift 2>/dev/null
+                fi
+                break
+            fi
+            _flags+=$_ch
+        done
+    done
+}
+
+# Runs the real tmux read-only against the same server.
+_tmux-guard-q() { $_tg_real "${_tg_gopts[@]}" "$@" 2>/dev/null; }
+
+# tmux-guard <real tmux> <args...>: returns 0 to let the call through, 1
+# after printing the one-line refusal.
+tmux-guard() {
+    emulate -L zsh
+    setopt extendedglob
+    local _tg_real=$1; shift
+    local -a _tg_gopts=() _rest=()
+    local _sock= _label= _a _i _ch _val
+
+    # Global options, as tmux's getopt "2c:CDdf:lL:NqS:T:uUvV".
+    while (( $# )); do
+        _a=$1
+        [[ $_a == -- ]] && { shift; break; }
+        [[ $_a == -?* ]] || break
+        shift
+        _tg_gopts+=$_a
+        for (( _i = 2; _i <= $#_a; _i++ )); do
+            _ch=$_a[_i]
+            [[ $_ch == [cfLST] ]] || continue
+            if (( _i < $#_a )); then
+                _val=${_a[_i+1,-1]}
+            else
+                _val=${1-}; _tg_gopts+=$_val; shift 2>/dev/null
+            fi
+            case $_ch in
+                c) return 0 ;;          # a shell command, not tmux commands
+                L) _label=$_val ;;
+                S) _sock=$_val ;;
+            esac
+            break
+        done
+    done
+    (( $# )) || return 0
+
+    local _dir="${TMUX_TMPDIR:-/tmp}/tmux-${UID}"
+    local _default=${TMUX_GUARD_DEFAULT_SOCKET:-$_dir/default}
+    if [[ -z $_sock && -n $_label ]]; then
+        _sock=$_dir/$_label
+    elif [[ -z $_sock && -n ${TMUX:-} && $TMUX != ,* ]]; then
+        _sock=${TMUX%%,*}
+    elif [[ -z $_sock ]]; then
+        _sock=$_dir/default
+    fi
+    [[ ${_sock:A} == ${_default:A} ]] || return 0
+
+    # Split the command list on ";" (an argument of its own, or a trailing
+    # one; "\;" at the end is a literal ";").
+    local -a _cmds=() _cur=()
+    for _a in "$@"; do
+        if [[ $_a == ';' ]]; then
+            _cmds+=("${(pj:\0:)_cur}"); _cur=()
+        elif [[ $_a == *';' && $_a != *'\;' ]]; then
+            _cur+=${_a%;}; _cmds+=("${(pj:\0:)_cur}"); _cur=()
+        elif [[ $_a == *'\;' ]]; then
+            _cur+="${_a%\\;};"
+        else
+            _cur+=$_a
+        fi
+    done
+    (( $#_cur )) && _cmds+=("${(pj:\0:)_cur}")
+
+    local -a _kills=() _c
+    local _cmd
+    for _cmd in $_cmds; do
+        _c=("${(@ps:\0:)_cmd}")
+        _tmux-guard-cmd $_c[1]
+        [[ -n $REPLY ]] && _kills+=("$_cmd")
+    done
+    (( $#_kills )) || return 0
+
+    local -a _coords=(${(M)${(f)"$(_tmux-guard-q list-sessions -F '#{session_name}')"}:#$~_TMUX_GUARD_PAT})
+    (( $#_coords )) || return 0
+
+    local _flags _hast _target _what= _line _s _sw _wp
+    local -a _t _info
+    for _cmd in $_kills; do
+        _c=("${(@ps:\0:)_cmd}")
+        _tmux-guard-cmd $_c[1]
+        _tmux-guard-cmdopts "${(@)_c[2,-1]}"
+        _t=(); (( _hast )) && _t=(-t "$_target")
+        case $REPLY in
+            kill-server)
+                _what="kill-server" ;;
+            kill-session)
+                [[ $_flags == *C* ]] && continue
+                _s=$(_tmux-guard-q list-windows "${_t[@]}" -F '#{session_name}')
+                _s=${_s%%$'\n'*}
+                [[ -n $_s ]] || continue
+                if [[ $_flags == *a* ]]; then
+                    (( ${#${_coords:#$_s}} )) && _what="kill-session -a (keeping ${_s})"
+                elif [[ $_s == $~_TMUX_GUARD_PAT ]]; then
+                    _what="kill-session of ${_s}"
+                fi ;;
+            kill-window|kill-pane)
+                [[ $_flags == *a* ]] && continue
+                if [[ $REPLY == kill-window ]]; then
+                    _line=$(_tmux-guard-q list-panes "${_t[@]}" -F '#{session_name} #{session_windows} #{window_panes}')
+                    _line=${_line%%$'\n'*}
+                else
+                    _line=$(_tmux-guard-q display-message -p "${_t[@]}" '#{session_name} #{session_windows} #{window_panes}')
+                fi
+                _info=(${=_line})
+                (( $#_info == 3 )) || continue
+                _s=$_info[1] _sw=$_info[2] _wp=$_info[3]
+                [[ $_s == $~_TMUX_GUARD_PAT ]] || continue
+                if [[ $REPLY == kill-window ]] && (( _sw == 1 )); then
+                    _what="kill-window of ${_s}'s last window"
+                elif [[ $REPLY == kill-pane ]] && (( _sw == 1 && _wp == 1 )); then
+                    _what="kill-pane of ${_s}'s last pane"
+                fi ;;
+        esac
+        [[ -n $_what ]] && break
+    done
+    [[ -n $_what ]] || return 0
+
+    local _ppid=$PPID _pname
+    local -a _pargv
+    _pname=$(</proc/$_ppid/comm) 2>/dev/null
+    _pargv=(${(ps:\0:)"$(</proc/$_ppid/cmdline)"}) 2>/dev/null
+    local _by=
+    if [[ ${TMUX_FORCE:-} == 1 ]]; then
+        _by="TMUX_FORCE=1"
+    elif [[ ${COORD_STOP:-} == 1 ]]; then
+        _by="COORD_STOP=1"
+    elif (( ${_pargv[(I)(*/|)coordinator-stop.py]} )); then
+        _by="coordinator-stop.py"
+    fi
+    if [[ -n $_by ]]; then
+        logger -t tmux-guard "${_what} (${_by}) by ${_pname:-?}/${_ppid}" 2>/dev/null
+        return 0
+    fi
+    print -u2 "tmux: refused ${_what}: coordinators running: ${(j:, :)_coords}; stop them cleanly with \`coord stop <name>\` (or Stop all in the menu); TMUX_FORCE=1 to override"
+    return 1
+}

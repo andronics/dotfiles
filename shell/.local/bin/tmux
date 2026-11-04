@@ -1,0 +1,29 @@
+#!/usr/bin/env -S zsh -f
+# tmux-guard shim: refuses to kill a *-coordinator session on the default
+# server (a test once killed the live server and every coordinator with it).
+# Anything without "kill" in it goes straight to the real tmux; the checks
+# live in ${DOTLIB}/_tmux_guard. TMUX_FORCE=1 overrides.
+
+# Never `tmux` by name: that would find this file again. A candidate that is
+# another copy of this shim (a worktree on PATH) is skipped by its marker.
+_real=
+for _c in /usr/bin/tmux /usr/local/bin/tmux /bin/tmux $^path/tmux(N-*); do
+    [[ -x $_c && ${_c:A} != ${0:A} ]] || continue
+    if [[ $_c != /usr/bin/tmux ]]; then
+        _head=$(head -c 200 -- $_c 2>/dev/null)
+        [[ $_head == *'tmux-guard shim'* ]] && continue
+    fi
+    _real=$_c
+    break
+done
+[[ -n $_real ]] || { print -u2 "tmux: no real tmux found"; exit 127; }
+
+[[ "$*" == *kill* ]] || exec $_real "$@"
+
+_guard="${DOTLIB:-${0:A:h:h}/share/dotlib}/_tmux_guard"
+if ! source $_guard 2>/dev/null; then
+    print -u2 "tmux: guard module missing at ${_guard}; not guarding"
+    exec $_real "$@"
+fi
+tmux-guard $_real "$@" || exit 1
+exec $_real "$@"
