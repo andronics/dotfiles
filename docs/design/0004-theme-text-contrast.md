@@ -199,3 +199,4 @@ Each with what it costs the dim/fg_dim hierarchy and the look; numbers from the 
 |---|---|
 | 2026-11-04 | Proposed (PR 99) |
 | 2026-11-04T08:28:09+00:00 | Approved by the arbiter, 2026-11-04T08:28:09+00:00, with changes (❓ 2026-11-04 Approve Dotfiles Record 0004 On Theme Text Contrast); the five open questions as recommended |
+| 2026-11-04 | Built in PR 108 (`_theme`: fg_dim and dim checked on bg and bg_alt, `theme check` and `theme self-test` report the four pairs; rofi's placeholder is fg_dim); status stays Approved until the live switch |
