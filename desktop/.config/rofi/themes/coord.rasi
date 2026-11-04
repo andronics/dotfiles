@@ -1,9 +1,9 @@
 /**
  * Coordinator menu, first level (coord menu: super + c, the coord strip's
- * right-click): the launcher's look, sized for the nine coordinators in a
- * row and Stop all after them (a second row once all nine have homes; until
- * then a coordinator not yet moved shows under its former name, and
- * security, which has none, not at all). Each cell is pango markup from _coord: a large
+ * right-click): the launcher's look, sized for the ten coordinators in a
+ * row and Stop all on a second row under them (a coordinator without a home
+ * under its new name shows under its former name, or not at all if it has
+ * none, and the cells move up). Each cell is pango markup from _coord: a large
  * Nerd Font glyph coloured as on the strip (dim not running, peach busy, red
  * pill waiting), the name with its filter key underlined, and a faint state. Shown coordinators are marked
  * active: a lavender ring in the selection's shape with a heavier bottom
@@ -24,14 +24,15 @@ configuration {
 }
 
 /*
- * Cells are (width - 64 padding - 96 spacing) / 9 = 175px, the spacing
- * being eight 12px gaps between nine columns, so 1735px is 64 + 96 + 9 x
+ * Cells are (width - 64 padding - 108 spacing) / 10 = 175px, the spacing
+ * being nine 12px gaps between ten columns, so 1922px is 64 + 108 + 10 x
  * 175 and still fits a 2560px screen. Each cell is 155px inside the
  * element's padding and border: room for "network-tools" (143px at 12pt,
- * measured with pango at 108 dpi) and "waiting · visible" (153px small).
+ * measured with pango at 108 dpi) and "waiting · open" (under the 153px
+ * "waiting · visible" took, small).
  */
 window {
-    width:               1735px;
+    width:               1922px;
 }
 
 entry {
@@ -39,7 +40,7 @@ entry {
 }
 
 listview {
-    columns:             9;
+    columns:             10;
     lines:               2;
 }
 

@@ -4,8 +4,9 @@
 # Code coordinator, summoned one at a time.
 #
 # The switchboard order is _COORD_LIST (brain, platform, personal, homelab,
-# network-tools, media, desktop, incubator, security): `menu` lists it in a
-# rofi menu, `cycle` steps through it, wrapping, and `bar` draws it. Each
+# network-tools, media, desktop, incubator, security, ventures): `menu`
+# lists it in a rofi menu, `cycle` steps through it, wrapping, and `bar`
+# draws it. Each
 # coordinator is named after its knowledge centre (the brain's design record
 # 0018), and its home moves to the new name one coordinator at a time, so a
 # name is shown only once it has a home in the actors dir; until then it is
@@ -122,7 +123,7 @@ declare -g _COORD_LAST_FILE="${XDG_STATE_HOME:-$HOME/.local/state}/coord/last"
 # COORD_NAMES, COORD_STATE_DIR and COORD_LOCK_DIR are for tests: .zshenv.d's
 # 05-xdg resets the XDG dirs in every zsh, so moving those alone would still
 # reach the live state and locks.
-typeset -ga _COORD_LIST=(${=COORD_NAMES:-brain platform personal homelab network-tools media desktop incubator security})
+typeset -ga _COORD_LIST=(${=COORD_NAMES:-brain platform personal homelab network-tools media desktop incubator security ventures})
 declare -g _COORD_ACTORS_DIR="${COORD_ACTORS_DIR:-/pool/local/actors}"
 # Former name -> name (record 0018 §2), for the 30 days its §5 gives them:
 # remove on 2026-12-04, with 55-coordinators' _COORDINATOR_ALIASES. Never
@@ -174,6 +175,7 @@ typeset -gA _COORD_ICONS=(
     [desktop]=$'\U000F0493'        # md-cog
     [incubator]=$'\U000F0335'      # md-lightbulb
     [security]=$'\U000F0306'       # md-key
+    [ventures]=$'\U000F1494'       # md-briefcase_variant (personal has md-briefcase)
 )
 # A former name, shown until its home moves, keeps the icon it has now.
 () {
@@ -676,9 +678,10 @@ _coord-theme-args() {
 # typing a coordinator's key (_COORD_KEYS: its first letter, or two where one
 # isn't unique, pl platform and pe personal) leaves the cursor on it. The
 # words in cells listed before a coordinator must not start with its key:
-# hence "off", not "not running", which n (network-tools) would match. b
-# matches busy, but brain is listed first; s matches Stop all, but it is
-# listed after security. The key is underlined in the name.
+# hence "off", not "not running", which n (network-tools) would match, and
+# "open", not "visible", which v (ventures) would. b matches busy, but brain
+# is listed first; s matches Stop all, but it is listed after security. The
+# key is underlined in the name.
 _coord-menu-row() {
     local _name=$1 _activity=$2 _shown=${3:-} _glyph _label _key=${_COORD_KEYS[$1]:-}
     # size is in 1024ths of a point: 36pt, about 48px.
@@ -692,7 +695,7 @@ _coord-menu-row() {
                  _label=waiting ;;
         *)       _label=running ;;
     esac
-    [[ -n "$_shown" ]] && _label+=" · visible"
+    [[ -n "$_shown" ]] && _label+=" · open"
     REPLY="${_glyph}&#10;${_key:+<u>${_key}</u>}${_name#"$_key"}&#10;<span size='small' fgalpha='55%'>${_label}</span>"
 }
 
