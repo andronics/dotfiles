@@ -2,15 +2,15 @@
 # Tests for dotlib's journal output (the brain's design record 0017): _log
 # writes warnings and errors under the tool's own name, never debug or info
 # lines and never arguments; _dispatcher writes one run entry per run (and
-# one line in the run store), none under TOOL_STATS=skip; the launcher
-# (shell/.config/zsh/.zshrc.d/55-coordinators) exports COORDINATOR.
+# one line in the run store), none under TOOL_STATS=skip. (COORDINATOR is
+# exported by the brain's launch script now, record 0019 §9; see
+# tests/coordinator-launchers.zsh.)
 #
 # Nothing reaches the real journal: logger is a stub on PATH that appends
 # what it is given to a file, and the run store and rate-limit stamps are in
 # the scratch dir. The tools under test are a throwaway dispatcher (jt) and
-# `coord` asked for an unknown command. The launcher runs with stub claude
-# and prompt scripts in a scratch actors dir, and its tmux calls name their
-# own server (-L dotlib-journal-test), the cleanup included.
+# `coord` asked for an unknown command, in a scratch actors dir; its tmux
+# calls name their own server (-L dotlib-journal-test), the cleanup included.
 #
 #   zsh tests/dotlib-journal.zsh
 
@@ -22,21 +22,13 @@ typeset -r REPO=${0:A:h:h}
 typeset -r L=dotlib-journal-test
 mkdir -p ~/.cache || exit 1
 typeset -r S=$(mktemp -d ~/.cache/dotlib-journal-test.XXXXXX)
-typeset -r JLOG=$S/journal RUNS=$S/runs ACTORS=$S/actors LAUNCHED=$S/launched
-typeset -r LAUNCHER=$REPO/shell/.config/zsh/.zshrc.d/55-coordinators
+typeset -r JLOG=$S/journal RUNS=$S/runs ACTORS=$S/actors
 
 mkdir -p $S/stub $S/bin $ACTORS
 # logger: one "@@ entry <args>" line, then the fields it was given on stdin.
 print -r -- '#!/bin/sh
 echo "@@ entry $*" >>"'$JLOG'"
 cat >>"'$JLOG'"' >$S/stub/logger
-# claude: logs where it ran and the COORDINATOR it was given; refuses to run
-# outside the scratch dir.
-print -r -- '#!/bin/sh
-case "$PWD" in "'$S'"/*) ;; *) echo "REAL $PWD" >>"'$LAUNCHED'"; exit 99 ;; esac
-printf "claude %s COORDINATOR=%s\n" "${PWD#'$ACTORS'/}" "${COORDINATOR:-unset}" >>"'$LAUNCHED'"' >$S/stub/claude
-print -r -- '#!/bin/sh
-printf "prompt for %s" "$1"' >$S/stub/prompt.sh
 chmod +x $S/stub/*
 
 # jt: a throwaway dispatcher over a module of test commands.
@@ -63,7 +55,7 @@ chmod +x $S/bin/*
 export DOTLIB=$REPO/shell/.local/share/dotlib
 export PATH="$S/stub:$PATH"
 export TOOL_RUNS_DIR=$RUNS TOOL_JOURNAL_STAMPS=$S/stamps
-export COORD_ACTORS_DIR=$ACTORS COORD_PROMPT_SCRIPT=$S/stub/prompt.sh COORD_TMUX_SOCKET=$L
+export COORD_ACTORS_DIR=$ACTORS COORD_TMUX_SOCKET=$L
 export COORD_STATE_DIR=$S/state COORD_LOCK_DIR=$S/lock COORD_LAUNCH_TIMEOUT=0
 
 integer pass=0 fail=0
@@ -182,29 +174,6 @@ fresh; CLAUDECODE=1 jt ok
 [[ $(entries TOOL_ACTOR=claude) == 1 ]] && ok actor-claude || bad actor-claude "$(journal)"
 fresh; jt ok </dev/null
 [[ $(entries TOOL_ACTOR=system) == 1 ]] && ok actor-system || bad actor-system "$(journal)"
-
-print "== the launcher exports COORDINATOR (tmux -L $L)"
-# launch <homes> -- <cmd>: exactly these homes exist; runs the launcher's
-# function in a clean zsh with the throwaway names test and oldtest.
-typeset -r PRELUDE="source ${(q)LAUNCHER}
-_COORDINATOR_ALIASES[oldtest]=test
-oldtest-coordinator() { _coordinator-alias oldtest test \"\$@\"; }
-test-coordinator() { _coordinator test \"\$@\"; }"
-launch() {
-    rm -rf -- "${ACTORS:?}"; mkdir -p $ACTORS; : >$LAUNCHED
-    while [[ $1 != -- ]]; do mkdir -p $ACTORS/$1; shift; done; shift
-    rc=0; out=$(zsh -f -c "$PRELUDE; $*" 2>$S/err) || rc=$?; err=$(<$S/err)
-}
-launch test -- test-coordinator
-[[ $rc == 0 && $(<$LAUNCHED) == 'claude test COORDINATOR=test-coordinator' ]] && ok launcher-exports || bad launcher-exports "rc=$rc err=$err $(<$LAUNCHED)"
-launch test oldtest -- oldtest-coordinator
-[[ $rc == 0 && $(<$LAUNCHED) == 'claude test COORDINATOR=test-coordinator' ]] && ok alias-new-home || bad alias-new-home "rc=$rc $(<$LAUNCHED)"
-launch oldtest -- oldtest-coordinator
-[[ $rc == 0 && $(<$LAUNCHED) == 'claude oldtest COORDINATOR=test-coordinator' ]] && ok alias-old-home-new-name || bad alias-old-home-new-name "rc=$rc $(<$LAUNCHED)"
-launch desktop -- dotfiles-coordinator
-[[ $rc == 0 && $(<$LAUNCHED) == 'claude desktop COORDINATOR=desktop-coordinator' ]] && ok real-alias-new-name || bad real-alias-new-name "rc=$rc $(<$LAUNCHED)"
-launch dotfiles -- dotfiles-coordinator
-[[ $rc == 0 && $(<$LAUNCHED) == 'claude dotfiles COORDINATOR=desktop-coordinator' ]] && ok real-alias-old-home || bad real-alias-old-home "rc=$rc $(<$LAUNCHED)"
 
 print "\n$pass passed, $fail failed"
 (( fail == 0 ))

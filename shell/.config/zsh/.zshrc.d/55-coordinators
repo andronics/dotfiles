@@ -1,103 +1,94 @@
-# Claude Code coordinator sessions. Each one lives in /pool/local/actors/<name>/:
-#   README.md   what it owns
-#   memory/     a link to its Claude memory, for browsing
-#   prompt.log  why a launch fell back from the fresh prompt
-# The launch prompt comes from the coordinator's actor note in the vault, via
-# /mnt/brain/tools/coordinator-prompt.sh (a cached copy if the vault fails).
-# Its memory belongs to that home, so always launch from it. Extra arguments go
-# to claude, e.g. `personal-coordinator --model opus`. Vault cheatsheet:
+# Claude Code coordinator launchers, generated from the coordinator registry
+# at shell start (the brain's design record 0019 §9 step 3): one function
+# <name>-coordinator per coordinator, which runs `meta <name> launch --attach`
+# with its arguments. meta starts the coordinator's tmux session from its home
+# (refusing if it, or its old name's, is already running) and attaches this
+# terminal. Extra arguments go through to meta, e.g.
+# `personal-coordinator -- --model opus` for claude. Vault cheatsheet:
 # "📇 🤖 Launching a Coordinator".
 #
-# Names follow the brain's design record 0018: each coordinator is named
-# after its knowledge centre. Its homes move one at a time, so a name with no
-# home yet launches nothing, and each former name is an announced alias that
-# runs the new one once its home exists, and the old one exactly as before
-# until then. The aliases go on 2026-12-04, with _coord's _COORD_ALIASES.
+# The names come from the copy of the registry that meta keeps, read as a
+# file: no meta, uv or vault-query call on every new shell. Only with no copy
+# yet (a new machine) is meta asked once, which also writes the copy. Each
+# former name (old_names) is an alias that says "X is now Y" on stderr and
+# runs the new one, until its old_names_until date. A new coordinator needs no
+# change here: its actor note is enough. A test (tests/coordinator-launchers.zsh)
+# fails if a coordinator's name is written in this file outside comments.
 #
-# For tests: COORD_ACTORS_DIR moves the homes, COORD_PROMPT_SCRIPT the prompt
-# script, and COORD_TMUX_SOCKET (as _coord's: a path is -S, a name -L) the
-# tmux server checked for running sessions.
+# The one name written here is the registry's own address, `meta brain
+# coordinators` (record 0019 §4), which the test allows.
+#
+# For tests: COORD_REGISTRY_FILE moves the copy, COORD_LAUNCH_SCRIPT the launch
+# script _coordinator runs, and COORD_TODAY (YYYY-MM-DD) pretends today.
 
-# Former name -> name (record 0018 §2). Keep in step with _coord.
-typeset -gA _COORDINATOR_ALIASES=(
-  dotfiles     desktop
-  apps         media
-  ideas        incubator
-  metalayerlab network-tools
-  template     platform
-  folio        personal
-)
+# The copy is one line of JSON: {"source", "generated", "coordinators": [{"name":
+# ..., "old_names": [...], "old_names_until": "YYYY-MM-DD", ...}, ...]}, each
+# entry starting with its name (vault-query's order). Split at every quote,
+# a key is a token followed by its ": " token, and an entry runs from its
+# "name" key to the next one; the (i) subscript searches keep it linear (a
+# ${x#*pattern} on the file costs ~15 ms). A name is [a-z0-9-] only, so
+# nothing else can be defined from it.
+_coordinator-registry() {
+  emulate -L zsh
+  setopt extended_glob
+  local file=${COORD_REGISTRY_FILE:-${XDG_CACHE_HOME:-$HOME/.cache}/meta/coordinators.json}
+  local json name old until today q='"'
+  local -a names olds t
+  local -i i n k j
+  if [[ ! -r $file ]] && (( ${+commands[meta]} )); then
+    names=(${(M)${(f)"$(TOOL_STATS=skip command meta brain coordinators --names 2>/dev/null </dev/null)"}:#[a-z0-9][a-z0-9-]#})
+  fi
+  [[ -r $file ]] && json=$(<$file)
+  if [[ -n $json ]]; then
+    names=()
+    # Prompt expansion, not strftime: no module to load at every shell start.
+    today=${COORD_TODAY:-${(%):-%D{%Y-%m-%d}}}
+    t=("${(@ps:$q:)json}")
+    for (( i = ${t[(i)name]}; i <= $#t; i = n )); do
+      n=${t[(ib:i+1:)name]}
+      [[ ${t[i+1]} == :[[:space:]]# ]] || continue
+      name=${t[i+2]}
+      [[ $name == [a-z0-9][a-z0-9-]# ]] || continue
+      names+=($name)
+      k=${t[(ib:i:)old_names_until]}
+      until=
+      (( k < n )) && [[ ${t[k+1]} == :[[:space:]]# ]] && until=${t[k+2]}
+      [[ -n $until && $today > $until ]] && continue
+      k=${t[(ib:i:)old_names]}
+      (( k < n )) || continue
+      # After the key: ": [", then name, ", ", name ... up to the token with "]".
+      for (( j = k + 1; j < n; j += 2 )); do
+        [[ ${t[j]} == *\]* ]] && break
+        old=${t[j+1]}
+        [[ $old == [a-z0-9][a-z0-9-]# && $old != $name ]] && olds+=("$old $name")
+      done
+    done
+  fi
+  reply=($names)
+  _COORDINATOR_OLD=($olds)
+}
 
-# Refuses to start <name> while its own or its other name's tmux session
-# (<name>-coordinator, or the former/new name's) is running: two of the same
-# coordinator would both act. The switchboard and the cheatsheet start a
-# coordinator inside its own session (tmux new -A -s <name>-coordinator
-# 'zsh -ic <name>-coordinator'), so the session this shell runs in doesn't
-# count; the other name's always does.
+() {
+  local name old new
+  local -a reply _COORDINATOR_OLD
+  _coordinator-registry
+  for name in $reply; do
+    functions[$name-coordinator]="meta $name launch --attach \"\$@\""
+  done
+  for old in $_COORDINATOR_OLD; do
+    new=${old#* } old=${old% *}
+    (( ${+functions[$old-coordinator]} )) && continue
+    functions[$old-coordinator]="print -u2 -- '$old-coordinator is now $new-coordinator'; $new-coordinator \"\$@\""
+  done
+}
+unfunction _coordinator-registry
+
+# What dotlib's _coord runs inside the tmux session it creates (zsh -ic
+# '_coordinator <name>; exec zsh -i'): the brain's launch script, which checks
+# the home, sets COORDINATOR and runs claude (record 0019 §9 step 2). It is
+# next to meta, one folder up from meta's bin. Goes with coord.
 _coordinator() {
-  local name=$1; shift
-  local home=${COORD_ACTORS_DIR:-/pool/local/actors}/$name other self s k v
-  local -a tm=(tmux) sessions=("$name-coordinator")
-  if [[ ! -d $home ]]; then
-    print -u2 "$name-coordinator: no home yet ($home), so nothing launched"
-    return 1
-  fi
-
-  for k v in "${(@kv)_COORDINATOR_ALIASES}"; do
-    [[ $k == "$name" ]] && other=$v
-    [[ $v == "$name" ]] && other=$k
-  done
-  [[ -n $other ]] && sessions+=("$other-coordinator")
-
-  if [[ ${COORD_TMUX_SOCKET:-} == */* ]]; then tm+=(-S "$COORD_TMUX_SOCKET")
-  elif [[ -n ${COORD_TMUX_SOCKET:-} ]]; then tm+=(-L "$COORD_TMUX_SOCKET"); fi
-  # This shell's own session, only if it is on the server being checked.
-  if [[ -n ${TMUX:-} && -n ${TMUX_PANE:-} ]]; then
-    s=$(command "${tm[@]}" display -p -t "$TMUX_PANE" '#{socket_path} #S' 2>/dev/null)
-    [[ ${s%% *} == "${TMUX%%,*}" ]] && self=${s#* }
-  fi
-  for s in "${sessions[@]}"; do
-    [[ $s == "$self" ]] && continue
-    if command "${tm[@]}" has-session -t "=$s" 2>/dev/null; then
-      print -u2 "$name-coordinator: not starting, tmux session $s is already running (tmux attach -t $s)"
-      return 1
-    fi
-  done
-
-  cd "$home" || return
-  # Unattended, so prompt suggestions only cost usage; the env var beats the promptSuggestionEnabled setting.
-  # COORDINATOR tells every tool the session and its agents run who is calling (the brain's record 0017):
-  # the actor's slug by its new name (record 0018), even while a former name's home is still in use.
-  COORDINATOR=${_COORDINATOR_ALIASES[$name]:-$name}-coordinator \
-  CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false command claude --permission-mode bypassPermissions --dangerously-skip-permissions "$@" "$(${COORD_PROMPT_SCRIPT:-/mnt/brain/tools/coordinator-prompt.sh} "$name")"
+  local script=${COORD_LAUNCH_SCRIPT:-${commands[meta]:A:h:h}/tools/coordinator-launch.sh}
+  [[ -x $script ]] || { print -u2 "_coordinator: no launch script at $script"; return 2; }
+  "$script" "$@"
 }
-
-# A former name: the new one once its home exists, else the old home as before.
-_coordinator-alias() {
-  local old=$1 new=$2; shift 2
-  if [[ -d ${COORD_ACTORS_DIR:-/pool/local/actors}/$new ]]; then
-    print -u2 "$old-coordinator is now $new-coordinator"
-    _coordinator "$new" "$@"
-  else
-    _coordinator "$old" "$@"
-  fi
-}
-
-brain-coordinator()         { _coordinator brain "$@"; }
-platform-coordinator()      { _coordinator platform "$@"; }
-personal-coordinator()      { _coordinator personal "$@"; }
-homelab-coordinator()       { _coordinator homelab "$@"; }
-network-tools-coordinator() { _coordinator network-tools "$@"; }
-media-coordinator()         { _coordinator media "$@"; }
-desktop-coordinator()       { _coordinator desktop "$@"; }
-incubator-coordinator()     { _coordinator incubator "$@"; }
-security-coordinator()      { _coordinator security "$@"; }
-ventures-coordinator()      { _coordinator ventures "$@"; }
-
-# Former names (record 0018 §5): remove on 2026-12-04.
-dotfiles-coordinator()      { _coordinator-alias dotfiles desktop "$@"; }
-apps-coordinator()          { _coordinator-alias apps media "$@"; }
-ideas-coordinator()         { _coordinator-alias ideas incubator "$@"; }
-metalayerlab-coordinator()  { _coordinator-alias metalayerlab network-tools "$@"; }
-template-coordinator()      { _coordinator-alias template platform "$@"; }
-folio-coordinator()         { _coordinator-alias folio personal "$@"; }
