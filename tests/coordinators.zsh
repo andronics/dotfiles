@@ -1,14 +1,15 @@
 #!/usr/bin/env zsh
 # Tests for the coordinator rename (the brain's design record 0018): the
-# launcher's homes, aliases and refusals (shell/.config/zsh/.zshrc.d/
-# 55-coordinators) and the switchboard's name resolution (dotlib _coord).
+# switchboard's name resolution (dotlib _coord), its dock and its strip. The
+# shell launchers (55-coordinators) are generated from the registry now
+# (record 0019 §9), and tested in tests/coordinator-launchers.zsh; their
+# homes and refusals are meta's.
 #
 # Nothing real launches: the homes are a scratch actors dir under ~/.cache,
 # claude and the prompt script are stubs that only log (and refuse to run
 # from outside the scratch dir), setsid is a stub so _coord can't open a
 # window, and every tmux call names its own server, -L coordrename-test, the
-# cleanup included. The launcher's tmux tests use throwaway names (test,
-# formerly oldtest), never a live coordinator's.
+# cleanup included.
 #
 #   zsh tests/coordinators.zsh
 
@@ -21,7 +22,6 @@ typeset -r L=coordrename-test
 mkdir -p ~/.cache || exit 1
 typeset -r SCRATCH=$(mktemp -d ~/.cache/coordrename-test.XXXXXX)
 typeset -r ACTORS=$SCRATCH/actors LOGFILE=$SCRATCH/launched
-typeset -r LAUNCHER=$REPO/shell/.config/zsh/.zshrc.d/55-coordinators
 
 mkdir -p $SCRATCH/stub $ACTORS
 print -r -- '#!/bin/sh
@@ -69,119 +69,7 @@ homes() {
 }
 session() { command tmux -L $L -f /dev/null new-session -d -s "$1" -x 80 -y 24 "${2:-sleep 100000}"; }
 
-# run <cmd...>: runs the launcher's function in a clean zsh, with the
-# throwaway names test and oldtest (its former name) added to the alias map.
-# Sets rc, out (stdout) and err (stderr).
-typeset -r PRELUDE="source ${(q)LAUNCHER}
-_COORDINATOR_ALIASES[oldtest]=test
-oldtest-coordinator() { _coordinator-alias oldtest test \"\$@\"; }
-test-coordinator() { _coordinator test \"\$@\"; }"
-run() {
-    rc=0
-    out=$(zsh -f -c "$PRELUDE; $*" 2>$SCRATCH/err) || rc=$?
-    err=$(<$SCRATCH/err)
-}
 launched() { [[ -s $LOGFILE ]] && print -r -- "$(<$LOGFILE)"; }
-
-print "== launcher: homes and aliases"
-homes
-run test-coordinator
-[[ $rc != 0 && $err == *'test-coordinator: no home yet'* && -z $(launched) ]] \
-    && ok no-home-yet || bad no-home-yet "rc=$rc err=$err launched=$(launched)"
-
-homes oldtest
-run oldtest-coordinator --model x
-[[ $rc == 0 && -z $err && $(launched) == 'claude oldtest | --permission-mode bypassPermissions --dangerously-skip-permissions --model x prompt for oldtest' ]] \
-    && ok alias-old-home-only || bad alias-old-home-only "rc=$rc err=$err launched=$(launched)"
-
-homes test
-run oldtest-coordinator
-[[ $rc == 0 && $err == 'oldtest-coordinator is now test-coordinator' && $(launched) == 'claude test | '*'prompt for test' ]] \
-    && ok alias-new-home || bad alias-new-home "rc=$rc err=$err launched=$(launched)"
-
-homes oldtest
-run test-coordinator
-[[ $rc != 0 && $err == *'no home yet'* && -z $(launched) ]] \
-    && ok new-name-before-move || bad new-name-before-move "rc=$rc err=$err launched=$(launched)"
-
-# The real map: dotfiles is an alias of desktop.
-homes dotfiles
-run dotfiles-coordinator
-[[ $rc == 0 && -z $err && $(launched) == 'claude dotfiles | '*'prompt for dotfiles' ]] \
-    && ok real-alias-old || bad real-alias-old "rc=$rc err=$err launched=$(launched)"
-homes desktop
-run dotfiles-coordinator
-[[ $rc == 0 && $err == 'dotfiles-coordinator is now desktop-coordinator' && $(launched) == 'claude desktop | '*'prompt for desktop' ]] \
-    && ok real-alias-new || bad real-alias-new "rc=$rc err=$err launched=$(launched)"
-homes
-run security-coordinator
-[[ $rc != 0 && $err == *'security-coordinator: no home yet'* && -z $(launched) ]] \
-    && ok security-no-home || bad security-no-home "rc=$rc err=$err"
-homes ventures
-run ventures-coordinator
-[[ $rc == 0 && -z $err && $(launched) == 'claude ventures | '*'prompt for ventures' ]] \
-    && ok ventures-launch || bad ventures-launch "rc=$rc err=$err launched=$(launched)"
-run 'for n in brain platform personal homelab network-tools media desktop incubator security ventures dotfiles apps ideas metalayerlab template folio; do (( ${+functions[$n-coordinator]} )) || print -n "$n "; done'
-[[ -z $out ]] && ok all-functions || bad all-functions "missing: $out"
-
-print "== launcher: refusals (tmux -L $L)"
-homes test
-session oldtest-coordinator
-run test-coordinator
-[[ $rc != 0 && $err == *'tmux session oldtest-coordinator is already running'* && -z $(launched) ]] \
-    && ok refuse-other-name || bad refuse-other-name "rc=$rc err=$err launched=$(launched)"
-
-homes test
-session test-coordinator
-run test-coordinator
-[[ $rc != 0 && $err == *'tmux session test-coordinator is already running'* && -z $(launched) ]] \
-    && ok refuse-own-name-outside || bad refuse-own-name-outside "rc=$rc err=$err"
-
-homes test oldtest
-session test-coordinator
-run oldtest-coordinator
-[[ $rc != 0 && $err == *'test-coordinator is already running'* && -z $(launched) ]] \
-    && ok refuse-alias-new-running || bad refuse-alias-new-running "rc=$rc err=$err"
-
-# inside <session> <cmd>: runs <cmd> as a pane of a new session on the test
-# server, as the switchboard does (tmux new -A -s <name>-coordinator
-# 'zsh -ic ...'), and waits for it. tmux sets TMUX and TMUX_PANE.
-inside() {
-    local script=$SCRATCH/inside.zsh i
-    rm -f $SCRATCH/inside.rc
-    {
-        print -r -- "export COORD_ACTORS_DIR=${(q)ACTORS} COORD_PROMPT_SCRIPT=${(q)COORD_PROMPT_SCRIPT} COORD_TMUX_SOCKET=$L PATH=${(q)PATH}"
-        print -r -- "$PRELUDE"
-        print -r -- "$2 2>${(q)SCRATCH}/err; print \$? >${(q)SCRATCH}/inside.rc"
-    } >$script
-    session "$1" "zsh -f ${(q)script}"
-    rc=timeout
-    for i in {1..250}; do [[ -s $SCRATCH/inside.rc ]] && { rc=$(<$SCRATCH/inside.rc); break; }; sleep 0.02; done
-    err=$(<$SCRATCH/err)
-}
-
-homes test
-inside test-coordinator test-coordinator
-[[ $rc == 0 && $(launched) == 'claude test | '* ]] \
-    && ok own-session-not-counted || bad own-session-not-counted "rc=$rc err=$err launched=$(launched)"
-
-homes test
-session oldtest-coordinator
-inside test-coordinator test-coordinator
-[[ $rc != 0 && $err == *'oldtest-coordinator is already running'* && -z $(launched) ]] \
-    && ok inside-other-name-counted || bad inside-other-name-counted "rc=$rc err=$err"
-
-homes test
-session test-coordinator
-inside plain test-coordinator
-[[ $rc != 0 && $err == *'test-coordinator is already running'* && -z $(launched) ]] \
-    && ok inside-other-session || bad inside-other-session "rc=$rc err=$err"
-
-# A former name started in its own session once the home has moved.
-homes test
-inside oldtest-coordinator oldtest-coordinator
-[[ $rc == 0 && $(launched) == 'claude test | '* ]] \
-    && ok alias-own-session || bad alias-own-session "rc=$rc err=$err launched=$(launched)"
 
 print "== switchboard: names (_coord)"
 # coord <homes> -- <cmd>: sources _coord in a clean zsh with these homes and
