@@ -1,8 +1,8 @@
 # 0004: Theme text contrast on surfaces
 
-Status: Proposed
+Status: Approved, with changes (by the ⚖️ Arbiter, record 0023; 2026-11-04)
 Date: 2026-11-04
-Authors: written up by the desktop coordinator's agent, for the arbiter (the brain coordinator)
+Authors: written up by the desktop coordinator's agent, for the ⚖️ Arbiter (record 0023)
 
 This record changes one part of the approved theming design (`ricing/DESIGN.md`, kept outside the repo
 by the desktop coordinator, §4.3 "Contrast and distinctness guarantees"): which backgrounds the secondary
@@ -57,10 +57,11 @@ Today's floors hold on `bg` in every scheme. On `bg_alt`, `fg_dim` misses 4.5 in
 three light ones among them) and `dim` misses 3.0 in 9 of 13. Generated themes (from a wallpaper or a
 colour, through matugen) go through the same resolver but were not measured: their palettes vary.
 
-Evidence: the desktop coordinator's `work/theme-contrast/evidence/` (`measure-contrast.zsh` and its
-output, which also has each scheme's raw slots before the fix-ups, `fg`, and `surface`). The script
-sources this repo's `_theme` and calls `_theme-resolve-source` with a scratch `THEME_STATE_DIR`: it
-resolves only, renders and reloads nothing.
+Evidence: `zsh tests/theme-contrast-measure.zsh` prints this table from the repo, with each scheme's raw
+slots before the fix-ups, `fg` and `surface` too, then every cell below the floors on the worse surface
+(15 today: the bold cells). It sources this checkout's `_theme` and calls the resolver only, with a scratch
+`THEME_STATE_DIR` it removes after: no apply, no render, no reloader, never the live state. The option
+projection below (`project-options.zsh`) stays with the desktop coordinator's task evidence.
 
 ### Who draws them, and as what
 
@@ -85,7 +86,15 @@ neither.
 
 ## Decision
 
-Option (a), below:
+Option (a), below, stated as properties of the roles:
+
+- **`fg_dim`** (secondary text) reaches 4.5 against the worse of `bg` and `bg_alt`.
+- **`dim`** (non-text: icons, borders) reaches 3.0 against the worse of `bg` and `bg_alt`, stays below
+  `fg_dim` on both, and never draws text.
+- **`fg`** (body text) is unchanged: the theming design's D4 (AAA, 7:1, auto-degrading to AA 4.5) stands;
+  `fg_dim` is secondary text, not body text.
+
+In detail:
 
 1. **Both surfaces.** `fg_dim` and `dim` are checked against `bg` and `bg_alt`, each against whichever of
    the two gives it the lower contrast. `_theme-floor` gains that "worse of" check for these two roles.
@@ -129,7 +138,9 @@ Each with what it costs the dim/fg_dim hierarchy and the look; numbers from the 
   every surface the roles are drawn on, and `theme check` shows it.
 - Harder: nothing for consumers; the resolver does two more checks per role.
 - Look: the dim roles lift in the schemes named above; Dracula, Frappé and Kanagawa are unchanged.
-- Rollout: one PR to `_theme` (and the rofi template, per question 2), checked with `theme self-test`
+- Rollout: the build starts only after Stephen's click-test of the crew strip, because it brightens the
+  strip's colours (the stopped and idle coordinator glyphs). Then one PR to `_theme` (and the rofi
+  template, per question 2), checked with `theme self-test`
   and `theme check` against a scratch state for every scheme, then a visual scan. Applying it to the live
   desktop is a separate go.
 - Rollback: revert that PR and re-apply the theme.
@@ -142,23 +153,34 @@ Each with what it costs the dim/fg_dim hierarchy and the look; numbers from the 
    above it; (c) a third role for text on surfaces. Recommendation: (a). It fixes every failing cell with
    the smallest change to the look and keeps the three bar tiers apart; (b) blurs them, and (c) adds a role
    for one use and leaves `dim` failing on `bg_alt`.
+
+   **Decided (the ⚖️ Arbiter):** as recommended.
 2. **Rofi's placeholder in Catppuccin.** It uses the palette's `subtext1`, which the resolver never checks
    (4.05 on Latte's `bg_alt`). Options: (i) use `fg_dim` in every scheme, so the resolver guarantees it;
    (ii) keep `subtext1` but have the template fall back to `fg_dim` when `subtext1` misses 4.5; (iii) leave
    it. Recommendation: (i). One rule for every scheme, and Catppuccin's `fg_dim` (subtext0) is within a
    step of `subtext1`, so the dark three barely change.
+
+   **Decided (the ⚖️ Arbiter):** as recommended.
 3. **Which surfaces count?** Options: `bg` and `bg_alt` only; or also `surface` (hovered and selected
    rows). Recommendation: `bg` and `bg_alt` only. Nothing draws `fg_dim` or `dim` on `surface` today; add
    it when a consumer does, with this record's rule.
+
+   **Decided (the ⚖️ Arbiter):** as recommended.
 4. **A minimum step between `fg_dim` and `dim`?** Today "dimmer" only means "lower ratio". Options: keep
    that; or require `fg_dim : dim` ≥ 1.3. Recommendation: keep it. Under (a) the worst case is 1.36,
    Everforest's own design; a step rule would move Everforest's colours for no failing check.
+
+   **Decided (the ⚖️ Arbiter):** as recommended.
 5. **Who updates `ricing/DESIGN.md`?** It lives outside the repo, owned by the desktop coordinator.
    Options: the build task edits its §4.3 rows; or the rows get a pointer to this record. Recommendation:
    the build task edits the two rows and adds "see record 0004", so the design and the code agree.
 
+   **Decided (the ⚖️ Arbiter):** as recommended.
+
 ## Build order
 
+0. Wait for Stephen's crew click-test (the build brightens the crew strip's colours).
 1. Resolver: a "worse of `bg` and `bg_alt`" floor for `fg_dim` and `dim`; the hierarchy check on both
    surfaces; `theme check`'s table gains `fg_dim/bg_alt` and `dim/bg_alt`; `theme self-test` asserts the
    four pairs for every scheme. The `_theme` header states the rule.
@@ -166,7 +188,14 @@ Each with what it costs the dim/fg_dim hierarchy and the look; numbers from the 
 3. The "`dim` never text" rule written into the theming design and, as a follow-up issue in
    andronics/desktop-tools, barctl's tier notes (its unavailable tier keeps a glyph only).
 4. Checks against a scratch state: `theme self-test`, `theme check` for every scheme, `theme pick
-   --dry-run`, `rofi-preview` on a light and a dark scheme; this record's measurement script re-run shows
-   no failing cell.
+   --dry-run`, `rofi-preview` on a light and a dark scheme; `tests/theme-contrast-measure.zsh` shows no
+   cell below the floors.
 5. `ricing/DESIGN.md` §4.3 updated (question 5); status here moves to Implemented when the PR merges.
    Applying it to the live desktop waits for its own go.
+
+## Change log
+
+| When | Change |
+|---|---|
+| 2026-11-04 | Proposed (PR 99) |
+| 2026-11-04T08:28:09+00:00 | Approved by the arbiter, 2026-11-04T08:28:09+00:00, with changes (❓ 2026-11-04 Approve Dotfiles Record 0004 On Theme Text Contrast); the five open questions as recommended |

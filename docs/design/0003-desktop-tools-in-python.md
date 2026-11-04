@@ -143,6 +143,8 @@ first outside program that needs to give the bar state.
 2. Then the other dotlib tools, most-used first, by `tool-stats` (brain record 0017's usage report) once its
    pilot has run and dotlib's `_dispatcher` writes run entries; until then, by Stephen's keys and the bar:
    `player`, `audio`, `bt`, `desk`, `crew`, `theme`, then the rest.
+   (2026-11-04, record 0004, approved by the ⚖️ Arbiter:) the Python `theme` keeps record 0004's four
+   contrast checks: `fg_dim` on `bg`, `fg_dim` on `bg_alt`, `dim` on `bg`, `dim` on `bg_alt`.
 3. Each move is one PR in desktop-tools (the tool, its tests, its completion) and one in the dotfiles (remove
    the wrapper and module, bump the version pin), cut over together.
 4. `dotlib` and `_dispatcher` go when the last module has moved.
