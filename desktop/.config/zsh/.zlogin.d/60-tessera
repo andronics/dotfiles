@@ -1,0 +1,6 @@
+# tessera's watcher (tessera-sync.path and .timer, tessera design record 0001
+# §13): started here, as 50-barctl starts the bar controller, once there is
+# a display and tessera is installed. --no-block: login never waits on it.
+[[ -n "${DISPLAY}" || "${WAYLAND_DISPLAY}" ]] && (( ${+commands[systemctl]} )) && [[ -x /usr/local/bin/tessera ]] && {
+    systemctl --user --no-block start tessera-sync.path tessera-sync.timer 2>/dev/null
+}

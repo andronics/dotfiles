@@ -1,0 +1,11 @@
+# Runs tessera-sync.service a minute after login, then every 10 minutes, so
+# the remote's changes come in and the bar light stays fresh (it goes
+# unavailable after 20 minutes without a push). Started by .zlogin.d/60-tessera;
+# not enabled, so no [Install].
+[Unit]
+Description=tessera: sync the password store every 10 minutes
+
+[Timer]
+OnActiveSec=1min
+OnUnitActiveSec=10min
+Unit=tessera-sync.service
