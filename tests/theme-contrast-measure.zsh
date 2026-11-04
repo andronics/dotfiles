@@ -2,7 +2,8 @@
 # Theme text contrast (dotfiles record 0004): for every scheme in the repo,
 # the contrast of fg_dim and dim on bg and on bg_alt, and fg_dim : dim, before
 # the resolver's fix-ups (raw: the scheme's slots) and after (res), then the
-# cells below the floors on the worse of the two surfaces (fg_dim 4.5, dim 3.0).
+# cells below the floors on the worse of the two surfaces (fg_dim 4.5, dim 3.0),
+# and rofi's Catppuccin placeholder colour (subtext1) on bg_alt.
 #
 # Works from the repo: sources this checkout's _theme with THEME_CONFIG_DIR at
 # its desktop/.config/theme and THEME_STATE_DIR at a scratch dir, and calls the
@@ -64,6 +65,20 @@ for f in "$THEME_CONFIG_DIR"/schemes/*.yaml; do
         done
     done
 done
+
+# rofi's placeholder (fg-alt-color) is the palette's subtext1 where a scheme
+# names one (Catppuccin), bypassing the resolver; it sits on bg_alt.
+typeset -a placeholder
+for f in "$THEME_CONFIG_DIR"/schemes/*.yaml; do
+    s=${f:t:r}
+    _theme-resolve-source "$s" >/dev/null 2>&1 || continue
+    sub=${_THEME_PAL[subtext1]:-}
+    [[ -n "$sub" ]] || continue
+    colour-contrast "$sub" "${_THEME_ROLE[bg_alt]}"
+    placeholder+=("$s: subtext1 $sub on bg_alt ${_THEME_ROLE[bg_alt]} $(printf '%.2f' $REPLY)")
+done
+print -r -- "# rofi placeholder (subtext1) on bg_alt:"
+print -rl -- "#   "${^placeholder}
 
 print -r -- "# below the floors after the resolver: ${#below}"
 (( ${#below} )) && print -rl -- "#   "${^below}

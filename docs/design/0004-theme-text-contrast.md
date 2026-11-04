@@ -61,7 +61,7 @@ Evidence: `zsh tests/theme-contrast-measure.zsh` prints this table from the repo
 slots before the fix-ups, `fg` and `surface` too, then every cell below the floors on the worse surface
 (15 today: the bold cells). It sources this checkout's `_theme` and calls the resolver only, with a scratch
 `THEME_STATE_DIR` it removes after: no apply, no render, no reloader, never the live state. The option
-projection below (`project-options.zsh`) stays with the desktop coordinator's task evidence.
+projection below comes from `zsh tests/theme-contrast-project.zsh`, which works the same way.
 
 ### Who draws them, and as what
 
@@ -80,7 +80,7 @@ projection below (`project-options.zsh`) stays with the desktop coordinator's ta
 
 So today `dim` carries no text anywhere, and `fg_dim`'s text sits on `bg` except rofi's placeholder, on
 `bg_alt`. The Catppuccin schemes take the placeholder from the palette's `subtext1`, bypassing the
-resolver: 7.1 or more in the dark three, 4.05 in Latte (`rofi-placeholder.zsh` in the evidence). GTK draws
+resolver: 7.1 or more in the dark three, 4.05 in Latte (`tests/theme-contrast-measure.zsh` prints these too). GTK draws
 neither role: its dim labels are adw-gtk3's own alpha of `fg`. Dunst, the lock screen and Xresources use
 neither.
 
@@ -107,7 +107,7 @@ In detail:
 5. **`theme check` reports** `fg_dim/bg_alt` and `dim/bg_alt` next to the `bg` pairs, and `theme
    self-test` asserts the four pairs for every scheme.
 
-Projected onto every scheme with the resolver's own helpers (`project-options.zsh` in the evidence; a
+Projected onto every scheme with the resolver's own helpers (`tests/theme-contrast-project.zsh`; a
 projection, not the build): `fg_dim` moves in 6 schemes, by up to ΔE 0.09 (OKLab; Tokyo Night), `dim` in
 9, by up to 0.08. Worst-surface `fg_dim : dim` stays 1.36 or more (Everforest's own 1.33 today), `fg :
 fg_dim` 1.11 or more (Nord's own today).
