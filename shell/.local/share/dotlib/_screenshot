@@ -56,14 +56,26 @@ _screenshot-capture() {
     local shot_path
     shot_path="$(_screenshot-path)"
 
-    if ! maim "$@" "${shot_path}"; then
-        log-error "maim failed"
+    # A cancelled selection (Escape or right click) leaves no file, and slop
+    # can take maim down with it (exit 1, or 134 on SIGABRT): neither is an
+    # error, so it ends quietly.
+    local -i rc=0
+    local selecting=0
+    (( ${@[(I)-s]} || ${@[(I)--select]} )) && selecting=1
+    maim "$@" "${shot_path}" 2>/dev/null || rc=$?
+    if (( selecting )) && [[ ! -s "${shot_path}" ]]; then
+        rm -f -- "${shot_path}"
+        log-debug "selection cancelled (maim exit ${rc})"
+        return 0
+    fi
+    if (( rc != 0 )); then
+        log-error "maim failed (exit ${rc})"
         notify-error "Screenshot failed" "maim exited with an error" &>/dev/null
         return 1
     fi
     if [[ ! -s "${shot_path}" ]]; then
-        log-error "maim produced no output (cancelled selection?)"
-        notify-warning "Screenshot cancelled" "No region selected" &>/dev/null
+        log-error "maim produced no output"
+        notify-error "Screenshot failed" "maim produced no output" &>/dev/null
         return 1
     fi
 
