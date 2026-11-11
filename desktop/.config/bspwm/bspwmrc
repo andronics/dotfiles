@@ -59,3 +59,5 @@ bspc rule -a crew-view state=floating
 # Windows still open from before crew (class coord, as coord made them) keep
 # their rule until the coord alias goes on 2026-12-04; then this line goes too.
 bspc rule -a coord state=floating sticky=on hidden=on
+# tessera's unlock prompt (a terminal of this class, desktop-tools record 0002 §3).
+bspc rule -a tessera-prompt state=floating center=on
