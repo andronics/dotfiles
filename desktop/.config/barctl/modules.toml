@@ -64,4 +64,4 @@ scroll-down = ["crew", "cycle", "next"]
 [modules.tessera]
 pusher = "tessera"
 display = "icon"
-glyph = "\U000F033E" # md-lock: before tessera's first push
+glyph = "\U000F0BC4" # md-shield_key: before tessera's first push
