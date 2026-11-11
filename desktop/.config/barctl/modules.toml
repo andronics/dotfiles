@@ -60,8 +60,15 @@ scroll-down = ["crew", "cycle", "next"]
 # run and command, with a 20-minute ttl: idle locked and level, active unlocked, alert when entries
 # wait, the store has diverged, sync is failing, the first sync is pending or a read was denied, and
 # unavailable when nothing has pushed for 20 minutes (the watcher is dead). The label and detail say
-# which (`barctl status tessera`). No clicks: each alert is fixed at a terminal.
+# which (`barctl status tessera`). Right-click opens `barmenu tessera` (desktop-tools record 0002).
+# The icons are the dotfiles' own, one md-shield family (`glyph_override`, record 0002 §7).
 [modules.tessera]
 pusher = "tessera"
 display = "icon"
-glyph = "\U000F0BC4" # md-shield_key: before tessera's first push
+glyph = "\U000F099D" # md-shield_lock: before tessera's first push
+glyph_override = { idle = "\U000F099D", active = "\U000F199A", alert = "\U000F0ECC", unavailable = "\U000F099C" }
+# idle md-shield_lock (locked), active md-shield_lock_open (unlocked), alert md-shield_alert,
+# unavailable md-shield_off_outline.
+
+[modules.tessera.clicks]
+right = ["barmenu", "tessera"]
