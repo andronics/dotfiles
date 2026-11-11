@@ -733,6 +733,10 @@ player-play-pause() {
     if eval "$cmd" 2>/dev/null; then
         _player-emit "$PLAYER_EVENT_PLAY" "player=$player" "action=toggle"
         return 0
+    elif [[ -z "$(playerctl ${player:+--player=$player} status 2>/dev/null)" ]]; then
+        # No player running: nothing to toggle, not an error
+        log-debug "No player to toggle" "player=$player"
+        return 0
     else
         log-error "Failed to toggle play/pause" "player=$player"
         return 1
