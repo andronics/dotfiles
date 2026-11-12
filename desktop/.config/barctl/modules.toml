@@ -46,11 +46,13 @@ display = "text"
 source = "player"
 display = "capsule"
 glyph = "\U000F038A"   # md-music_note_off: before the source has written it
-glyph_override = { active = "\U000F040A", idle = "\U000F03E4", unavailable = "\U000F038A" }
+glyph_override = { active = "\U000F040A", idle = "\U000F03E4", unavailable = "" }   # unavailable = "" draws nothing when no player exists
 width = 32             # cells of text after the icon
 scroll = 2.0           # steps per second; 0 cuts with "…" instead
 scroll_rest = 10       # seconds the start of the title rests between passes
 accent = "role"        # or "art"
+fade_after = 10        # minutes paused or stopped before it shows its icon alone
+spoken = true          # podcasts and audiobooks: +-30 s and a speed row in barmenu player (record 0005 phase B)
 
 [modules.player-capsule.clicks]
 left = ["playerctl", "-p", "{target}", "play-pause"]
@@ -58,6 +60,25 @@ middle = ["playerctl", "-p", "{target}", "next"]
 scroll-up = ["playerctl", "-p", "{target}", "volume", "0.05+"]
 scroll-down = ["playerctl", "-p", "{target}", "volume", "0.05-"]
 right = ["barmenu", "player"]
+
+# The player chips (desktop-tools record 0005 phase A), just before the capsule: one chip per MPRIS
+# player, drawn with two players or more; past four the last cell is "+N". Left pins that player
+# (again: unpins), middle plays or pauses it, right opens `barmenu players`.
+[modules.player-chips]
+source = "player"
+display = "chips"
+glyph = "\U000F075A"   # md-music: a player with no icon of its own
+separator = " "
+chips_min = 2          # fewer players than this: nothing is drawn
+chips_max = 4          # more: the last cell is "+N", which opens barmenu players
+
+[modules.player-chips.segment_clicks]
+left = ["barctl", "pin", "player-capsule", "{segment}", "--toggle"]
+middle = ["playerctl", "-p", "{segment}", "play-pause"]
+right = ["barmenu", "players"]
+
+[modules.player-chips.segment_clicks.more]   # the "+N" cell's own clicks
+left = ["barmenu", "players"]
 
 # The output segment (desktop-tools record 0003 §10), beside player-capsule on the same background:
 # the default sink's kind glyph and short name, a Bluetooth sink's battery, the volume glyph and
