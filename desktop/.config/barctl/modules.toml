@@ -53,6 +53,13 @@ scroll_rest = 10       # seconds the start of the title rests between passes
 accent = "role"        # or "art"
 fade_after = 10        # minutes paused or stopped before it shows its icon alone
 spoken = true          # podcasts and audiobooks: +-30 s and a speed row in barmenu player (record 0005 phase B)
+expand_for = 5         # seconds the transport row stays open after a click on the icon (record 0005 phase C)
+
+[modules.player-capsule.icon_clicks]       # the icon alone opens and folds the transport row
+left = ["barctl", "expand", "player-capsule"]
+
+[modules.player-capsule.segment_clicks]    # the row's cells (previous, play-pause, next, loop, shuffle, seek bar)
+left = ["barctl", "transport", "player-capsule", "{segment}"]
 
 [modules.player-capsule.clicks]
 left = ["playerctl", "-p", "{target}", "play-pause"]
