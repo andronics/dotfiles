@@ -2,9 +2,9 @@
 inherit = bar/base
 bottom = true
 
-modules-left = menu-layout menu-screenshot menu-settings menu-theme menu-vpn spacer-corner-lt run_gui run_terminal spacer-corner-rb  device-bluetooth device-printer device-scanner printer scanner spacer-corner-lt  apps-browser apps-code  apps-nemo apps-spotify apps-virtualbox
+modules-left = menu-power menu-lock printer scanner menu-screenshot tessera spacer-corner-rb menu-settings menu-theme menu-vpn  spacer-corner-lt  run_gui
 modules-center = desk
-modules-right = crew spacer-corner-rt player-capsule output-capsule player-previous player-stop player-play-pause player-next player-loop player-shuffle audio-spectrum spacer-corner-lb bluetooth-status audio-level audio-device sys-time sys-date spacer-corner-rt menu-power menu-session tessera menu-lock  
+modules-right = crew spacer-corner-rt player-capsule output-capsule spacer-corner-lb bluetooth-status sys-time sys-date
 
 ;tray-detached = false
 ;tray-maxsize = 10
