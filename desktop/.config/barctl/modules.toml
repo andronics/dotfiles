@@ -54,6 +54,7 @@ accent = "role"        # or "art"
 fade_after = 10        # minutes paused or stopped before it shows its icon alone
 spoken = true          # podcasts and audiobooks: +-30 s and a speed row in barmenu player (record 0005 phase B)
 expand_for = 5         # seconds the transport row stays open after a click on the icon (record 0005 phase C)
+visualiser = true      # live spectrum strip while playing; 15 fps default (record 0005 phase D); kill: barctl visualiser off
 
 [modules.player-capsule.icon_clicks]       # the icon alone opens and folds the transport row
 left = ["barctl", "expand", "player-capsule"]
